@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+data/
+runs/
+factors_library/
+.env
+.venv/
+*.egg-info/
+runs.synthetic_backup/
+dist/
+.pytest_cache/
+.mypy_cache/
+.idea/
+.vscode/
+*.log
+.DS_Store
+
+# 内部运维脚本（含 SSH 公钥、服务器部署细节，不进开源仓库）
+deploy/enable-agent-ssh.ps1
+deploy/enable-ssh-oneliner.txt
+deploy/setup-ssh-windows.ps1
+deploy/ssh-config.example
+deploy/optimized.rdp
+tools/handoff.py
+
+# 中文别名脚本 + 内部交接文档
+启动.cmd
+启动网页.cmd
+打包迁移.cmd
+迁移说明.md
+HANDOFF.md
+
+# UI 截图
+docs/

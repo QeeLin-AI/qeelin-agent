@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QeeLin-Agent 控制台</title>
+<link rel="stylesheet" href="/static/style.css?v=0.5.14" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-name"><span class="logo">◆</span><span>QeeLin-Agent</span></span>
+    <span class="ver" id="verTag">--</span>
+  </div>
+  <div class="price-block">
+    <div class="price-row">
+      <select id="symbolSelect" class="symbol-select" title="切换品种（配置里 market.symbols）"></select>
+      <span id="price" class="price">--</span>
+      <span id="pct" class="pct">--</span>
+    </div>
+    <div class="price-meta">
+      <span id="liveDot" class="live-dot" title="实时报价">●</span>
+      <span id="liveTs" class="live-ts">连接中…</span>
+      <span id="pctSpan" class="pct-span">--</span>
+    </div>
+  </div>
+  <div class="top-right">
+    <span id="dataSource" class="tag">数据源 --</span>
+    <span id="llmTag" class="tag">LLM --</span>
+    <span id="modeBadge" class="badge paper">PAPER</span>
+    <button id="clearCacheBtn" class="btn ghost" title="强制重新加载界面，清除浏览器缓存的旧版本">强制刷新</button>
+    <button id="haltBtn" class="btn danger ghost">熔断</button>
+  </div>
+</header>
+
+<div id="dataWarn" class="data-warn hidden"></div>
+<div id="accountWarn" class="data-warn hidden"></div>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="overview">总览</button>
+  <button class="tab" data-tab="decision">决策</button>
+  <button class="tab" data-tab="research">因子研究</button>
+  <button class="tab" data-tab="trading">交易</button>
+</nav>
+
+<main>
+  <!-- ============ 总览 ============ -->
+  <section id="tab-overview" class="panel active">
+    <div class="stat-row">
+      <div class="stat"><label>账户权益 <span id="equitySrc" class="src-chip">本地模拟</span></label><b id="equity">--</b><small id="equitySub">--</small></div>
+      <div class="stat"><label>当日盈亏</label><b id="dayPnl">--</b><small id="dayPnlSub"></small></div>
+      <div class="stat"><label>回撤</label><b id="drawdown">--</b></div>
+      <div class="stat"><label>持仓 <span id="posSrc" class="src-chip hidden"></span></label><b id="position">空仓</b><small id="posSub"></small></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>盈亏</h2></div>
+      <div class="pnl-hero">
+        <div class="pnl-total">
+          <label>累计已实现盈亏</label>
+          <b id="pnlTotal">--</b>
+        </div>
+        <div class="pnl-stats" id="pnlStats"></div>
+      </div>
+      <div class="pnl-trades" id="pnlTrades"><div class="muted center">暂无平仓成交</div></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>机会信号排行榜</h2>
+        <div class="actions">
+          <label class="inline">阈值 <input id="rotateMinScore" type="number" step="0.05" min="0" max="1" style="width:64px" /></label>
+          <label class="inline">每 <input id="rotateEvery" type="number" min="1" max="100" style="width:52px" /> 轮扫</label>
+          <label class="inline"><input id="rotateToggle" type="checkbox" /> 自动选品种</label>
+          <button id="rotateRefresh" class="btn ghost">重扫</button>
+        </div>
+      </div>
+      <div class="opp-list" id="oppList"><div class="muted center">扫描中…</div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>最近成交</h2></div>
+      <table class="table compact" id="fillsTable">
+        <thead><tr><th>品种</th><th>时间</th><th>动作</th><th>方向</th><th>数量</th><th>价格</th><th>盈亏</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 决策 ============ -->
+
+  <section id="tab-decision" class="panel">
+    <div class="card">
+      <div class="card-head">
+        <h2>多智能体决策</h2>
+        <div class="actions">
+          <label class="inline">辩论轮数 <input id="rounds" type="number" min="1" max="5" value="2" /></label>
+          <button id="runDecision" class="btn primary">运行决策</button>
+        </div>
+      </div>
+      <p class="muted">分析师（并发）→ 研究员辩论 → 交易员提案 → 风控官 → 风控引擎。整个过程约 1 秒（mock 模式）。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>多品种扫描</h2>
+        <span id="scanMeta" class="muted"></span>
+        <div class="actions">
+          <button id="runScan" class="btn">扫一遍所有品种</button>
+        </div>
+      </div>
+      <p class="muted">对 <code>config/default.json</code> 里 <code>market.symbols</code> 的每个品种各跑一次完整决策（用各品种自己的数据），
+        只给结论不下单。没缓存的品种会先自动下载。</p>
+      <table class="table" id="scanTable">
+        <thead><tr><th>品种</th><th>最新价</th><th>方向</th><th>仓位</th><th>杠杆</th><th>风控</th><th>理由</th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted center">还没扫描</td></tr></tbody>
+      </table>
+    </div>
+
+    <div id="decisionBody" class="decision-body empty">还没有运行决策。点击右上角「运行决策」。</div>
+  </section>
+
+  <!-- ============ 研究 ============ -->
+  <section id="tab-research" class="panel">
+    <div class="card">
+      <div class="card-head">
+        <h2>因子自动研究</h2>
+        <div class="actions">
+          <label class="inline">迭代次数 <input id="iterations" type="number" min="1" max="30" value="6" /></label>
+          <button id="runResearch" class="btn primary">开始挖掘</button>
+        </div>
+      </div>
+      <p class="muted">Agent 写因子 → 沙箱执行 → 前视检测 → train/valid 回测 → 评分淘汰。留出集只在最后跑一次。</p>
+      <div class="auto-research-row">
+        <label class="inline"><input id="autoResearchChk" type="checkbox" /> 定时自动研究（因子自动进化）</label>
+        <label class="inline">每 <input id="autoResearchInterval" type="number" min="300" step="300" value="86400" /> 秒</label>
+        <span id="autoResearchState" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>排行榜</h2><span id="researchMeta" class="muted"></span></div>
+      <table class="table" id="researchTable">
+        <thead><tr><th>因子</th><th>家族</th><th>IS夏普</th><th>OOS夏普</th><th>OOS回撤</th><th>评分</th><th>结论</th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted center">尚未运行</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card hidden" id="bestCard">
+      <div class="card-head"><h2>冠军因子</h2><span id="bestMeta" class="muted"></span></div>
+      <p id="bestHypo" class="muted"></p>
+      <pre id="bestCode" class="code"></pre>
+    </div>
+  </section>
+
+  <!-- ============ 交易 ============ -->
+  <section id="tab-trading" class="panel">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h2>交易模式</h2><span id="armState" class="badge paper">PAPER</span></div>
+        <div class="mode-row">
+          <button id="paperBtn" class="btn selected">本地模拟</button>
+          <button id="testnetBtn" class="btn">交易所模拟</button>
+          <button id="liveBtn" class="btn">主网实盘</button>
+        </div>
+        <p class="muted" style="margin:8px 0 0">
+          本地模拟＝自己撮合，不联网下单；交易所模拟＝真的发单到币安，用的是<a href="https://demo.binance.com" target="_blank" rel="noreferrer">假钱 Demo 账户</a>；主网实盘＝真钱。
+        </p>
+        <p id="hintTestnet" class="muted hidden" style="margin:6px 0 0">
+          想接真 API（假钱）：点上面的「交易所模拟」填 Key。币安 2026 年已把期货测试网并入
+          <code>demo.binance.com</code>，Key 要在那里生成。先跑 <code>run.cmd netcheck</code> 看你的网络通不通。
+        </p>
+
+        <div id="testnetBox" class="live-box hidden">
+          <div class="warn bare">
+            交易所模拟＝币安 Demo Trading（原期货测试网）：独立沙盒站点，注册即送虚拟 USDT。<b>它的 API Key 必须单独申请</b>，
+            主网 Key、现货测试网 Key 都用不了。这里的下单不会花一分钱。
+          </div>
+          <label class="field">API Key<input id="tnKey" type="text" placeholder="testnet 的 API Key" autocomplete="off" /></label>
+          <label class="field">API Secret<input id="tnSecret" type="password" placeholder="testnet 的 Secret（只显示一次）" autocomplete="off" /></label>
+          <div class="actions">
+            <button id="tnSaveBtn" class="btn">保存到 .env 并连接</button>
+            <button id="tnTestBtn" class="btn ghost">连接自检</button>
+          </div>
+          <p id="tnStatus" class="muted"></p>
+          <label class="inline">
+            <input id="autoArmChk" type="checkbox" /> 服务重启后自动解锁（写进 .env）
+          </label>
+          <p id="autoArmState" class="muted"></p>
+        </div>
+
+        <div id="liveBox" class="live-box hidden">
+          <div class="warn">
+            ⚠ 主网实盘会动用真实资金。请先确认：API Key 只开了合约交易权限、已禁用提现、绑定 IP，
+            并且你用的是独立子账户。
+          </div>
+          <label class="field">在下面输入「我确认使用真实资金」以解锁
+            <input id="confirmText" type="text" placeholder="我确认使用真实资金" autocomplete="off" />
+          </label>
+          <button id="armBtn" class="btn danger">解锁主网实盘</button>
+          <p id="keyStatus" class="muted"></p>
+          <label class="inline"><input id="testnetChk" type="checkbox" /> 走交易所模拟环境（等同上面的「交易所模拟」）</label>
+        </div>
+
+        <div class="kv">
+          <div><span>API Key</span><b id="keysPresent">--</b></div>
+          <div><span>连接状态</span><b id="connState">未连接</b></div>
+          <div><span>账户余额</span><b id="liveBalance">--</b></div>
+          <div><span>交易所持仓</span><b id="livePos">--</b></div>
+        </div>
+        <button id="syncBtn" class="btn ghost">同步交易所账户</button>
+        <button id="selftestBtn" class="btn ghost">连接自检</button>
+
+        <div class="divider"><span>交易参数</span></div>
+        <label class="field">杠杆 <span id="levNow" class="lev-chip">自动</span>
+          <select id="levSelect">
+            <option value="0">自动（跟随决策，上限以交易所为准）</option>
+            <option value="1">1x 不加杠杆</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="20">20x</option>
+            <option value="50">50x</option>
+            <option value="100">100x</option>
+            <option value="125">125x（交易所最高）</option>
+          </select>
+        </label>
+        <p class="muted" style="margin:4px 0 0">
+          杠杆只决定<b>占用多少保证金</b>，不放大风险：单笔最大亏损按「仓位 × 杠杆 × 止损」算，
+          被 <b id="riskCap">1%</b> 硬顶封住。所以调到 5x 时，仓位会被自动压小，亏损上限不变。
+        </p>
+        <div class="kv" style="margin-top:8px">
+          <div><span>单笔风险上限</span><b id="riskPerTrade">--</b></div>
+          <div><span>单策略仓位上限</span><b id="riskPosCap">--</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>自动交易</h2><span id="autoState" class="badge">停止</span></div>
+        <label class="field">轮询间隔（秒）
+          <input id="autoInterval" type="number" min="30" max="3600" value="300" />
+        </label>
+        <label class="inline"><input id="autoExec" type="checkbox" /> 决策通过后自动下单</label>
+        <div class="actions">
+          <button id="autoStart" class="btn start">启动</button>
+          <button id="autoStop" class="btn stop active">停止</button>
+        </div>
+        <p class="muted" id="autoMeta">未运行</p>
+        <hr />
+        <div class="actions">
+          <button id="execBtn" class="btn ghost">执行决策</button>
+        </div>
+        <p class="muted">执行 = 把「上次决策的订单计划」发给交易所或模拟撮合。实盘需先解锁。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>当前持仓</h2><div class="actions"><button id="closeBtn" class="btn cyan">一键全平</button></div></div>
+      <table class="table" id="posTable">
+        <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损</th><th>止盈</th><th>浮盈亏</th><th>模式</th></tr></thead>
+        <tbody><tr><td colspan="10" class="muted center">空仓</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/app.js?v=0.5.14"></script>
+</body>
+</html>

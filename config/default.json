@@ -1,0 +1,63 @@
+{
+  "market": {
+    "symbol": "BTCUSDT",
+    "interval": "1h",
+    "bars": 6000,
+    "seed": 7,
+    "source": "binance",
+    "cache_dir": "data/cache",
+    "short_interval": "5m",
+    "short_bars": 200,
+    "auto_rotate": true,
+    "rotate_min_score": 0.2,
+    "rotate_every_cycles": 1,
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT"
+    ]
+  },
+  "backtest": {
+    "initial_equity": 10000.0,
+    "leverage": 3.0,
+    "maintenance_margin_rate": 0.005,
+    "costs": {
+      "fee_bps": 5.0,
+      "slippage_bps": 2.0,
+      "funding_interval_hours": 8
+    }
+  },
+  "risk": {
+    "max_leverage": 20.0,
+    "max_position_pct": 0.5,
+    "max_loss_per_trade_pct": 0.05,
+    "daily_loss_limit_pct": 0.05,
+    "max_drawdown_pct": 0.2,
+    "max_slippage_bps": 10.0,
+    "min_confidence": 0.45,
+    "kill_switch_file": "runs/TRADING_HALT"
+  },
+  "research": {
+    "iterations": 6,
+    "train_frac": 0.55,
+    "valid_frac": 0.2,
+    "min_oos_sharpe": 0.3,
+    "max_lookback": 500,
+    "out_dir": "runs/research",
+    "factor_library": "factors_library"
+  },
+  "llm": {
+    "provider": "mock",
+    "model": "deepseek-chat",
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key_env": "OPENAI_API_KEY",
+    "temperature": 0.3,
+    "max_tokens": 1500,
+    "timeout": 60,
+    "retries": 2
+  },
+  "runs_dir": "runs"
+}

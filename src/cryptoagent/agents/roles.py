@@ -1,0 +1,440 @@
+"""四个角色：分析师 → 研究员 → 交易员 → 风控官。
+
+关键设计：每个角色都有「确定性兜底实现」。
+- 数字永远由 pandas 算出来，LLM 只负责解释和权衡，不能发明数据。
+- mock 模式下，兜底实现本身就是一套规则引擎，保证流水线可离线复现。
+- 接上真 LLM 后，兜底只在调用失败时接管，并在报告里标注 degraded。
+"""
+from __future__ import annotations
+
+import math
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, asdict
+
+import numpy as np
+import pandas as pd
+
+from ..config import RiskConfig
+from ..data import bars_per_year
+from ..risk import AccountState
+from .llm import (
+    LLMClient,
+    SYSTEM_ANALYST,
+    SYSTEM_RESEARCHER,
+    SYSTEM_RISK,
+    SYSTEM_TRADER,
+)
+
+EPS = 1e-12
+
+
+# --------------------------------------------------------------------------
+# 市场快照
+# --------------------------------------------------------------------------
+@dataclass
+class MarketSnapshot:
+    symbol: str
+    interval: str
+    ts: str
+    price: float
+    ret_1: float
+    ret_24: float
+    ret_168: float
+    vol_24: float          # 每根 K 线的已实现波动
+    vol_annual: float
+    vol_percentile: float
+    rsi_14: float
+    sma_24: float
+    sma_72: float
+    sma_168: float
+    atr_pct: float
+    funding_last: float
+    funding_24h: float
+    funding_z: float
+    dd_from_high: float
+    high_30d: float
+    low_30d: float
+
+    @classmethod
+    def from_df(cls, df: pd.DataFrame, symbol: str, interval: str) -> "MarketSnapshot":
+        close = df["close"].astype(float)
+        ret = close.pct_change()
+        n = len(close)
+
+        def _ret(k: int) -> float:
+            return float(close.iloc[-1] / close.iloc[-1 - k] - 1.0) if n > k else 0.0
+
+        vol_24 = float(ret.iloc[-24:].std(ddof=1)) if n > 25 else float(ret.std(ddof=1))
+        bpy = bars_per_year(interval)
+        roll_vol = ret.rolling(24).std()
+        recent = roll_vol.iloc[-720:].dropna()
+        vol_pct = float((recent <= vol_24).mean()) if len(recent) > 10 else 0.5
+
+        delta = close.diff()
+        up = delta.clip(lower=0).rolling(14).mean()
+        down = (-delta.clip(upper=0)).rolling(14).mean().replace(0.0, np.nan)
+        rs = up / down
+        rsi = float((100 - 100 / (1 + rs)).iloc[-1]) if len(close) > 15 else 50.0
+        rsi = 50.0 if math.isnan(rsi) else rsi
+
+        tr = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - close.shift()).abs(),
+                (df["low"] - close.shift()).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr_pct = float(tr.rolling(14).mean().iloc[-1] / close.iloc[-1]) if len(close) > 15 else 0.02
+
+        fr = df["funding_rate"].fillna(0.0) if "funding_rate" in df else pd.Series(0.0, index=df.index)
+        nonzero = fr[fr != 0]
+        funding_last = float(nonzero.iloc[-1]) if len(nonzero) else 0.0
+        funding_24h = float(fr.iloc[-24:].sum())
+        hist = fr.iloc[-720:]
+        f_mean, f_std = float(hist.mean()), float(hist.std(ddof=1)) or EPS
+        funding_z = float((funding_24h - f_mean) / f_std)
+
+        hi = float(close.iloc[-720:].max())
+        lo = float(close.iloc[-720:].min())
+        price = float(close.iloc[-1])
+
+        return cls(
+            symbol=symbol,
+            interval=interval,
+            ts=str(df.index[-1]),
+            price=price,
+            ret_1=_ret(1),
+            ret_24=_ret(24),
+            ret_168=_ret(168),
+            vol_24=vol_24,
+            vol_annual=vol_24 * math.sqrt(bpy),
+            vol_percentile=vol_pct,
+            rsi_14=rsi,
+            sma_24=float(close.rolling(24).mean().iloc[-1]),
+            sma_72=float(close.rolling(72).mean().iloc[-1]),
+            sma_168=float(close.rolling(168).mean().iloc[-1]),
+            atr_pct=max(atr_pct, 1e-4),
+            funding_last=funding_last,
+            funding_24h=funding_24h,
+            funding_z=funding_z,
+            dd_from_high=price / hi - 1.0,
+            high_30d=hi,
+            low_30d=lo,
+        )
+
+    def to_prompt(self) -> str:
+        return (
+            f"标的: {self.symbol} ({self.interval})   时间: {self.ts}\n"
+            f"最新价: {self.price:,.1f}\n"
+            f"收益: 1根 {self.ret_1:+.2%} | 24根 {self.ret_24:+.2%} | 168根 {self.ret_168:+.2%}\n"
+            f"波动率: 年化 {self.vol_annual:.1%}，处于近 720 根的 {self.vol_percentile:.0%} 分位\n"
+            f"RSI(14): {self.rsi_14:.1f}   ATR: {self.atr_pct:.2%}\n"
+            f"均线: SMA24 {self.sma_24:,.1f} | SMA72 {self.sma_72:,.1f} | SMA168 {self.sma_168:,.1f}\n"
+            f"资金费率: 最近结算 {self.funding_last:+.4%}，24h 累计 {self.funding_24h:+.4%}，"
+            f"z-score {self.funding_z:+.2f}\n"
+            f"距 30 日高点: {self.dd_from_high:+.2%}（高点 {self.high_30d:,.1f} / 低点 {self.low_30d:,.1f}）"
+        )
+
+    def to_dict(self) -> dict:
+        return {k: (round(v, 8) if isinstance(v, float) else v) for k, v in asdict(self).items()}
+
+
+# --------------------------------------------------------------------------
+# 分析师
+# --------------------------------------------------------------------------
+@dataclass
+class AnalystReport:
+    role: str
+    stance: float                  # -1 极度看空 ~ +1 极度看多
+    summary: str
+    data_flags: list[str] = field(default_factory=list)
+
+
+def _technical_score(s: MarketSnapshot) -> float:
+    momentum = s.ret_24 / (s.vol_24 * math.sqrt(24) + EPS)
+    trend = 0.0
+    if s.sma_24 > s.sma_72 > s.sma_168:
+        trend = 0.5
+    elif s.sma_24 < s.sma_72 < s.sma_168:
+        trend = -0.5
+    rsi_adj = 0.0
+    if s.rsi_14 > 72:
+        rsi_adj = -0.25
+    elif s.rsi_14 < 28:
+        rsi_adj = 0.25
+    return float(np.tanh(0.45 * momentum + trend + rsi_adj))
+
+
+def _funding_score(s: MarketSnapshot) -> float:
+    # 资金费率越高说明多头越拥挤，作为反向指标
+    return float(-np.tanh(s.funding_z * 0.8))
+
+
+def _sentiment_score(s: MarketSnapshot) -> float:
+    # 没有新闻源时，用「短期价格行为」作为情绪代理，并明确标注这是代理指标
+    short = s.ret_1 / (s.vol_24 + EPS)
+    return float(np.tanh(0.5 * short))
+
+
+def run_analysts(llm: LLMClient, snap: MarketSnapshot) -> list[AnalystReport]:
+    t_score = _technical_score(snap)
+    f_score = _funding_score(snap)
+    s_score = _sentiment_score(snap)
+
+    tech_mock = (
+        f"价格 {snap.price:,.0f}，24 根收益 {snap.ret_24:+.2%}，"
+        f"风险调整动量 {snap.ret_24 / (snap.vol_24 * math.sqrt(24) + EPS):+.2f}σ。"
+        f"{'均线多头排列' if snap.sma_24 > snap.sma_72 > snap.sma_168 else '均线空头排列' if snap.sma_24 < snap.sma_72 < snap.sma_168 else '均线纠缠'}，"
+        f"RSI {snap.rsi_14:.0f}，ATR {snap.atr_pct:.2%}。"
+        f"结论：{'偏多' if t_score > 0.15 else '偏空' if t_score < -0.15 else '中性'}。"
+    )
+    funding_mock = (
+        f"最近一次资金费率 {snap.funding_last:+.4%}，24h 累计 {snap.funding_24h:+.4%}，"
+        f"z-score {snap.funding_z:+.2f}。"
+        f"{'多头拥挤，存在多头付费压力' if snap.funding_z > 1 else '空头拥挤，空头付费' if snap.funding_z < -1 else '费率中性，无显著拥挤'}。"
+        f"结论：{'反向偏空' if f_score < -0.15 else '反向偏多' if f_score > 0.15 else '无信号'}。"
+    )
+    senti_mock = (
+        f"缺少新闻/社交数据源，情绪以价格行为代理：1 根收益 {snap.ret_1:+.2%}，"
+        f"相对于波动 {snap.vol_24:.2%} 属于{'异常放大' if abs(snap.ret_1) > 2 * snap.vol_24 else '正常范围'}。"
+        f"结论：{'短线偏多' if s_score > 0.15 else '短线偏空' if s_score < -0.15 else '中性'}。"
+    )
+
+    reports = []
+    specs = [
+        ("技术面分析师", t_score, tech_mock, "价格/均线/RSI/ATR 均为实时计算"),
+        ("资金费率分析师", f_score, funding_mock,
+         "资金费率为真实结算数据" if snap.funding_last != 0 else "资金费率数据缺失，按 0 处理"),
+        ("情绪面分析师", s_score, senti_mock, "无新闻源，使用价格行为代理（非真实情绪）"),
+    ]
+
+    def _run_one(spec):
+        role, score, mock, flag = spec
+        resp = llm.text(SYSTEM_ANALYST, f"数据：\n{snap.to_prompt()}\n\n请以{role}身份分析。", mock)
+        flags = [flag]
+        if resp.degraded:
+            flags.append(f"LLM 降级: {resp.reason}")
+        return AnalystReport(role=role, stance=score, summary=resp.content, data_flags=flags)
+
+    # 分析师团队并发工作：接真 LLM 时能把等待时间压到 1/3
+    with ThreadPoolExecutor(max_workers=len(specs)) as pool:
+        reports = list(pool.map(_run_one, specs))
+    return reports
+
+
+# --------------------------------------------------------------------------
+# 研究员：多空辩论
+# --------------------------------------------------------------------------
+@dataclass
+class Debate:
+    rounds: list[dict]
+    bull_case: str
+    bear_case: str
+    thesis: str
+    score: float
+
+
+def run_debate(
+    llm: LLMClient, snap: MarketSnapshot, reports: list[AnalystReport], rounds: int = 2
+) -> Debate:
+    score = (
+        0.50 * reports[0].stance + 0.30 * reports[1].stance + 0.20 * reports[2].stance
+    )
+    positives = [r for r in reports if r.stance > 0.1]
+    negatives = [r for r in reports if r.stance < -0.1]
+
+    if positives:
+        bull_body = "；".join(f"{r.role}({r.stance:+.2f})" for r in positives)
+    else:
+        bull_body = "当前没有正向信号，多头只能论证超跌反弹与低波动压缩后的向上突破"
+    bull_mock = (
+        "多头论据：" + bull_body
+        + f"。当前价距 30 日高点 {snap.dd_from_high:+.2%}，若趋势延续则上方空间打开。"
+    )
+    vol_view = (
+        f"年化波动 {snap.vol_annual:.0%}，处于 {snap.vol_percentile:.0%} 分位，高波动下止损容易被扫。"
+        if snap.vol_percentile > 0.6
+        else f"年化波动 {snap.vol_annual:.0%}，处于 {snap.vol_percentile:.0%} 分位的低波动区间，"
+        "低波动常是突破前的压缩，方向未定。"
+    )
+    bear_mock = (
+        "空头论据：" + ("；".join(f"{r.role}({r.stance:+.2f})" for r in negatives) if negatives else "无负向信号")
+        + f"。当前价距 30 日高点 {snap.dd_from_high:+.2%}，上方套牢盘构成压力。" + vol_view
+    )
+
+    history: list[dict] = []
+    bull_case, bear_case = bull_mock, bear_mock
+    for i in range(max(1, rounds)):
+        context = "\n".join(
+            f"[{r.role}] 立场 {r.stance:+.2f}：{r.summary}" for r in reports
+        )
+        prior = ""
+        if history:
+            prior = "\n上一轮：\n" + "\n".join(f"{h['side']}：{h['text']}" for h in history[-2:])
+
+        bull_resp = llm.text(
+            SYSTEM_RESEARCHER,
+            f"{snap.to_prompt()}\n\n分析师观点：\n{context}{prior}\n\n你是多头研究员，第 {i + 1} 轮发言。",
+            bull_mock if i == 0 else f"第 {i + 1} 轮：维持多头判断，{bull_mock}",
+        )
+        bear_resp = llm.text(
+            SYSTEM_RESEARCHER,
+            f"{snap.to_prompt()}\n\n分析师观点：\n{context}\n多头刚说：{bull_resp.content}\n\n你是空头研究员，第 {i + 1} 轮发言。",
+            bear_mock if i == 0 else f"第 {i + 1} 轮：维持空头判断，{bear_mock}",
+        )
+        bull_case, bear_case = bull_resp.content, bear_resp.content
+        history.append({"round": i + 1, "side": "多头", "text": bull_resp.content})
+        history.append({"round": i + 1, "side": "空头", "text": bear_resp.content})
+
+    if score > 0.15:
+        stance = "偏多"
+    elif score < -0.15:
+        stance = "偏空"
+    else:
+        stance = "中性"
+    thesis = (
+        f"综合评分 {score:+.2f}（技术 0.5 / 资金费率 0.3 / 情绪 0.2 加权），结论{stance}。"
+        f"多头核心：{positives[0].role if positives else '无'}；"
+        f"空头核心：{negatives[0].role if negatives else '无'}。"
+    )
+    return Debate(rounds=history, bull_case=bull_case, bear_case=bear_case, thesis=thesis, score=score)
+
+
+# --------------------------------------------------------------------------
+# 交易员
+# --------------------------------------------------------------------------
+TRADER_SCHEMA = """action: long 或 short 或 flat
+size_pct: 0.0 到 0.30 之间的小数（占账户权益的比例）
+leverage: 1.0 到 3.0
+stop_loss_pct: 0.002 到 0.10
+take_profit_pct: 0.004 到 0.20
+confidence: 0.0 到 1.0
+rationale: 一句话理由"""
+
+RISK_SCHEMA = """verdict: approve 或 reduce 或 reject
+size_multiplier: 0.0 到 1.0（只允许缩小）
+reasons: 字符串数组"""
+
+
+def _fallback_proposal(snap: MarketSnapshot, debate: Debate) -> dict:
+    score = debate.score
+    if abs(score) < 0.15:
+        return {
+            "action": "flat",
+            "size_pct": 0.0,
+            "leverage": 1.0,
+            "stop_loss_pct": 0.02,
+            "take_profit_pct": 0.04,
+            "confidence": 0.5,
+            "rationale": f"综合评分 {score:+.2f} 未达到开仓阈值 0.15，空仓等待。",
+        }
+    direction = "long" if score > 0 else "short"
+    confidence = float(np.clip(0.5 + abs(score) * 0.55, 0.5, 0.92))
+    size = float(np.clip((confidence - 0.45) * 0.6, 0.02, 0.30))
+    stop = float(np.clip(1.5 * snap.atr_pct, 0.006, 0.03))
+    return {
+        "action": direction,
+        "size_pct": round(size, 4),
+        "leverage": 2.0,
+        "stop_loss_pct": round(stop, 4),
+        "take_profit_pct": round(stop * 2.0, 4),
+        "confidence": round(confidence, 3),
+        "rationale": (
+            f"综合评分 {score:+.2f}，ATR {snap.atr_pct:.2%} 决定止损 {stop:.2%}，"
+            f"波动分位 {snap.vol_percentile:.0%}。"
+        ),
+    }
+
+
+def propose_trade(
+    llm: LLMClient, snap: MarketSnapshot, reports: list[AnalystReport], debate: Debate
+) -> tuple[dict, bool]:
+    mock = _fallback_proposal(snap, debate)
+    context = "\n".join(f"[{r.role}] {r.summary}" for r in reports)
+    user = (
+        f"{snap.to_prompt()}\n\n分析师报告：\n{context}\n\n"
+        f"研究结论：{debate.thesis}\n多头：{debate.bull_case}\n空头：{debate.bear_case}\n\n"
+        "请给出交易提案。若信号不足请输出 flat。"
+    )
+    data, resp = llm.json(SYSTEM_TRADER, user, TRADER_SCHEMA, mock)
+    proposal = _sanitize_proposal(data, mock)
+    return proposal, resp.degraded
+
+
+def _sanitize_proposal(data: dict, fallback: dict) -> dict:
+    """模型输出不可全信：类型、范围、枚举全部重新校验。"""
+    out = dict(fallback)
+    action = str(data.get("action", fallback["action"])).lower()
+    out["action"] = action if action in {"long", "short", "flat"} else "flat"
+
+    def _num(key: str, lo: float, hi: float) -> float:
+        try:
+            v = float(data.get(key, fallback[key]))
+        except (TypeError, ValueError):
+            v = float(fallback[key])
+        return float(np.clip(v, lo, hi))
+
+    out["size_pct"] = _num("size_pct", 0.0, 0.5)
+    out["leverage"] = _num("leverage", 1.0, 20.0)
+    out["stop_loss_pct"] = _num("stop_loss_pct", 0.0, 0.5)
+    out["take_profit_pct"] = _num("take_profit_pct", 0.0, 1.0)
+    out["confidence"] = _num("confidence", 0.0, 1.0)
+    out["rationale"] = str(data.get("rationale", fallback["rationale"]))[:500]
+    return out
+
+
+# --------------------------------------------------------------------------
+# 风控官（LLM 只允许收紧，不允许放宽）
+# --------------------------------------------------------------------------
+def risk_review(
+    llm: LLMClient,
+    snap: MarketSnapshot,
+    proposal: dict,
+    state: AccountState,
+    cfg: RiskConfig,
+) -> tuple[dict, bool]:
+    multiplier = 1.0
+    reasons = []
+    if snap.vol_percentile > 0.9:
+        multiplier *= 0.6
+        reasons.append(f"波动率 {snap.vol_percentile:.0%} 分位，减仓 40%")
+    if state.consecutive_losses >= 2:
+        multiplier *= 0.6
+        reasons.append(f"连续亏损 {state.consecutive_losses} 笔，减仓 40%")
+    if state.drawdown < -cfg.max_drawdown_pct * 0.6:
+        multiplier *= 0.5
+        reasons.append(f"回撤 {state.drawdown:.1%} 已接近熔断线，减半")
+    if proposal.get("action") != "flat" and abs(snap.funding_z) > 2.5:
+        multiplier *= 0.7
+        reasons.append(f"资金费率 z-score {snap.funding_z:+.1f} 极端，减仓 30%")
+
+    mock = {
+        "verdict": "reduce" if multiplier < 1.0 else "approve",
+        "size_multiplier": round(multiplier, 3),
+        "reasons": reasons or ["未发现额外风险，维持原仓位"],
+    }
+    user = (
+        f"{snap.to_prompt()}\n\n账户：权益 {state.equity:,.0f}，回撤 {state.drawdown:.2%}，"
+        f"当日盈亏 {state.daily_pnl_pct:+.2%}，连续亏损 {state.consecutive_losses} 笔。\n"
+        f"交易员提案：{proposal}\n\n"
+        "请评估风险。你只能维持(approve)或缩小(reduce)仓位，或直接拒绝(reject)。"
+    )
+    data, resp = llm.json(SYSTEM_RISK, user, RISK_SCHEMA, mock)
+
+    verdict = str(data.get("verdict", "reduce")).lower()
+    if verdict not in {"approve", "reduce", "reject"}:
+        verdict = "reduce"
+    try:
+        mult = float(data.get("size_multiplier", multiplier))
+    except (TypeError, ValueError):
+        mult = multiplier
+    # LLM 无权放大仓位
+    mult = float(np.clip(mult, 0.0, 1.0))
+    mult = min(mult, multiplier) if multiplier < 1.0 else mult
+    out = {
+        "verdict": verdict,
+        "size_multiplier": mult,
+        "reasons": [str(r)[:200] for r in (data.get("reasons") or reasons)][:6],
+    }
+    return out, resp.degraded

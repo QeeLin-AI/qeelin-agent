@@ -1,0 +1,692 @@
+"""交易引擎：把「决策」变成「持仓」，并持久化状态。
+
+职责边界：
+- 引擎只负责**执行**决策（下单/平仓/止损），不做任何分析。
+- 模拟盘（paper）与实盘（live）共用同一套状态机，差别只在撮合来源。
+- 实盘必须显式 arm，且 arm 状态**不落盘**——服务重启后自动回到 paper。
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+from dataclasses import asdict
+from pathlib import Path
+
+import pandas as pd
+
+from .agents.pipeline import Decision, TradingPipeline, render_markdown
+from .config import AppConfig
+from .data import load_market
+from .execution import BinanceFuturesClient, ExchangeError
+from .risk import AccountState
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+class TradingEngine:
+    def __init__(self, cfg: AppConfig) -> None:
+        self.cfg = cfg
+        self.lock = threading.RLock()
+        self.state_path = Path(cfg.runs_dir) / "engine_state.json"
+        self.state = self._default_state()
+        self._load()
+        # 打开/重启后不自动运行交易循环：线程只在用户点「启动」时由 start_auto 创建，
+        # 这里把持久化的 running 标记复位，避免界面误显示「运行中」。
+        self.state.setdefault("auto", {})["running"] = False
+
+        self.df: pd.DataFrame | None = None
+        self.data_source = ""
+        self.last_decision: Decision | None = None
+        self.last_error = ""
+        # 恢复上次选择的品种：set_symbol 只写 state 不写 config，重启要还原，
+        # 否则会悄悄退回 config/default.json 里的默认品种（BTCUSDT）。
+        if self.state.get("symbol"):
+            self.cfg.market.symbol = self.state["symbol"]
+        # 重启后仍然可以从 state 里恢复「上次决策的订单计划」，否则执行按钮会失灵
+        self.pending_order: dict | None = (self.state.get("last_decision") or {}).get("order")
+        self.armed = False                 # 不持久化
+        self.live_client: BinanceFuturesClient | None = None
+        self.live_price_provider = None    # 由 Web 层注入：返回最新成交价
+
+        self._auto_thread: threading.Thread | None = None
+        self._auto_stop = threading.Event()
+        self.auto_interval = int(self.state.get("auto", {}).get("interval_sec", 300))
+        self.auto_execute = bool(self.state.get("auto", {}).get("execute", False))
+        self._cycle_lock = threading.Lock()
+        # 机会信号排行榜：最近一次全品种扫描结果（供页面展示，扫描是重操作，避免每次轮询重扫）
+        self.opportunities: list[dict] = []
+        self._rotate_cycle_count = 0
+
+    # ------------------------------------------------------------------
+    def _default_state(self) -> dict:
+        eq = self.cfg.backtest.initial_equity
+        return {
+            "mode": "paper",
+            "testnet": True,
+            "symbol": self.cfg.market.symbol,
+            "equity": eq,
+            "peak_equity": eq,
+            "day_start_equity": eq,
+            "day": _today(),
+            "position": None,
+            "fills": [],
+            "consecutive_losses": 0,
+            "last_decision": None,
+            "auto": {"running": False, "interval_sec": 300, "execute": False, "last_run": ""},
+            "halt": False,
+            "history": [],
+        }
+
+    def _load(self) -> None:
+        if self.state_path.exists():
+            try:
+                saved = json.loads(self.state_path.read_text(encoding="utf-8"))
+                self.state.update(saved)
+            except Exception:  # noqa: BLE001 - 状态文件损坏时重建，不阻塞启动
+                pass
+
+    def _save(self) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.state, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(self.state_path)
+
+    # ------------------------------------------------------------------
+    def refresh_data(self, force: bool = False) -> tuple[pd.DataFrame, str]:
+        df, src = load_market(self.cfg.market, force_download=force)
+        with self.lock:
+            self.df = df
+            self.data_source = src
+        return df, src
+
+    def price(self) -> float:
+        if self.df is None:
+            self.refresh_data()
+        assert self.df is not None
+        return float(self.df["close"].iloc[-1])
+
+    def _roll_day(self) -> None:
+        if self.state["day"] != _today():
+            self.state["day"] = _today()
+            self.state["day_start_equity"] = self.state["equity"]
+            self.state["position"] = self.state.get("position")
+
+    def account_state(self, price: float | None = None) -> AccountState:
+        price = price if price is not None else self.price()
+        equity = self._equity(price)
+        return AccountState(
+            equity=equity,
+            peak_equity=max(self.state["peak_equity"], equity),
+            day_start_equity=self.state["day_start_equity"],
+            position_notional=self._position_notional(price),
+            consecutive_losses=self.state["consecutive_losses"],
+        )
+
+    def _position_pnl(self, price: float) -> float:
+        pos = self.state.get("position")
+        if not pos:
+            return 0.0
+        direction = 1.0 if pos["side"] == "LONG" else -1.0
+        return (price - pos["entry"]) * pos["qty"] * direction
+
+    def _position_notional(self, price: float) -> float:
+        pos = self.state.get("position")
+        return pos["qty"] * price if pos else 0.0
+
+    def _equity(self, price: float) -> float:
+        return float(self.state["equity"] + self._position_pnl(price))
+
+    # ------------------------------------------------------------------
+    # 模拟撮合
+    # ------------------------------------------------------------------
+    def _paper_open(self, side: str, qty: float, price: float, lev: float,
+                    stop: float, tp: float, reason: str) -> dict:
+        slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
+        fill = price * (1 + slip) if side == "LONG" else price * (1 - slip)
+        fee = qty * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
+        self.state["equity"] -= fee
+        self.state["position"] = {
+            "side": side,
+            "qty": qty,
+            "entry": fill,
+            "leverage": lev,
+            "stop": stop,
+            "tp": tp,
+            "opened_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": "paper",
+        }
+        fill_rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "action": "OPEN",
+            "side": side,
+            "qty": round(qty, 6),
+            "price": round(fill, 2),
+            "fee": round(fee, 4),
+            "reason": reason,
+        }
+        self.state["fills"].append(fill_rec)
+        self.state["fills"] = self.state["fills"][-500:]
+        return fill_rec
+
+    def _paper_close(self, price: float, reason: str) -> dict | None:
+        pos = self.state.get("position")
+        if not pos:
+            return None
+        slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
+        direction = 1.0 if pos["side"] == "LONG" else -1.0
+        fill = price * (1 - slip) if pos["side"] == "LONG" else price * (1 + slip)
+        pnl = (fill - pos["entry"]) * pos["qty"] * direction
+        fee = pos["qty"] * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
+        self.state["equity"] += pnl - fee
+        self.state["consecutive_losses"] = (
+            self.state["consecutive_losses"] + 1 if pnl < 0 else 0
+        )
+        rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "action": "CLOSE",
+            "side": pos["side"],
+            "qty": round(pos["qty"], 6),
+            "price": round(fill, 2),
+            "fee": round(fee, 4),
+            "pnl": round(pnl - fee, 4),
+            "reason": reason,
+        }
+        self.state["fills"].append(rec)
+        self.state["fills"] = self.state["fills"][-500:]
+        self.state["position"] = None
+        return rec
+
+    # ------------------------------------------------------------------
+    # 实盘
+    # ------------------------------------------------------------------
+    def connect(self, testnet: bool = True, env: str | None = None) -> BinanceFuturesClient:
+        key = os.getenv("BINANCE_API_KEY", "")
+        secret = os.getenv("BINANCE_API_SECRET", "")
+        if not key or not secret:
+            raise ExchangeError("未设置 BINANCE_API_KEY / BINANCE_API_SECRET")
+        self.live_client = BinanceFuturesClient(
+            key, secret, testnet=testnet, armed=self.armed, env=env
+        )
+        return self.live_client
+
+    def arm(self, mode: str, confirm: str, testnet: bool = True) -> dict:
+        """解锁交易所下单。
+
+        三种模式：
+        - paper   ：本地模拟撮合，不碰交易所
+        - testnet ：币安期货**测试网**（假钱），只校验密钥，不需要确认文本
+        - live    ：主网真钱，需要确认文本 + 环境变量（主网还要 ack 文件）
+        """
+        if mode not in {"paper", "testnet", "demo", "live"}:
+            raise ValueError("mode 只能是 paper / testnet / demo / live")
+        if mode == "paper":
+            self.armed = False
+            self.state["mode"] = "paper"
+            self._save()
+            return {"mode": "paper", "armed": False}
+        if mode in {"testnet", "demo"}:
+            client = self.connect(testnet=True, env=("demo" if mode == "demo" else "testnet"))
+            client.armed = True
+            client.ping()
+            acct = client.account()
+            self.armed = True
+            self.state["mode"] = "live"
+            self.state["testnet"] = True
+            self._save()
+            return {
+                "mode": "testnet",
+                "armed": True,
+                "testnet": True,
+                "balance": acct.get("balance"),
+                "available": acct.get("available"),
+            }
+        if confirm.strip() != "我确认使用真实资金":
+            raise PermissionError("确认文本不匹配，拒绝解锁")
+        if not testnet and os.getenv("CRYPTOAGENT_I_UNDERSTAND_THE_RISK") != "yes":
+            raise PermissionError(
+                "主网交易需要环境变量 CRYPTOAGENT_I_UNDERSTAND_THE_RISK=yes"
+            )
+        client = self.connect(testnet=testnet)
+        client.armed = True
+        client.ping()
+        client.account()  # 验证签名
+        self.armed = True
+        self.state["mode"] = "live"
+        self.state["testnet"] = testnet
+        self._save()
+        return {"mode": "live", "armed": True, "testnet": testnet}
+
+    def switch_symbol(self, symbol: str) -> dict:
+        """切换活跃品种（有持仓时拒绝，避免仓位和行情对不上）。"""
+        symbol = symbol.strip().upper()
+        if not symbol:
+            raise ValueError("品种不能为空")
+        if symbol == self.cfg.market.symbol:
+            return {"symbol": symbol, "changed": False}
+        with self.lock:
+            if self.state.get("position"):
+                raise ValueError("还有未平仓位，先平仓再换品种")
+            self.cfg.market.symbol = symbol
+            self.state["symbol"] = symbol
+            self.df = None
+            self._save()
+        df, src = self.refresh_data()
+        return {
+            "symbol": symbol,
+            "changed": True,
+            "data_source": src,
+            "price": round(float(df["close"].iloc[-1]), 4),
+            "bars": int(len(df)),
+        }
+
+    def disarm(self) -> dict:
+        self.armed = False
+        if self.live_client:
+            self.live_client.armed = False
+        self.state["mode"] = "paper"
+        self._save()
+        return {"mode": "paper", "armed": False}
+
+    def _scan_opportunities(self) -> list[dict]:
+        """扫全部品种的因子复合信号，返回按机会分降序的 [{symbol, composite, score, active}]。
+
+        纯本地计算、不下单、不调 LLM；结果缓存到 self.opportunities 供页面排行榜展示。
+        """
+        from dataclasses import replace
+
+        from .data import load_market
+        from .factors.signal import compute_factor_signal
+
+        rows: list[dict] = []
+        for sym in self.cfg.market.symbols:
+            entry = {"symbol": sym, "composite": 0.0, "score": 0.0, "active": sym == self.cfg.market.symbol}
+            try:
+                mkt = replace(self.cfg.market, symbol=sym)
+                df, _ = load_market(mkt)
+                fsig = compute_factor_signal(self.cfg.research.factor_library, df)
+                composite = float(fsig.get("composite", 0.0) or 0.0)
+                entry["composite"] = round(composite, 4)
+                entry["score"] = round(abs(composite), 4)
+            except Exception:  # noqa: BLE001 - 单个品种失败不影响整体
+                entry["error"] = True
+            rows.append(entry)
+        rows.sort(key=lambda r: -(r["score"] or 0))
+        self.opportunities = rows
+        return rows
+
+    def _pick_best_symbol(self, min_score: float | None = None) -> str | None:
+        """自主选品种：扫全品种，返回机会分最大且超阈值的品种（无则 None）。"""
+        threshold = float(min_score if min_score is not None else self.cfg.market.rotate_min_score)
+        rows = self._scan_opportunities()
+        if not rows:
+            return None
+        top = rows[0]
+        if top.get("error") or (top["score"] or 0) < threshold:
+            return None
+        return top["symbol"]
+
+    # ------------------------------------------------------------------
+    # 决策与执行
+    # ------------------------------------------------------------------
+    def run_decision(self, rounds: int = 2) -> dict:
+        df = self.df if self.df is not None else self.refresh_data()[0]
+        price = float(df["close"].iloc[-1])
+        pipe = TradingPipeline(self.cfg)
+        # 杠杆上限以交易所支持的最大杠杆为准；未连交易所用配置兜底（默认 3x 保守）
+        ex_max = None
+        if self.armed and self.live_client is not None:
+            try:
+                ex_max = float(self.live_client.max_leverage(self.cfg.market.symbol))
+            except Exception:  # noqa: BLE001 - 拿不到就退回配置兜底
+                ex_max = None
+        decision = pipe.run(
+            df, state=self.account_state(price), debate_rounds=rounds, persist=False,
+            exchange_max_leverage=ex_max,
+        )
+        self.last_decision = decision
+
+        out = Path(self.cfg.runs_dir) / "decisions"
+        out.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        payload = asdict(decision)
+        payload["markdown"] = render_markdown(decision)
+        (out / f"{stamp}_{decision.symbol}.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
+        )
+        (out / "latest.md").write_text(payload["markdown"], encoding="utf-8")
+
+        with self.lock:
+            self.pending_order = decision.order
+            self.state["last_decision"] = {
+                "ts": decision.ts,
+                "action": decision.risk_decision["action"],
+                "size_pct": decision.risk_decision["size_pct"],
+                "approved": decision.risk_decision["approved"],
+                "order": decision.order,
+                "file": str(out / f"{stamp}_{decision.symbol}.json"),
+            }
+            self._save()
+        return payload
+
+    def execute(self, price: float | None = None, reason: str = "manual") -> dict:
+        """执行最近一次决策里的订单计划（进程重启后用 state 里恢复的计划）。"""
+        decision = self.last_decision
+        order = decision.order if decision is not None else self.pending_order
+        if order is None:
+            return {"ok": False, "error": "还没有决策，请先运行一次决策"}
+        price = price if price is not None else self.price()
+
+        if not decision and not order.get("quantity"):
+            return {"ok": False, "error": "当前决策没有订单（风控未通过或策略观望）"}
+
+        with self.lock:
+            if self.state.get("halt"):
+                return {"ok": False, "error": "熔断开关已打开"}
+            if self.state.get("position"):
+                return {"ok": False, "error": "已有持仓，拒绝重复开仓（请先平仓）"}
+
+            side = "LONG" if order["side"] == "BUY" else "SHORT"
+            qty = float(order["quantity"])
+            lev = float(order["leverage"])
+            stop = float(order["stop_loss_price"])
+            tp = float(order["take_profit_price"])
+
+            if self.state["mode"] == "live":
+                if not self.armed or self.live_client is None:
+                    return {"ok": False, "error": "实盘未解锁"}
+                try:
+                    self.live_client.set_leverage(self.cfg.market.symbol, int(round(lev)))
+                    # 先清掉这个品种的残留条件单：closePosition 的止损单一个方向只能有一张，
+                    # 上一次执行留下的孤儿单会让新止损直接报 -4130
+                    try:
+                        self.live_client.cancel_all(self.cfg.market.symbol)
+                    except Exception:  # noqa: BLE001 - 没有旧单时会报错，忽略
+                        pass
+                    res = self.live_client.place_market(
+                        self.cfg.market.symbol, "BUY" if side == "LONG" else "SELL", qty
+                    )
+                    close_side = "SELL" if side == "LONG" else "BUY"
+                    # 止损单（保命）：触发价在开仓价亏损侧。
+                    # 止损是刚开仓后最重要的保护：一旦下失败，绝不能留下"裸仓"——
+                    # 立即反向平掉刚开的仓位并作废本计划，避免无保护敞口 / 下次循环重复开仓。
+                    try:
+                        self.live_client.place_stop_market(
+                            self.cfg.market.symbol, close_side, stop,
+                            order_type="STOP_MARKET",
+                        )
+                    except ExchangeError as exc:
+                        self.last_error = f"止损单下失败：{exc}"
+                        try:
+                            self.live_client.place_market(
+                                self.cfg.market.symbol, close_side, qty, reduce_only=True
+                            )
+                            self.last_error += "；已立即反向平仓保护（不留裸仓）"
+                        except ExchangeError as exc2:
+                            self.last_error += f"；紧急平仓也失败：{exc2}"
+                        self._consume_plan()
+                        return {"ok": False, "error": self.last_error}
+                    # 止盈单（锁利）：触发价在开仓价盈利侧；失败不影响持仓与止损
+                    try:
+                        self.live_client.place_stop_market(
+                            self.cfg.market.symbol, close_side, tp,
+                            order_type="TAKE_PROFIT_MARKET",
+                        )
+                    except ExchangeError as exc:
+                        self.last_error = f"止盈单下失败（持仓与止损已生效）：{exc}"
+                    self.state["position"] = {
+                        "side": side,
+                        "qty": qty,
+                        "entry": res.price or price,
+                        "leverage": lev,
+                        "stop": stop,
+                        "tp": tp,
+                        "opened_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "mode": "live",
+                        "order_id": res.order_id,
+                    }
+                    self.state["fills"].append(
+                        {
+                            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "OPEN",
+                            "side": side,
+                            "qty": qty,
+                            "price": res.price or price,
+                            "fee": 0.0,
+                            "reason": f"live:{res.order_id}",
+                        }
+                    )
+                    self._save()
+                    self._log_live("OPEN", side, qty, res.price or price, res.order_id)
+                    self._consume_plan()
+                    return {"ok": True, "mode": "live", "order_id": res.order_id}
+                except ExchangeError as exc:
+                    self.last_error = str(exc)
+                    return {"ok": False, "error": str(exc)}
+            else:
+                rec = self._paper_open(side, qty, price, lev, stop, tp, reason)
+                self._consume_plan()
+                self._save()
+                return {"ok": True, "mode": "paper", "fill": rec}
+
+    def _consume_plan(self) -> None:
+        """订单计划一旦执行就作废，避免重复下单。"""
+        self.pending_order = None
+        ld = self.state.get("last_decision")
+        if isinstance(ld, dict) and isinstance(ld.get("order"), dict):
+            ld["order"]["status"] = "FILLED"
+
+    def close(self, price: float | None = None, reason: str = "manual") -> dict:
+        price = price if price is not None else self.price()
+        with self.lock:
+            pos = self.state.get("position")
+            if not pos:
+                return {"ok": False, "error": "当前没有持仓"}
+            if pos.get("mode") == "live" and self.state["mode"] == "live":
+                if not self.armed or self.live_client is None:
+                    return {"ok": False, "error": "实盘未解锁"}
+                try:
+                    self.live_client.cancel_all(self.cfg.market.symbol)
+                    res = self.live_client.place_market(
+                        self.cfg.market.symbol,
+                        "SELL" if pos["side"] == "LONG" else "BUY",
+                        float(pos["qty"]),
+                        reduce_only=True,
+                    )
+                    self.state["position"] = None
+                    self._save()
+                    self._log_live("CLOSE", pos["side"], pos["qty"], res.price or price, res.order_id)
+                    return {"ok": True, "mode": "live", "order_id": res.order_id}
+                except ExchangeError as exc:
+                    return {"ok": False, "error": str(exc)}
+            rec = self._paper_close(price, reason)
+            self._save()
+            return {"ok": True, "mode": "paper", "fill": rec}
+
+    def check_stops(self, price: float | None = None) -> dict | None:
+        """模拟盘里用最新价检查止损/止盈。实盘由交易所的 STOP_MARKET 单负责。"""
+        price = price if price is not None else self.price()
+        pos = self.state.get("position")
+        if not pos or pos.get("mode") == "live":
+            return None
+        hit = None
+        if pos["side"] == "LONG":
+            if price <= pos["stop"]:
+                hit = "stop_loss"
+            elif price >= pos["tp"]:
+                hit = "take_profit"
+        else:
+            if price >= pos["stop"]:
+                hit = "stop_loss"
+            elif price <= pos["tp"]:
+                hit = "take_profit"
+        if hit:
+            with self.lock:
+                return self._paper_close(price, hit)
+        return None
+
+    def _log_live(self, action: str, side: str, qty: float, price: float, order_id: str) -> None:
+        path = Path(self.cfg.runs_dir) / "live_orders.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "action": action,
+                        "side": side,
+                        "qty": qty,
+                        "price": price,
+                        "order_id": order_id,
+                        "testnet": self.state.get("testnet", True),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    # ------------------------------------------------------------------
+    # 自动循环
+    # ------------------------------------------------------------------
+    def start_auto(self, interval_sec: int = 300, execute: bool = False) -> dict:
+        if self._auto_thread and self._auto_thread.is_alive():
+            return {"running": True, "interval_sec": self.auto_interval}
+        interval_sec = max(30, int(interval_sec))
+        self.auto_interval = interval_sec
+        self.auto_execute = bool(execute)
+        self._auto_stop.clear()
+        self._auto_thread = threading.Thread(target=self._auto_loop, daemon=True)
+        self._auto_thread.start()
+        self.state["auto"] = {
+            "running": True,
+            "interval_sec": interval_sec,
+            "execute": self.auto_execute,
+            "last_run": self.state["auto"].get("last_run", ""),
+        }
+        self._save()
+        return self.state["auto"]
+
+    def stop_auto(self) -> dict:
+        self._auto_stop.set()
+        self.state["auto"]["running"] = False
+        self._save()
+        return self.state["auto"]
+
+    def _auto_loop(self) -> None:
+        while not self._auto_stop.is_set():
+            try:
+                self.cycle()
+            except Exception as exc:  # noqa: BLE001 - 自动循环不能因单次异常退出
+                self.last_error = f"{type(exc).__name__}: {exc}"
+            self._auto_stop.wait(self.auto_interval)
+
+    def cycle(self) -> dict:
+        with self._cycle_lock:
+            # 自主选品种：无持仓时每 N 轮扫一次全品种，切到因子信号最强的（有持仓则跳过）
+            rotated = False
+            self._rotate_cycle_count += 1
+            every = max(1, int(getattr(self.cfg.market, "rotate_every_cycles", 1) or 1))
+            if self.cfg.market.auto_rotate and not self.state.get("position") \
+                    and self._rotate_cycle_count % every == 0:
+                try:
+                    best = self._pick_best_symbol()
+                    if best and best != self.cfg.market.symbol:
+                        self.switch_symbol(best)
+                        rotated = True
+                except Exception as exc:  # noqa: BLE001 - 选品种失败不阻断决策
+                    self.last_error = f"自主选品种失败：{exc}"
+
+            df, src = self.refresh_data()
+            price = float(df["close"].iloc[-1])
+            # 有实时报价时优先用实时价，模拟盘止损才跟得上秒级行情；
+            # 刚换品种时跳过实时价（它还是旧品种的价）
+            if self.live_price_provider is not None and not rotated:
+                try:
+                    lp = float(self.live_price_provider() or 0.0)
+                    if lp > 0:
+                        price = lp
+                except Exception:  # noqa: BLE001
+                    pass
+            stopped = self.check_stops(price)
+            payload = self.run_decision()
+            executed = None
+            if self.auto_execute and payload.get("order"):
+                executed = self.execute(price, reason="auto")
+            self.state["auto"]["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._save()
+            return {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "price": price,
+                "stopped": stopped,
+                "decision": payload.get("risk_decision"),
+                "executed": executed,
+            }
+
+    # ------------------------------------------------------------------
+    # 状态输出
+    # ------------------------------------------------------------------
+    def status(self, price_override: float | None = None) -> dict:
+        with self.lock:
+            price = None
+            try:
+                price = price_override if price_override else self.price()
+            except Exception:  # noqa: BLE001
+                pass
+            eq = self._equity(price) if price else self.state["equity"]
+            pos = self.state.get("position")
+            if pos and price:
+                pos = {
+                    **pos,
+                    "mark": price,
+                    "unrealized": round(self._position_pnl(price), 2),
+                    "notional": round(pos["qty"] * price, 2),
+                }
+            if pos:
+                pos = {**pos, "symbol": pos.get("symbol") or self.cfg.market.symbol}
+            hist = self.state.get("history", [])
+            if price:
+                hist = (hist + [{"ts": time.strftime("%H:%M:%S"), "equity": round(eq, 2), "price": price}])[-300:]
+                self.state["history"] = hist
+            return {
+                "mode": self.state["mode"],
+                "armed": self.armed,
+                "testnet": self.state.get("testnet", True),
+                "symbol": self.cfg.market.symbol,
+                "interval": self.cfg.market.interval,
+                "auto_rotate": bool(self.cfg.market.auto_rotate),
+                "rotate_min_score": float(self.cfg.market.rotate_min_score),
+                "rotate_every_cycles": int(self.cfg.market.rotate_every_cycles),
+                "opportunities": self.opportunities,
+                "price": price,
+                "equity": round(eq, 2),
+                "cash_equity": round(self.state["equity"], 2),
+                "peak_equity": round(self.state["peak_equity"], 2),
+                "day_pnl_pct": round((eq / self.state["day_start_equity"] - 1) * 100, 3)
+                if self.state["day_start_equity"]
+                else 0.0,
+                "drawdown_pct": round((eq / max(self.state["peak_equity"], 1e-9) - 1) * 100, 3),
+                "position": pos,
+                "fills": [
+                    {**f, "symbol": f.get("symbol") or self.cfg.market.symbol}
+                    for f in self.state["fills"][-30:][::-1]
+                ],
+                "consecutive_losses": self.state["consecutive_losses"],
+                "last_decision": self.state.get("last_decision"),
+                "auto": self.state.get("auto", {}),
+                "halt": bool(self.state.get("halt")),
+                "data_source": self.data_source,
+                "llm": {"provider": self.cfg.llm.provider, "model": self.cfg.llm.model},
+                "history": hist,
+                "last_error": self.last_error,
+                "live_keys": bool(os.getenv("BINANCE_API_KEY")),
+            }
+
+    def set_halt(self, halt: bool) -> dict:
+        self.state["halt"] = bool(halt)
+        if halt:
+            self.stop_auto()
+        self._save()
+        return {"halt": halt}

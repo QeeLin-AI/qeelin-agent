@@ -1,0 +1,580 @@
+"""行情数据层。
+
+两个来源：
+1. synthetic —— 内置的合成行情生成器，离线可跑，用于验证整条流水线。
+   它含有「波动率聚集 + 动量/反转交替 + 偶发跳空」三种真实市场特征，
+   但**不代表真实市场存在可利用的 alpha**，只用于确认工程链路正确。
+2. binance —— 币安 U 本位永续公开接口（K 线 + 资金费率），需要能访问外网。
+
+统一输出 DataFrame，索引为 UTC 时间，列：
+    open, high, low, close, volume, funding_rate
+其中 funding_rate 是该 bar 对应的资金费率（每 8 小时结算一次，其余 bar 为 0）。
+"""
+from __future__ import annotations
+
+import json
+import math
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from .config import MarketConfig
+from .netutil import ssl_context
+
+FAPI = "https://fapi.binance.com"
+DEMO = "https://demo-fapi.binance.com"   # 币安 U 本位合约「模拟盘」公开行情接口
+VISION = "https://data-api.binance.vision"   # 现货镜像（已弃用于决策数据，仅作实时价兜底）
+GATE = "https://api.gateio.ws"
+
+INTERVAL_HOURS = {
+    "15m": 0.25,
+    "30m": 0.5,
+    "1h": 1.0,
+    "2h": 2.0,
+    "4h": 4.0,
+    "6h": 6.0,
+    "8h": 8.0,
+    "12h": 12.0,
+    "1d": 24.0,
+}
+
+
+class DataError(RuntimeError):
+    pass
+
+
+def bars_per_year(interval: str) -> float:
+    hours = INTERVAL_HOURS.get(interval, 1.0)
+    return 365.0 * 24.0 / hours
+
+
+# --------------------------------------------------------------------------
+# 合成行情
+# --------------------------------------------------------------------------
+def synthetic_ohlcv(
+    n: int = 6000,
+    seed: int = 7,
+    start_price: float = 30_000.0,
+    interval: str = "1h",
+    start: str = "2025-01-01",
+) -> pd.DataFrame:
+    """生成带有波动率聚集、OU 趋势和跳空的合成永续合约行情。"""
+    rng = np.random.default_rng(seed)
+
+    # --- 波动率：GARCH 式的均值回复过程 ---
+    base_vol = 0.008 * math.sqrt(INTERVAL_HOURS.get(interval, 1.0))
+    vol = np.empty(n)
+    vol[0] = base_vol
+    for i in range(1, n):
+        vol[i] = 0.97 * vol[i - 1] + 0.03 * base_vol + 0.00035 * rng.standard_normal()
+        vol[i] = min(max(vol[i], 0.3 * base_vol), 4.0 * base_vol)
+
+    # --- 趋势：OU 过程（均值回复的漂移），比"台阶式"状态更接近真实市场 ---
+    # theta 控制趋势半衰期（0.015 ≈ 46 根），0.009 控制趋势强度。
+    # 强度刻意压到「可被动量因子捕捉，但不足以预测每一天」的水平。
+    theta, drift_sigma = 0.015, 0.009
+    drift = np.empty(n)
+    d = 0.0
+    for i in range(n):
+        d = d * (1.0 - theta) + drift_sigma * vol[i] * rng.standard_normal()
+        drift[i] = d
+
+    shocks = rng.standard_normal(n)
+    ret = drift + vol * shocks
+
+    # --- 偶发跳空（插针）---
+    jump_mask = rng.random(n) < 0.0008
+    ret[jump_mask] += rng.choice([-1.0, 1.0], jump_mask.sum()) * 0.03
+
+    close = start_price * np.exp(np.cumsum(ret))
+    open_ = np.empty(n)
+    open_[0] = start_price
+    open_[1:] = close[:-1]
+    wick = np.abs(rng.standard_normal(n)) * vol * 0.6
+    high = np.maximum(open_, close) * (1.0 + wick)
+    low = np.minimum(open_, close) * (1.0 - wick)
+    volume = np.exp(rng.standard_normal(n) * 0.45 + 10.0)
+
+    # --- 资金费率：与基差/趋势同向，做多拥挤时为负（空头付钱）---
+    funding = np.zeros(n)
+    every = int(8 / INTERVAL_HOURS.get(interval, 1.0)) or 1
+    for i in range(0, n, every):
+        momentum = float(np.sum(ret[max(0, i - 24) : i + 1]))
+        funding[i] = float(np.tanh(momentum * 8.0)) * 0.00015
+
+    idx = pd.date_range(start=start, periods=n, freq=_pandas_freq(interval), tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "funding_rate": funding,
+        },
+        index=idx,
+    )
+    df.index.name = "ts"
+    return df
+
+
+def _pandas_freq(interval: str) -> str:
+    if interval.endswith("m"):
+        return f"{interval[:-1]}min"
+    if interval.endswith("h"):
+        return f"{interval[:-1]}h"
+    if interval.endswith("d"):
+        return f"{interval[:-1]}D"
+    return "1h"
+
+
+# --------------------------------------------------------------------------
+# 真实行情下载（多源回退）
+# --------------------------------------------------------------------------
+_DEAD_UNTIL: dict[str, float] = {}   # 源 -> 恢复时间戳；避免每次启动都去撞一个死的域名
+DEAD_COOLDOWN = 600.0
+
+# 实时价单独一套冷却：它每 5 秒重试一次，冷却 10 分钟等于漏掉 120 个心跳，所以只冷却 30 秒
+_DEAD_LIVE: dict[str, float] = {}
+LIVE_COOLDOWN = 30.0
+
+
+def _dead(host: str) -> bool:
+    return float(_DEAD_UNTIL.get(host, 0.0)) > time.time()
+
+
+def _mark_dead(host: str) -> None:
+    _DEAD_UNTIL[host] = time.time() + DEAD_COOLDOWN
+
+
+def _get(url: str, params: dict, timeout: int = 6) -> list:
+    q = urllib.parse.urlencode(params)
+    req = urllib.request.Request(f"{url}?{q}", headers={"User-Agent": "QeeLin-Agent/0.3"})
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _klines_frame(rows: list) -> pd.DataFrame:
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "open_time", "open", "high", "low", "close", "volume", "close_time",
+            "quote_volume", "trades", "taker_base", "taker_quote", "ignore",
+        ],
+    )
+    df.index = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    df.index.name = "ts"
+    df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    return df
+
+
+def _fetch_fapi(cfg: MarketConfig, need: int, base: str = FAPI) -> pd.DataFrame:
+    """U 本位永续（有资金费率）。国内大多直连不通。"""
+    end_time = int(time.time() * 1000)
+    rows: list[list] = []
+    while len(rows) < need:
+        limit = min(1500, need - len(rows))
+        batch = _get(
+            f"{base}/fapi/v1/klines",
+            {"symbol": cfg.symbol, "interval": cfg.interval, "limit": limit, "endTime": end_time},
+        )
+        if not batch:
+            break
+        rows = batch + rows
+        end_time = int(batch[0][0]) - 1
+        if len(batch) < limit:
+            break
+    if not rows:
+        raise DataError("fapi 返回空数据")
+    df = _klines_frame(rows)
+
+    # 资金费率（8 小时一条），对齐到 bar
+    funding = pd.Series(0.0, index=df.index)
+    start = int(df.index[0].timestamp() * 1000)
+    fr_rows: list[dict] = []
+    cursor = start
+    while True:
+        batch = _get(
+            f"{base}/fapi/v1/fundingRate",
+            {"symbol": cfg.symbol, "limit": 1000, "startTime": cursor},
+        )
+        if not batch:
+            break
+        fr_rows.extend(batch)
+        cursor = int(batch[-1]["fundingTime"]) + 1
+        if len(batch) < 1000:
+            break
+    for item in fr_rows:
+        ts = pd.to_datetime(int(item["fundingTime"]), unit="ms", utc=True)
+        idx = funding.index.get_indexer([ts], method="nearest")[0]
+        if idx >= 0:
+            funding.iloc[idx] = float(item["fundingRate"])
+    df["funding_rate"] = funding.values
+    return df
+
+
+def _fetch_demo_fapi(cfg: MarketConfig, need: int) -> pd.DataFrame:
+    """币安 U 本位合约「模拟盘」行情（demo-fapi），同样有资金费率。"""
+    return _fetch_fapi(cfg, need, base=DEMO)
+
+
+def _fetch_vision(cfg: MarketConfig, need: int) -> pd.DataFrame:
+    """币安官方公开行情镜像 data-api.binance.vision（现货 K 线，无资金费率）。
+
+    国内可直连，是 fapi 不通时最贴近真实盘的替代。
+    """
+    end_time = int(time.time() * 1000)
+    rows: list[list] = []
+    while len(rows) < need:
+        limit = min(1000, need - len(rows))
+        batch = _get(
+            f"{VISION}/api/v3/klines",
+            {"symbol": cfg.symbol, "interval": cfg.interval, "limit": limit, "endTime": end_time},
+        )
+        if not batch:
+            break
+        rows = batch + rows
+        end_time = int(batch[0][0]) - 1
+        if len(batch) < limit:
+            break
+    if not rows:
+        raise DataError("vision 返回空数据")
+    df = _klines_frame(rows)
+    df["funding_rate"] = 0.0
+    return df
+
+
+def _fetch_gate(cfg: MarketConfig, need: int) -> pd.DataFrame:
+    """Gate.io USDT 永续（备用源）。合约名 BTCUSDT → BTC_USDT。"""
+    contract = cfg.symbol.replace("USDT", "_USDT")
+    rows: list[dict] = []
+    to_ts = int(time.time())
+    interval = cfg.interval if cfg.interval in {"10s", "1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d"} else "1h"
+    span = int(INTERVAL_HOURS.get(interval, 1.0) * 3600)
+    while len(rows) < need:
+        batch = _get(
+            f"{GATE}/api/v4/futures/usdt/candlesticks",
+            {"contract": contract, "interval": interval, "limit": min(2000, need), "to": to_ts},
+        )
+        if not batch:
+            break
+        rows = batch + rows
+        to_ts = int(batch[0]["t"]) - span
+        if len(batch) < 2000:
+            break
+    if not rows:
+        raise DataError("gate 返回空数据")
+    df = pd.DataFrame(rows)
+    df.index = pd.to_datetime(df["t"].astype(int), unit="s", utc=True)
+    df.index.name = "ts"
+    df = df[["o", "h", "l", "c", "v"]].astype(float)
+    df.columns = ["open", "high", "low", "close", "volume"]
+    df = df[~df.index.duplicated()].sort_index()
+    df["funding_rate"] = 0.0
+    return df
+
+
+def fetch_binance(cfg: MarketConfig, max_bars: int | None = None) -> pd.DataFrame:
+    """按可用性依次尝试：fapi 永续 → vision 镜像 → gate 永续。
+
+    返回的 DataFrame 带 `attrs["source"]`（哪个源成功）与 `attrs["has_funding"]`。
+    全部失败才抛 DataError——绝不静默返回合成数据。
+    """
+    need = max_bars or cfg.bars
+    errors: list[str] = []
+    # 只做合约：fapi 永续 → demo 合约 → Gate 永续，不再回退现货镜像
+    pairs = (
+        ("binance-fapi", _fetch_fapi, FAPI),
+        ("binance-fapi-demo", _fetch_demo_fapi, DEMO),
+        ("gate-futures", _fetch_gate, GATE),
+    )
+    for name, fn, host in pairs:
+        if _dead(host):
+            errors.append(f"{name}: 上次失败，{int(DEAD_COOLDOWN)}s 内跳过")
+            continue
+        try:
+            df = fn(cfg, need)
+            df = df.tail(need)
+            df.attrs["source"] = name
+            df.attrs["has_funding"] = bool(df["funding_rate"].abs().sum() > 0)
+            return df
+        except Exception as exc:  # noqa: BLE001 - 换源继续试
+            _mark_dead(host)
+            errors.append(f"{name}: {type(exc).__name__} {str(exc)[:80]}")
+    raise DataError(
+        "所有真实行情源都不可达：\n  " + "\n  ".join(errors) + "\n"
+        "国内网络通常无法直连 fapi.binance.com，可设置 HTTPS_PROXY；"
+        "或把 config 里 market.source 改成 synthetic（明确标注为假数据）。"
+    )
+
+
+# --------------------------------------------------------------------------
+# 统一入口
+# --------------------------------------------------------------------------
+OKX = "https://www.okx.com"
+BYBIT = "https://api.bybit.com"
+
+
+def _live_fapi(symbol: str, timeout: int) -> tuple[float, str]:
+    # U 本位永续最新成交价 —— 合约交易的价格基准，和持仓标记价最接近
+    data = _get(f"{FAPI}/fapi/v1/ticker/price", {"symbol": symbol}, timeout=timeout)
+    return float(data["price"]), "binance-fapi"
+
+
+def _live_demo_fapi(symbol: str, timeout: int) -> tuple[float, str]:
+    # 币安合约模拟盘最新价（同样是永续价格，主网不通时兜底）
+    data = _get(f"{DEMO}/fapi/v1/ticker/price", {"symbol": symbol}, timeout=timeout)
+    return float(data["price"]), "binance-fapi-demo"
+
+
+def _live_vision(symbol: str, timeout: int) -> tuple[float, str]:
+    # 现货价：只作兜底，和永续有 funding 基差（BTC 通常差几十美元）
+    data = _get(f"{VISION}/api/v3/ticker/price", {"symbol": symbol}, timeout=timeout)
+    return float(data["price"]), "binance-spot"
+
+
+def _live_gate(symbol: str, timeout: int) -> tuple[float, str]:
+    contract = symbol.replace("USDT", "_USDT")
+    data = _get(f"{GATE}/api/v4/futures/usdt/tickers", {"contract": contract}, timeout=timeout)
+    return float(data[0]["last"]), "gate-futures"
+
+
+def _live_okx(symbol: str, timeout: int) -> tuple[float, str]:
+    inst = symbol.replace("USDT", "-USDT")
+    data = _get(f"{OKX}/api/v5/market/ticker", {"instId": inst}, timeout=timeout)
+    return float(data["data"][0]["last"]), "okx"
+
+
+def _live_bybit(symbol: str, timeout: int) -> tuple[float, str]:
+    data = _get(f"{BYBIT}/v5/market/tickers", {"category": "linear", "symbol": symbol}, timeout=timeout)
+    return float(data["result"]["list"][0]["lastPrice"]), "bybit"
+
+
+LIVE_SOURCES = (
+    # 只做合约：永续优先，全部为合约价格基准，不再回退现货
+    ("binance-fapi", _live_fapi, FAPI),
+    ("binance-fapi-demo", _live_demo_fapi, DEMO),
+    ("gate-futures", _live_gate, GATE),
+    ("okx", _live_okx, OKX),
+    ("bybit", _live_bybit, BYBIT),
+)
+
+
+# 实时 K 线：页面切换 5m/15m/1h 时直接问交易所，不走本地 CSV（本地只有一种周期）
+_KL_CACHE: dict[tuple[str, str, int], tuple[float, pd.DataFrame, str]] = {}
+KL_TTL = 15.0
+
+KL_INTERVALS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+
+
+def fetch_klines(
+    symbol: str, interval: str = "5m", limit: int = 240, ttl: float = KL_TTL
+) -> tuple[pd.DataFrame, str]:
+    """拉最近 N 根实时 K 线（含当前未收盘的那根）。返回 (df, 来源)。
+
+    缓存在进程内，TTL 默认 15 秒 —— 页面每 3 秒轮询一次，但不该每次都打交易所。
+    """
+    interval = (interval or "5m").strip()
+    if interval not in KL_INTERVALS:
+        raise DataError(f"不支持的周期 {interval}，可选 {', '.join(KL_INTERVALS)}")
+    limit = max(20, min(int(limit), 1000))
+    key = (symbol, interval, limit)
+    now = time.time()
+    hit = _KL_CACHE.get(key)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1], hit[2]
+
+    errors: list[str] = []
+    # 1) U 本位永续（合约交易的价格基准，优先）
+    if not _dead(FAPI):
+        try:
+            rows = _get(
+                f"{FAPI}/fapi/v1/klines",
+                {"symbol": symbol, "interval": interval, "limit": limit},
+                timeout=6,
+            )
+            if rows:
+                df = _klines_frame(rows)
+                _KL_CACHE[key] = (now, df, "binance-fapi")
+                return df, "binance-fapi"
+            errors.append("fapi: 空数据")
+        except Exception as exc:  # noqa: BLE001
+            _mark_dead(FAPI)
+            errors.append(f"fapi: {type(exc).__name__} {str(exc)[:60]}")
+
+    # 2) 币安合约模拟盘（同样是永续价格，主网不通时兜底，不回退现货）
+    try:
+        rows = _get(
+            f"{DEMO}/fapi/v1/klines",
+            {"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=6,
+        )
+        if rows:
+            df = _klines_frame(rows)
+            _KL_CACHE[key] = (now, df, "binance-fapi-demo")
+            return df, "binance-fapi-demo"
+        errors.append("demo-fapi: 空数据")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"demo-fapi: {type(exc).__name__} {str(exc)[:60]}")
+
+    # 3) Gate 永续
+    try:
+        contract = symbol.replace("USDT", "_USDT")
+        rows = _get(
+            f"{GATE}/api/v4/futures/usdt/candlesticks",
+            {"contract": contract, "interval": interval, "limit": limit},
+            timeout=6,
+        )
+        if rows:
+            df = pd.DataFrame(rows)
+            df.index = pd.to_datetime(df["t"].astype(float), unit="s", utc=True)
+            df.index.name = "ts"
+            df = df[["o", "h", "l", "c", "v"]].astype(float)
+            df.columns = ["open", "high", "low", "close", "volume"]
+            df = df.sort_index()
+            _KL_CACHE[key] = (now, df, "gate-futures")
+            return df, "gate-futures"
+        errors.append("gate: 空数据")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"gate: {type(exc).__name__} {str(exc)[:60]}")
+
+    raise DataError("实时 K 线获取失败：\n  " + "\n  ".join(errors))
+
+
+def fetch_live_price(symbol: str, timeout: int = 6) -> tuple[float, str]:
+    """最新成交价（秒级）。依次试 4 个交易所，返回 (price, source)，全失败才抛错。
+
+    币安镜像在部分地区会返回 451（法律限制），所以必须有备胎。
+    """
+    errors: list[str] = []
+    now = time.time()
+    for name, fn, host in LIVE_SOURCES:
+        if float(_DEAD_LIVE.get(host, 0.0)) > now:
+            errors.append(f"{name}: 30s 内失败过，跳过")
+            continue
+        try:
+            price, _src = fn(symbol, timeout)
+            if price and price > 0:
+                return float(price), name
+            errors.append(f"{name}: 返回非正数")
+        except Exception as exc:  # noqa: BLE001
+            _DEAD_LIVE[host] = time.time() + LIVE_COOLDOWN
+            errors.append(f"{name}: {type(exc).__name__} {str(exc)[:80]}")
+    raise DataError("实时报价获取失败：\n  " + "\n  ".join(errors))
+
+
+# 24h 涨跌幅：顶栏显示用，权重 40（fapi ticker/24hr），60 秒缓存
+_24H_CACHE: dict[str, tuple[float, tuple[float, float]]] = {}
+_24H_TTL = 60.0
+
+
+def fetch_24h(symbol: str, timeout: int = 6) -> tuple[float, float]:
+    """返回 (最新价, 24h 涨跌幅%)，多源回退，60 秒进程内缓存。"""
+    key = symbol
+    now = time.time()
+    hit = _24H_CACHE.get(key)
+    if hit and (now - hit[0]) < _24H_TTL:
+        return hit[1]
+
+    errors: list[str] = []
+    # 1) 币安永续 24hr
+    try:
+        data = _get(f"{FAPI}/fapi/v1/ticker/24hr", {"symbol": symbol}, timeout=timeout)
+        out = (float(data["lastPrice"]), float(data["priceChangePercent"]))
+        _24H_CACHE[key] = (now, out)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"fapi: {type(exc).__name__} {str(exc)[:60]}")
+
+    # 2) 币安现货 24hr
+    try:
+        data = _get(f"{VISION}/api/v3/ticker/24hr", {"symbol": symbol}, timeout=timeout)
+        out = (float(data["lastPrice"]), float(data["priceChangePercent"]))
+        _24H_CACHE[key] = (now, out)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"spot: {type(exc).__name__} {str(exc)[:60]}")
+
+    # 3) Gate 永续
+    try:
+        contract = symbol.replace("USDT", "_USDT")
+        data = _get(f"{GATE}/api/v4/futures/usdt/tickers", {"contract": contract}, timeout=timeout)
+        item = data[0]
+        out = (float(item["last"]), float(item.get("change_percentage", 0.0)))
+        _24H_CACHE[key] = (now, out)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"gate: {type(exc).__name__} {str(exc)[:60]}")
+
+    raise DataError("24h 行情获取失败：\n  " + "\n  ".join(errors))
+
+
+def load_market(
+    cfg: MarketConfig,
+    force_download: bool = False,
+    strict: bool = False,
+    max_age_bars: int = 2,
+) -> tuple[pd.DataFrame, str]:
+    """返回 (行情, 来源说明)。
+
+    - 真实缓存与合成缓存**分开存放**，合成数据永远不会冒充真实行情。
+    - 真实缓存过期（最后一根 K 线落后超过 max_age_bars 根）会尝试重新下载。
+    - cfg.source == "synthetic" 时直接用合成数据，来源字符串明确带 `synthetic`。
+    - strict=True（下载命令）时，下载失败直接抛错，不回退。
+    """
+    cache_dir = Path(cfg.cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{cfg.symbol}_{cfg.interval}_{cfg.bars}"
+    real_cache = cache_dir / f"{stem}.real.csv"
+    synth_cache = cache_dir / f"{stem}_s{cfg.seed}.synthetic.csv"
+
+    def _read(path: Path) -> pd.DataFrame:
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
+        df.index = pd.to_datetime(df.index, utc=True)
+        return df
+
+    def _stale(df: pd.DataFrame) -> bool:
+        if df.empty:
+            return True
+        now = pd.Timestamp.now(tz="UTC")
+        hours = INTERVAL_HOURS.get(cfg.interval, 1.0)
+        return (now - df.index[-1]).total_seconds() > max_age_bars * hours * 3600
+
+    if cfg.source == "binance":
+        if real_cache.exists() and not force_download:
+            df = _read(real_cache)
+            if not _stale(df):
+                return df, f"cache:{cfg.symbol} {cfg.interval} 末根 {df.index[-1]:%Y-%m-%d %H:%M}Z"
+        try:
+            df = fetch_binance(cfg)
+            df.to_csv(real_cache)
+            src = df.attrs.get("source", "binance")
+            note = "" if df.attrs.get("has_funding") else "（无资金费率，按 0 计）"
+            return df, f"{src}:{cfg.symbol} {cfg.interval}{note}"
+        except DataError as exc:
+            if strict:
+                raise
+            if real_cache.exists():
+                df = _read(real_cache)
+                print(f"[data] 刷新失败，沿用旧缓存（末根 {df.index[-1]}）：{exc}")
+                return df, f"stale-cache:{cfg.symbol} 末根 {df.index[-1]:%Y-%m-%d %H:%M}Z"
+            raise
+
+    # 合成行情：写独立文件，永不覆盖真实缓存
+    df = synthetic_ohlcv(cfg.bars, cfg.seed, interval=cfg.interval)
+    df.to_csv(synth_cache)
+    return df, f"synthetic(假数据,seed={cfg.seed})"
+
+
+def split_market(
+    df: pd.DataFrame, train_frac: float = 0.55, valid_frac: float = 0.20
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """按时间切分 train / valid / test，绝不随机打乱（防止未来信息泄漏）。"""
+    n = len(df)
+    a = int(n * train_frac)
+    b = int(n * (train_frac + valid_frac))
+    return df.iloc[:a], df.iloc[a:b], df.iloc[b:]

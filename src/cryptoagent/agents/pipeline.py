@@ -1,0 +1,289 @@
+"""多智能体决策流水线。
+
+    ┌──────────────┐
+    │ 市场快照(代码) │  所有数字由 pandas 计算，LLM 不参与
+    └──────┬───────┘
+           ▼
+    ┌──────────────────────────┐
+    │ 分析师团队：技术/资金费率/情绪 │
+    └──────┬───────────────────┘
+           ▼
+    ┌──────────────────────────┐
+    │ 研究员：多空辩论 N 轮        │
+    └──────┬───────────────────┘
+           ▼
+    ┌──────────────────────────┐
+    │ 交易员：输出结构化提案(JSON)  │
+    └──────┬───────────────────┘
+           ▼
+    ┌──────────────────────────┐
+    │ 风控官(LLM)：只能收紧        │
+    └──────┬───────────────────┘
+           ▼
+    ┌──────────────────────────┐
+    │ 风控引擎(代码)：最终否决权    │
+    └──────┬───────────────────┘
+           ▼
+        订单计划（默认只落盘，不发送）
+"""
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+import pandas as pd
+
+from ..config import AppConfig
+from ..risk import AccountState, RiskDecision, RiskEngine
+from ..factors.signal import compute_factor_signal
+from ..factors.shortterm import compute_breakout_signal
+from .llm import LLMClient
+from .roles import (
+    AnalystReport,
+    Debate,
+    MarketSnapshot,
+    propose_trade,
+    risk_review,
+    run_analysts,
+    run_debate,
+)
+
+
+def _apply_factor_signal(proposal: dict, composite: float) -> None:
+    """把因子复合信号作用到交易员提案上。
+
+    - 因子与方向一致 → 按对齐度放大仓位（最多 1.4 倍）
+    - 因子与方向相反 → 缩小仓位；因子强烈反对（|composite|>0.6）→ 直接观望
+    不碰止损/止盈/杠杆，那些仍归交易员和风控管。
+    """
+    act = proposal.get("action", "flat")
+    if act not in ("long", "short") or not composite:
+        return
+    dirn = 1.0 if act == "long" else -1.0
+    align = dirn * composite
+    size = float(proposal.get("size_pct", 0.0) or 0.0)
+    if align >= 0:
+        proposal["size_pct"] = round(size * (1.0 + 0.4 * min(1.0, align)), 4)
+    elif abs(composite) > 0.6:
+        proposal["action"] = "flat"
+        proposal["size_pct"] = 0.0
+    else:
+        proposal["size_pct"] = round(size * (1.0 - abs(composite)), 4)
+
+
+@dataclass
+class Decision:
+    ts: str
+    symbol: str
+    snapshot: dict
+    analysts: list[dict]
+    debate: dict
+    proposal: dict
+    risk_officer: dict
+    risk_decision: dict
+    order: dict | None
+    degraded: bool = False
+
+
+def _build_order(proposal: dict, decision: RiskDecision, price: float, equity: float) -> dict | None:
+    if not decision.approved or decision.action == "flat" or decision.size_pct <= 0:
+        return None
+    notional = decision.size_pct * equity * decision.leverage
+    qty = notional / price
+    stop = float(proposal.get("stop_loss_pct", 0.02))
+    tp = float(proposal.get("take_profit_pct", 0.04))
+    sign = 1.0 if decision.action == "long" else -1.0
+    return {
+        "symbol": proposal.get("symbol", ""),
+        "side": "BUY" if decision.action == "long" else "SELL",
+        "position_side": decision.action.upper(),
+        "type": "MARKET",
+        "quantity": round(qty, 6),
+        "notional_usd": round(notional, 2),
+        "leverage": decision.leverage,
+        "entry_ref_price": price,
+        "stop_loss_price": round(price * (1 - sign * stop), 2),
+        "take_profit_price": round(price * (1 + sign * tp), 2),
+        "risk_usd": round(notional * stop, 2),
+        "max_loss_pct_of_equity": round(decision.size_pct * decision.leverage * stop, 4),
+        "status": "PLANNED",  # 默认不发送
+    }
+
+
+class TradingPipeline:
+    def __init__(self, cfg: AppConfig, llm: LLMClient | None = None) -> None:
+        self.cfg = cfg
+        self.llm = llm or LLMClient(cfg.llm)
+        self.risk = RiskEngine(cfg.risk)
+
+    def _short_breakout_signal(self, symbol: str) -> float:
+        """中频波动突破信号：实时拉短周期 K 线，算唐奇安突破，失败返回 0（不干扰）。"""
+        if self.cfg.market.source == "synthetic":
+            return 0.0   # 合成/离线数据不做中频叠加，避免无谓联网
+        interval = getattr(self.cfg.market, "short_interval", "5m") or "5m"
+        bars = int(getattr(self.cfg.market, "short_bars", 200) or 200)
+        try:
+            from ..data import fetch_klines
+
+            df_short, _ = fetch_klines(symbol, interval, max(20, min(bars, 500)))
+            return compute_breakout_signal(df_short)
+        except Exception:  # noqa: BLE001 - 短周期拉不到/算不出时静默降级，不阻断决策
+            return 0.0
+
+    def run(
+        self,
+        df: pd.DataFrame,
+        state: AccountState | None = None,
+        debate_rounds: int = 2,
+        persist: bool = True,
+        exchange_max_leverage: float | None = None,
+    ) -> Decision:
+        state = state or AccountState(equity=self.cfg.backtest.initial_equity,
+                                      peak_equity=self.cfg.backtest.initial_equity,
+                                      day_start_equity=self.cfg.backtest.initial_equity)
+        snap = MarketSnapshot.from_df(df, self.cfg.market.symbol, self.cfg.market.interval)
+        reports: list[AnalystReport] = run_analysts(self.llm, snap)
+        debate: Debate = run_debate(self.llm, snap, reports, rounds=debate_rounds)
+        proposal, deg_trader = propose_trade(self.llm, snap, reports, debate)
+        proposal["symbol"] = snap.symbol
+
+        # 因子信号注入：研究产出的因子参与决策（方向一致放大，相反缩小/观望）
+        fsig = compute_factor_signal(self.cfg.research.factor_library, df)
+        # 中频叠加：实时拉短周期 K 线算波动突破信号，有突破时并入复合信号
+        short_sig = self._short_breakout_signal(snap.symbol)
+        if short_sig != 0.0:
+            fsig["signals"].append(
+                {
+                    "name": f"breakout_{self.cfg.market.short_interval}",
+                    "target": short_sig,
+                    "weight": 1.0,
+                    "holdout_sharpe": 1.0,
+                    "short_term": True,
+                }
+            )
+            fsig["composite"] = round((fsig["composite"] + short_sig) / 2.0, 4)
+        proposal["factor_composite"] = fsig["composite"]
+        proposal["factor_signals"] = fsig["signals"]
+        _apply_factor_signal(proposal, fsig["composite"])
+
+        officer, deg_risk = risk_review(self.llm, snap, proposal, state, self.cfg.risk)
+
+        adjusted = dict(proposal)
+        if officer["verdict"] == "reject":
+            adjusted["action"] = "flat"
+            adjusted["size_pct"] = 0.0
+        else:
+            adjusted["size_pct"] = float(adjusted.get("size_pct", 0.0)) * officer["size_multiplier"]
+
+        decision = self.risk.check(
+            adjusted,
+            state,
+            atr_pct=snap.atr_pct,
+            vol_percentile=snap.vol_percentile,
+            exchange_max_leverage=exchange_max_leverage,
+        )
+        order = _build_order(adjusted, decision, snap.price, state.equity)
+        if order is not None:
+            order["symbol"] = snap.symbol
+
+        result = Decision(
+            ts=time.strftime("%Y-%m-%d %H:%M:%S"),
+            symbol=snap.symbol,
+            snapshot=snap.to_dict(),
+            analysts=[asdict(r) for r in reports],
+            debate={
+                "thesis": debate.thesis,
+                "score": round(debate.score, 4),
+                "bull_case": debate.bull_case,
+                "bear_case": debate.bear_case,
+                "rounds": debate.rounds,
+            },
+            proposal=proposal,
+            risk_officer=officer,
+            risk_decision=decision.to_dict(),
+            order=order,
+            degraded=deg_trader or deg_risk or any("LLM 降级" in " ".join(r.data_flags) for r in reports),
+        )
+        if persist:
+            self._persist(result)
+        return result
+
+    def _persist(self, d: Decision) -> None:
+        out = Path(self.cfg.runs_dir) / "decisions"
+        out.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        (out / f"{stamp}_{d.symbol}.json").write_text(
+            json.dumps(asdict(d), indent=2, ensure_ascii=False, default=str), encoding="utf-8"
+        )
+        (out / "latest.md").write_text(render_markdown(d), encoding="utf-8")
+
+
+def run_decision(cfg: AppConfig, df: pd.DataFrame, **kwargs) -> Decision:
+    return TradingPipeline(cfg).run(df, **kwargs)
+
+
+def render_markdown(d: Decision) -> str:
+    s = d.snapshot
+    lines = [
+        f"# 决策报告 — {d.symbol}",
+        "",
+        f"生成时间：{d.ts} ｜ 最新价：{s['price']:,.1f} ｜ 波动率分位：{s['vol_percentile']:.0%}"
+        + (" ｜ ⚠ LLM 降级" if d.degraded else ""),
+        "",
+        "## 1. 分析师团队",
+        "",
+        "| 角色 | 立场 | 观点 |",
+        "|---|---|---|",
+    ]
+    for a in d.analysts:
+        stance = 0.0 if abs(a["stance"]) < 0.005 else a["stance"]
+        lines.append(f"| {a['role']} | {stance:+.2f} | {a['summary']} |")
+
+    lines += [
+        "",
+        "## 2. 研究辩论",
+        "",
+        f"**多头**：{d.debate['bull_case']}",
+        "",
+        f"**空头**：{d.debate['bear_case']}",
+        "",
+        f"**结论**：{d.debate['thesis']}",
+        "",
+        "## 3. 交易员提案",
+        "",
+        f"- 方向：**{d.proposal['action']}**",
+        f"- 仓位：{d.proposal['size_pct']:.1%}（杠杆 {d.proposal['leverage']:.1f}x）",
+        f"- 止损 / 止盈：{d.proposal['stop_loss_pct']:.2%} / {d.proposal['take_profit_pct']:.2%}",
+        f"- 置信度：{d.proposal['confidence']:.2f}",
+        f"- 理由：{d.proposal['rationale']}",
+        "",
+        "## 4. 风控",
+        "",
+        f"风控官结论：**{d.risk_officer['verdict']}**（仓位乘数 {d.risk_officer['size_multiplier']:.2f}）",
+        "",
+    ]
+    lines += [f"- {r}" for r in d.risk_officer["reasons"]]
+    lines += [
+        "",
+        f"风控引擎：**{'通过' if d.risk_decision['approved'] else '拒绝'}**，"
+        f"最终方向 {d.risk_decision['action']}，仓位 {d.risk_decision['size_pct']:.2%}，"
+        f"杠杆 {d.risk_decision['leverage']:.1f}x",
+        "",
+    ]
+    lines += [f"- {r}" for r in d.risk_decision["reasons"]]
+
+    lines += ["", "## 5. 订单计划", ""]
+    if d.order:
+        o = d.order
+        lines += [
+            f"- {o['side']} {o['quantity']} {o['symbol']}（名义 {o['notional_usd']:,.0f} USDT，{o['leverage']:.1f}x）",
+            f"- 止损 {o['stop_loss_price']:,.1f} ｜ 止盈 {o['take_profit_price']:,.1f}",
+            f"- 单笔最大亏损 {o['risk_usd']:,.0f} USDT（权益的 {o['max_loss_pct_of_equity']:.2%}）",
+            f"- 状态：{o['status']}（默认不发送到交易所）",
+        ]
+    else:
+        lines.append("- 无订单：风控未通过或策略选择观望。")
+    lines += ["", "> 本报告由本地程序生成，不构成投资建议。"]
+    return "\n".join(lines)

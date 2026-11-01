@@ -1,0 +1,41 @@
+[Unit]
+Description=crypto-agent 永续合约研究/交易控制台
+Documentation=file:/opt/crypto-agent/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryptotrader
+Group=cryptotrader
+WorkingDirectory=/opt/crypto-agent
+EnvironmentFile=/etc/crypto-agent.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+# 只监听本机，外部通过 SSH 隧道或 nginx 反代进来
+ExecStart=/opt/crypto-agent/.venv/bin/python -m cryptoagent web --host 127.0.0.1 --port 8000 --no-browser
+Restart=always
+RestartSec=5
+# 崩溃重启，但不要疯狂重启
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# --- 加固 ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/crypto-agent/runs /opt/crypto-agent/data /opt/crypto-agent/factors_library /opt/crypto-agent/.env
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# 实盘 Key 只在这个文件里，权限 600
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cryptoagent
+
+[Install]
+WantedBy=multi-user.target
