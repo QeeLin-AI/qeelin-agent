@@ -523,6 +523,12 @@ function renderStatus(s) {
   // 交易页状态
   $('armState').textContent = modeLabel;
   $('armState').className = `badge ${s.mode === 'live' ? (s.testnet ? 'paper' : 'live') : 'paper'}`;
+  // 标题右侧直接写清「现在连的是谁」，省得点开面板才知道
+  if ($('exNow')) {
+    $('exNow').textContent = s.mode === 'live'
+      ? `${exName} · ${s.testnet ? '模拟盘' : '主网实盘'}${s.armed ? '' : '（未连接）'}`
+      : '';
+  }
   // 三个模式按钮的高亮跟着真实状态走
   const connected = s.mode === 'live' && s.armed;
   // 交易模式按钮高亮：展开某个模式面板时该按钮立刻变绿（选哪个绿哪个）；
@@ -540,6 +546,9 @@ function renderStatus(s) {
   // 已连上就在按钮上打个勾，不用再靠面板里的文字判断
   $('testnetBtn').classList.toggle('ok', connected && s.testnet);
   $('liveBtn').classList.toggle('ok', connected && !s.testnet);
+  // 面板开着的时候，状态行和切换按钮要跟着实时刷新
+  if (!$('testnetBox').classList.contains('hidden')) renderExchangePanel('testnet');
+  if (!$('liveBox').classList.contains('hidden')) renderExchangePanel('live');
   $('keysPresent').textContent = s.live_keys ? '已配置' : '未配置';
   renderRisk(s.risk);
   renderResearchAuto(s.research_auto);
@@ -759,11 +768,29 @@ $('runResearch').addEventListener('click', async () => {
 });
 
 /* ---------------- 交易 ---------------- */
+function exCn(ex) { return ex === 'okx' ? 'OKX' : '币安'; }
+// 自动交易跑着的时候禁止换交易所 / 断开，否则循环会拿着半截状态下单
+function autoRunning() {
+  return !!(lastStatus && lastStatus.auto && lastStatus.auto.running);
+}
+function blockIfAutoRunning(what) {
+  if (!autoRunning()) return false;
+  toast(`自动交易正在运行，先点「停止」再${what}`, 'err');
+  return true;
+}
 // 当前选中的交易所（币安 / OKX）：按面板 scope 读取分段控件
 function currentExchange(scope) {
   const box = scope === 'live' ? $('liveBox') : $('testnetBox');
   const sel = box.querySelector('.ex-choice .seg.sel');
   return sel ? sel.dataset.ex : 'binance';
+}
+// 把某个面板的分段控件指到指定交易所
+function selectExchange(scope, ex) {
+  const box = scope === 'live' ? $('liveBox') : $('testnetBox');
+  box.querySelectorAll('.ex-choice .seg').forEach((b) => {
+    b.classList.toggle('sel', b.dataset.ex === ex);
+  });
+  syncPassRow(scope);
 }
 // 切到 OKX 时显示 Passphrase 行，切到币安时隐藏
 function syncPassRow(scope) {
@@ -771,7 +798,42 @@ function syncPassRow(scope) {
   const row = scope === 'live' ? $('livePassRow') : $('tnPassRow');
   if (row) row.classList.toggle('show', ex === 'okx');
 }
-// 交易所分段控件：单选高亮 + 同步 Passphrase 行
+// 某交易所在该环境下有没有 Key（模拟盘缺 Key 时后端会借用主网 Key，这里如实显示）
+function hasKeys(ex, mode) {
+  const k = lastStatus && lastStatus.keys && lastStatus.keys[ex];
+  return !!(k && k[mode]);
+}
+// 这个交易所此刻是否就是正连着的那个
+function isConnectedExchange(ex, scope) {
+  if (!lastStatus || lastStatus.mode !== 'live' || !lastStatus.armed) return false;
+  const wantDemo = scope !== 'live';
+  return lastStatus.exchange === ex && !!lastStatus.testnet === wantDemo;
+}
+// 面板顶部那行「币安：已配 Key ｜ OKX：未配 Key」，顺便同步切换按钮
+function renderExchangePanel(scope) {
+  const mode = scope === 'live' ? 'live' : 'demo';
+  const el = $(scope === 'live' ? 'liveExStatus' : 'tnExStatus');
+  if (!el) return;
+  el.innerHTML = ['binance', 'okx'].map((ex) => {
+    const own = hasKeys(ex, mode);
+    const fallback = mode === 'demo' && hasKeys(ex, 'live');
+    const cur = isConnectedExchange(ex, scope);
+    let label = '未配 Key';
+    if (own) label = '已配 Key';
+    else if (fallback) label = '借用主网 Key';
+    const cls = cur ? 'cur' : (own || fallback ? 'has' : 'none');
+    return `<span class="${cls}">${exCn(ex)}：${label}${cur ? ' · 当前连接' : ''}</span>`;
+  }).join('<span class="sep">｜</span>');
+
+  const btn = $(scope === 'live' ? 'liveSwitchBtn' : 'tnSwitchBtn');
+  if (!btn) return;
+  const ex = currentExchange(scope);
+  const ready = hasKeys(ex, mode) || (mode === 'demo' && hasKeys(ex, 'live'));
+  if (isConnectedExchange(ex, scope)) { btn.textContent = `已连${exCn(ex)}`; btn.disabled = true; }
+  else if (ready) { btn.textContent = `切换到${exCn(ex)}`; btn.disabled = false; }
+  else { btn.textContent = `先填${exCn(ex)}的 Key`; btn.disabled = true; }
+}
+// 交易所分段控件：单选高亮 + 同步 Passphrase 行 + 刷新状态行
 document.querySelectorAll('.ex-choice').forEach((choice) => {
   const scope = choice.dataset.scope;
   choice.querySelectorAll('.seg').forEach((btn) => {
@@ -779,6 +841,7 @@ document.querySelectorAll('.ex-choice').forEach((choice) => {
       choice.querySelectorAll('.seg').forEach((b) => b.classList.remove('sel'));
       btn.classList.add('sel');
       syncPassRow(scope);
+      renderExchangePanel(scope);
     });
   });
   syncPassRow(scope);
@@ -809,29 +872,78 @@ function closeModePanels() {
   ['testnetBtn', 'liveBtn'].forEach((b) => $(b).classList.remove('open'));
 }
 
-// 「模拟盘」：所选交易所配过 Key 就直接切过去；没配才展开表单
+// 「模拟盘」：已连着 → 再点一次展开设置（换交易所/断开）；没连 → 有 Key 就直接连，没 Key 才开表单
 $('testnetBtn').addEventListener('click', async () => {
+  const already = lastStatus && lastStatus.mode === 'live' && lastStatus.testnet && lastStatus.armed;
+  if (already) {
+    openPanel('testnetBox', 'testnetBtn');
+    selectExchange('testnet', lastStatus.exchange || 'binance');
+    renderExchangePanel('testnet');
+    return;
+  }
   const ex = currentExchange('testnet');
-  const hasKey = lastStatus && lastStatus['keys_' + ex];
+  const hasKey = hasKeys(ex, 'demo') || hasKeys(ex, 'live');
   if (hasKey) {
+    if (blockIfAutoRunning('连接交易所')) return;
     const btn = $('testnetBtn');
     btn.disabled = true;
     try {
       const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
-      toast(`已连上${ex === 'okx' ? 'OKX' : '币安'}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
+      toast(`已连上${exCn(ex)}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
       closeModePanels();
       poll();
     } catch (e) {
       toast(`切换失败：${e.message}`, 'err');
       openPanel('testnetBox', 'testnetBtn');
+      renderExchangePanel('testnet');
       poll();
     } finally { btn.disabled = false; }
   } else {
     openPanel('testnetBox', 'testnetBtn');
+    renderExchangePanel('testnet');
   }
 });
 
-$('liveBtn').addEventListener('click', () => openPanel('liveBox', 'liveBtn'));
+$('liveBtn').addEventListener('click', () => {
+  openPanel('liveBox', 'liveBtn');
+  if (lastStatus && lastStatus.mode === 'live' && !lastStatus.testnet) {
+    selectExchange('live', lastStatus.exchange || 'binance');
+  }
+  renderExchangePanel('live');
+});
+
+// 面板里的「切换/连接」：直接用已存好的 Key 换交易所，不用重新输
+$('tnSwitchBtn').addEventListener('click', async () => {
+  if (blockIfAutoRunning('切换交易所')) return;
+  const btn = $('tnSwitchBtn');
+  const ex = currentExchange('testnet');
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = '连接中…';
+  try {
+    const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
+    toast(`已切到${exCn(ex)}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
+    closeModePanels();
+    poll();
+  } catch (e) {
+    toast(`切换失败：${e.message}`, 'err');
+    btn.disabled = false; btn.textContent = prev;
+  }
+});
+
+// 断开：回到本地模拟（两个面板各一个按钮）
+['tnDisarmBtn', 'liveDisarmBtn'].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('click', async () => {
+    if (blockIfAutoRunning('断开连接')) return;
+    try {
+      await api('/api/trading/disarm', 'POST', {});
+      closeModePanels();
+      toast('已断开交易所，回到本地模拟', 'ok');
+      poll();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+});
 
 // 保存模拟盘 Key → 写 .env → 立刻自检
 $('tnSaveBtn').addEventListener('click', async () => {
@@ -884,6 +996,7 @@ async function runSelftest(el) {
 }
 
 $('armBtn').addEventListener('click', async () => {
+  if (blockIfAutoRunning('切换实盘')) return;
   const ex = currentExchange('live');
   const key = $('liveKey').value.trim();
   const secret = $('liveSecret').value.trim();

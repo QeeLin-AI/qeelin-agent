@@ -247,6 +247,13 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .seg.sel { border-color: var(--green); color: var(--green); background: rgba(22,199,132,.10); font-weight: 600; }
 #tnPassRow, #livePassRow { display: none; }
 #tnPassRow.show, #livePassRow.show { display: flex; }
+/* 每个交易所的 Key / 连接状态一览 */
+.ex-status { margin: 8px 0 10px; font-size: 12px; line-height: 1.8; color: var(--muted); }
+.ex-status .sep { color: var(--line); margin: 0 6px; }
+.ex-status .has { color: var(--green); }
+.ex-status .none { color: #b98a2e; }
+.ex-status .cur { color: var(--text); font-weight: 600; }
+.ex-status .cur::before { content: "● "; color: var(--green); }
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
 .kv > div { background: var(--panel-2); border-radius: 6px; padding: 8px 10px; display: flex; justify-content: space-between; font-size: 12px; }
 .kv span { color: var(--muted); }

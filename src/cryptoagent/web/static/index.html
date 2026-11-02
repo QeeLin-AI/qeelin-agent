@@ -162,7 +162,7 @@
   <section id="tab-trading" class="panel">
     <div class="grid-2">
       <div class="card">
-        <div class="card-head"><h2>交易模式</h2><span id="armState" class="badge paper">PAPER</span></div>
+        <div class="card-head"><h2>交易模式</h2><span id="exNow" class="muted"></span><span id="armState" class="badge paper">PAPER</span></div>
         <div class="mode-row">
           <button id="paperBtn" class="btn selected">本地模拟</button>
           <button id="testnetBtn" class="btn">模拟盘</button>
@@ -188,6 +188,11 @@
             申请路径：币安 Demo Key 在 <code>demo.binance.com</code> 申请；OKX 模拟盘 Key 在
             OKX → 交易 → 模拟交易 → 个人中心 → 创建模拟盘 API Key。两者都是<strong>独立 Key</strong>，和主网 Key 不通用，请分别保存。
           </p>
+          <p id="tnExStatus" class="ex-status"></p>
+          <div class="actions">
+            <button id="tnSwitchBtn" class="btn">连接到所选交易所</button>
+            <button id="tnDisarmBtn" class="btn ghost">断开（回到本地模拟）</button>
+          </div>
           <label class="field">API Key<input id="tnKey" type="text" placeholder="模拟盘的 API Key" autocomplete="off" /></label>
           <label class="field">API Secret<input id="tnSecret" type="password" placeholder="模拟盘的 Secret（只显示一次）" autocomplete="off" /></label>
           <label class="field" id="tnPassRow">Passphrase（OKX 专用）<input id="tnPass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
@@ -216,6 +221,10 @@
             申请路径：币安 / OKX 主网 Key 在各自官网「API 管理」申请。OKX 用<strong>主账户 Key</strong>（不是模拟盘 Key）。
             请只开合约交易权限、禁用提现、绑定 IP。
           </p>
+          <p id="liveExStatus" class="ex-status"></p>
+          <div class="actions">
+            <button id="liveDisarmBtn" class="btn ghost">断开（回到本地模拟）</button>
+          </div>
           <label class="field">API Key<input id="liveKey" type="text" placeholder="主网 API Key" autocomplete="off" /></label>
           <label class="field">API Secret<input id="liveSecret" type="password" placeholder="主网 Secret" autocomplete="off" /></label>
           <label class="field" id="livePassRow">Passphrase（OKX 专用）<input id="livePass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
