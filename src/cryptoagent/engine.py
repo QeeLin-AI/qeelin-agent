@@ -19,7 +19,7 @@ import pandas as pd
 from .agents.pipeline import Decision, TradingPipeline, render_markdown
 from .config import AppConfig
 from .data import load_market
-from .execution import BinanceFuturesClient, ExchangeError
+from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
 from .risk import AccountState
 
 
@@ -40,6 +40,7 @@ class TradingEngine:
 
         self.df: pd.DataFrame | None = None
         self.data_source = ""
+        self.data_loading = False      # 启动后 K 线在后台下载时为 True，前端据此显示「加载中」
         self.last_decision: Decision | None = None
         self.last_error = ""
         # 恢复上次选择的品种：set_symbol 只写 state 不写 config，重启要还原，
@@ -49,7 +50,8 @@ class TradingEngine:
         # 重启后仍然可以从 state 里恢复「上次决策的订单计划」，否则执行按钮会失灵
         self.pending_order: dict | None = (self.state.get("last_decision") or {}).get("order")
         self.armed = False                 # 不持久化
-        self.live_client: BinanceFuturesClient | None = None
+        self.live_client: BinanceFuturesClient | OKXClient | None = None
+        self.state.setdefault("exchange", "binance")
         self.live_price_provider = None    # 由 Web 层注入：返回最新成交价
 
         self._auto_thread: threading.Thread | None = None
@@ -102,6 +104,28 @@ class TradingEngine:
             self.df = df
             self.data_source = src
         return df, src
+
+    def start_data_load(self) -> None:
+        """后台线程加载 K 线，不阻塞 Web 服务启动（窗口秒开）。
+
+        refresh_data 在 fapi 被墙时会依次 fallback 到 vision 镜像 / gate 永续，
+        首次全量下载可能耗时 30~40 秒。把这一步挪到后台，HTTP 服务立即就绪，
+        前端展示「K 线加载中」，加载完成后自动刷新。
+        """
+        if self.data_loading or self.df is not None:
+            return
+        self.data_loading = True
+        self.last_error = ""
+
+        def _worker() -> None:
+            try:
+                self.refresh_data()
+            except Exception as exc:  # noqa: BLE001 - 后台失败只记错误，不崩进程
+                self.last_error = f"行情加载失败：{type(exc).__name__} {exc}"
+            finally:
+                self.data_loading = False
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def price(self) -> float:
         if self.df is None:
@@ -203,44 +227,64 @@ class TradingEngine:
     # ------------------------------------------------------------------
     # 实盘
     # ------------------------------------------------------------------
-    def connect(self, testnet: bool = True, env: str | None = None) -> BinanceFuturesClient:
-        key = os.getenv("BINANCE_API_KEY", "")
-        secret = os.getenv("BINANCE_API_SECRET", "")
-        if not key or not secret:
-            raise ExchangeError("未设置 BINANCE_API_KEY / BINANCE_API_SECRET")
-        self.live_client = BinanceFuturesClient(
-            key, secret, testnet=testnet, armed=self.armed, env=env
-        )
+    def connect(
+        self, testnet: bool = True, env: str | None = None, exchange: str | None = None
+    ) -> BinanceFuturesClient | OKXClient:
+        exchange = exchange or self.state.get("exchange", "binance")
+        key, secret, passphrase = read_api_keys(exchange, testnet)
+        if exchange == "okx":
+            if not key or not secret:
+                raise ExchangeError(
+                    "未设置 OKX_API_KEY / OKX_API_SECRET（模拟盘需填模拟盘 Key，不是主网 Key）"
+                )
+            self.live_client = OKXClient(
+                key, secret, passphrase, testnet=testnet, armed=self.armed, env=env
+            )
+        else:
+            if not key or not secret:
+                raise ExchangeError(
+                    "未设置 BINANCE_API_KEY / BINANCE_API_SECRET（模拟盘需填 Demo Key，不是主网 Key）"
+                )
+            self.live_client = BinanceFuturesClient(
+                key, secret, testnet=testnet, armed=self.armed, env=env
+            )
         return self.live_client
 
-    def arm(self, mode: str, confirm: str, testnet: bool = True) -> dict:
+    def arm(self, mode: str, confirm: str, testnet: bool = True, exchange: str | None = None) -> dict:
         """解锁交易所下单。
 
         三种模式：
         - paper   ：本地模拟撮合，不碰交易所
-        - testnet ：币安期货**测试网**（假钱），只校验密钥，不需要确认文本
+        - testnet ：交易所**模拟盘**（假钱），只校验密钥，不需要确认文本
         - live    ：主网真钱，需要确认文本 + 环境变量（主网还要 ack 文件）
+
+        exchange 决定接币安还是 OKX（对应不同的 Key / 域名 / 签名方式）。
         """
         if mode not in {"paper", "testnet", "demo", "live"}:
             raise ValueError("mode 只能是 paper / testnet / demo / live")
+        exchange = (exchange or self.state.get("exchange", "binance")).lower()
+        if exchange not in ("binance", "okx"):
+            raise ValueError("exchange 只能是 binance / okx")
         if mode == "paper":
             self.armed = False
             self.state["mode"] = "paper"
             self._save()
-            return {"mode": "paper", "armed": False}
+            return {"mode": "paper", "armed": False, "exchange": exchange}
         if mode in {"testnet", "demo"}:
-            client = self.connect(testnet=True, env=("demo" if mode == "demo" else "testnet"))
+            client = self.connect(testnet=True, env=("demo" if mode == "demo" else "testnet"), exchange=exchange)
             client.armed = True
             client.ping()
             acct = client.account()
             self.armed = True
             self.state["mode"] = "live"
             self.state["testnet"] = True
+            self.state["exchange"] = exchange
             self._save()
             return {
                 "mode": "testnet",
                 "armed": True,
                 "testnet": True,
+                "exchange": exchange,
                 "balance": acct.get("balance"),
                 "available": acct.get("available"),
             }
@@ -250,15 +294,16 @@ class TradingEngine:
             raise PermissionError(
                 "主网交易需要环境变量 CRYPTOAGENT_I_UNDERSTAND_THE_RISK=yes"
             )
-        client = self.connect(testnet=testnet)
+        client = self.connect(testnet=testnet, exchange=exchange)
         client.armed = True
         client.ping()
         client.account()  # 验证签名
         self.armed = True
         self.state["mode"] = "live"
         self.state["testnet"] = testnet
+        self.state["exchange"] = exchange
         self._save()
-        return {"mode": "live", "armed": True, "testnet": testnet}
+        return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
     def switch_symbol(self, symbol: str) -> dict:
         """切换活跃品种（有持仓时拒绝，避免仓位和行情对不上）。"""
@@ -541,6 +586,7 @@ class TradingEngine:
                         "qty": qty,
                         "price": price,
                         "order_id": order_id,
+                        "exchange": self.state.get("exchange", "binance"),
                         "testnet": self.state.get("testnet", True),
                     },
                     ensure_ascii=False,
@@ -585,6 +631,17 @@ class TradingEngine:
 
     def cycle(self) -> dict:
         with self._cycle_lock:
+            # 数据还没加载好（后台 K 线下载中）时拒绝决策，返回友好提示，
+            # 不触发同步 refresh_data 把请求阻塞几十秒。
+            if self.df is None:
+                return {
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "price": None,
+                    "stopped": False,
+                    "decision": None,
+                    "executed": None,
+                    "error": "行情数据加载中，请稍候再启动",
+                }
             # 自主选品种：无持仓时每 N 轮扫一次全品种，切到因子信号最强的（有持仓则跳过）
             rotated = False
             self._rotate_cycle_count += 1
@@ -631,10 +688,13 @@ class TradingEngine:
     def status(self, price_override: float | None = None) -> dict:
         with self.lock:
             price = None
-            try:
-                price = price_override if price_override else self.price()
-            except Exception:  # noqa: BLE001
-                pass
+            # 数据还没加载好（启动后 K 线在后台下载）时不调 self.price()，
+            # 否则会同步触发 refresh_data 把 status 请求阻塞几十秒，窗口打开即卡死。
+            if self.df is not None:
+                try:
+                    price = price_override if price_override else self.price()
+                except Exception:  # noqa: BLE001
+                    pass
             eq = self._equity(price) if price else self.state["equity"]
             pos = self.state.get("position")
             if pos and price:
@@ -678,10 +738,25 @@ class TradingEngine:
                 "auto": self.state.get("auto", {}),
                 "halt": bool(self.state.get("halt")),
                 "data_source": self.data_source,
+                "data_loading": bool(self.data_loading),
                 "llm": {"provider": self.cfg.llm.provider, "model": self.cfg.llm.model},
                 "history": hist,
                 "last_error": self.last_error,
-                "live_keys": bool(os.getenv("BINANCE_API_KEY")),
+                "exchange": self.state.get("exchange", "binance"),
+                "keys_binance": bool(os.getenv("BINANCE_API_KEY")),
+                "keys_okx": bool(os.getenv("OKX_API_KEY")),
+                "live_keys": bool(os.getenv("BINANCE_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
+                # 模拟盘 / 主网 是两套独立 Key，分开报告，便于 UI 区分
+                "keys": {
+                    "binance": {
+                        "demo": bool(os.getenv("BINANCE_DEMO_API_KEY")) or bool(os.getenv("BINANCE_API_KEY")),
+                        "live": bool(os.getenv("BINANCE_API_KEY")),
+                    },
+                    "okx": {
+                        "demo": bool(os.getenv("OKX_DEMO_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
+                        "live": bool(os.getenv("OKX_API_KEY")),
+                    },
+                },
             }
 
     def set_halt(self, halt: bool) -> dict:

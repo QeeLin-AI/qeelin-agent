@@ -55,6 +55,7 @@ function showTab(name, push = true) {
   $(`tab-${name}`).classList.add('active');
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name === 'overview') renderPnl();
+  if (name === 'settings') loadLlmSettings();
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -70,6 +71,48 @@ async function poll() {
   } catch (e) {
     console.error(e);
   }
+}
+
+/* ---------------- LLM 设置 ---------------- */
+async function loadLlmSettings() {
+  try {
+    const d = await api('/api/settings/llm');
+    $('llmProvider').value = d.provider || 'mock';
+    $('llmModel').value = d.model || '';
+    $('llmBaseUrl').value = d.base_url || '';
+    $('llmApiKey').value = '';
+    $('llmApiKey').placeholder = d.api_key_set
+      ? `已设置（尾号 ${d.api_key_tail}），留空保持原值`
+      : 'sk-...';
+    $('llmStatus').textContent = `当前 ${d.provider} · ${d.model}${d.api_key_set ? '（Key 已配置）' : '（未配 Key）'}`;
+  } catch (e) { console.error(e); }
+}
+
+async function saveLlmSettings() {
+  const payload = {
+    provider: $('llmProvider').value,
+    model: $('llmModel').value.trim(),
+    base_url: $('llmBaseUrl').value.trim(),
+  };
+  const key = $('llmApiKey').value.trim();
+  if (key) payload.api_key = key;
+  try {
+    await api('/api/settings/llm', 'POST', payload);
+    toast('LLM 设置已保存', 'ok');
+    $('llmApiKey').value = '';
+    loadLlmSettings();
+    poll();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function testLlmSettings() {
+  await saveLlmSettings();
+  toast('正在跑一次决策验证 LLM…', 'ok');
+  try {
+    const d = await api('/api/decision', 'POST', { rounds: 1 });
+    const degraded = d && d.degraded;
+    toast(degraded ? 'LLM 调用有降级（限流/失败），规则已兜底' : 'LLM 正常生效', degraded ? 'err' : 'ok');
+  } catch (e) { toast('测试失败：' + e.message, 'err'); }
 }
 
 /* ---------------- 多品种 ---------------- */
@@ -160,13 +203,15 @@ function renderRisk(r) {
   const ov = Number(r.leverage_override || 0);
   const sel = $('levSelect');
   if (sel && document.activeElement !== sel) sel.value = String(ov);
-  $('levNow').textContent = ov > 0
-    ? `${ov.toFixed(1)}x · 手动`
-    : `自动 · 上限以交易所为准`;
   const cap = (Number(r.max_loss_per_trade_pct) * 100).toFixed(1);
-  $('riskCap').textContent = `${cap}%`;
-  $('riskPerTrade').textContent = `${cap}% 权益`;
-  $('riskPosCap').textContent = `${(Number(r.max_position_pct) * 100).toFixed(0)}% 权益`;
+  const rt = $('riskTotal');
+  if (rt && document.activeElement !== rt) rt.value = cap;
+  const rpc = $('riskPosCapInput');
+  if (rpc && document.activeElement !== rpc) rpc.value = (Number(r.max_position_pct) * 100).toFixed(0);
+  const rd = $('riskDaily');
+  if (rd && document.activeElement !== rd) rd.value = (Number(r.daily_loss_limit_pct) * 100).toFixed(1);
+  const rdd = $('riskDrawdown');
+  if (rdd && document.activeElement !== rdd) rdd.value = (Number(r.max_drawdown_pct) * 100).toFixed(0);
 }
 
 $('levSelect').addEventListener('change', async () => {
@@ -181,6 +226,46 @@ $('levSelect').addEventListener('change', async () => {
     toast(`设置失败：${e.message}`, 'err');
     poll();
   }
+});
+
+$('riskTotal').addEventListener('change', async () => {
+  const v = Number($('riskTotal').value);
+  if (!v || v < 0.1 || v > 5) { toast('总持仓风险需在 0.1% ~ 5% 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { max_loss_per_trade_pct: v / 100 });
+    renderRisk(d.risk);
+    toast(`总持仓风险已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskPosCapInput').addEventListener('change', async () => {
+  const v = Number($('riskPosCapInput').value);
+  if (!v || v < 1 || v > 100) { toast('仓位持仓上限需在 1% ~ 100% 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { max_position_pct: v / 100 });
+    renderRisk(d.risk);
+    toast(`仓位持仓上限已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskDaily').addEventListener('change', async () => {
+  const v = Number($('riskDaily').value);
+  if (!v || v < 1 || v > 30) { toast('当日亏损上限需在 1% ~ 30% 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { daily_loss_limit_pct: v / 100 });
+    renderRisk(d.risk);
+    toast(`当日亏损上限已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskDrawdown').addEventListener('change', async () => {
+  const v = Number($('riskDrawdown').value);
+  if (!v || v < 5 || v > 50) { toast('最大回撤需在 5% ~ 50% 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { max_drawdown_pct: v / 100 });
+    renderRisk(d.risk);
+    toast(`最大回撤已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
 function renderAutoArm(a) {
@@ -206,10 +291,11 @@ function renderAutoArm(a) {
 
 $('autoArmChk').addEventListener('change', async () => {
   const on = $('autoArmChk').checked;
+  const ex = currentExchange('testnet');
   try {
-    const d = await api('/api/trading/auto-arm', 'POST', { on, env: 'demo' });
+    const d = await api('/api/trading/auto-arm', 'POST', { on, env: 'demo', exchange: ex });
     renderAutoArm(d.auto_arm);
-    toast(on ? '已开启：下次重启会自动解锁 demo' : '已关闭自动解锁', 'ok');
+    toast(on ? `已开启：下次重启会自动解锁 ${ex === 'okx' ? 'OKX' : '币安'} demo` : '已关闭自动解锁', 'ok');
     poll();
   } catch (e) {
     $('autoArmChk').checked = !on;
@@ -314,8 +400,18 @@ function renderDataWarn(s) {
 
 function renderStatus(s) {
   syncSymbolSelect(s.symbol);
-  $('price').textContent = fmt(s.price);
-  $('dataSource').textContent = `数据源 ${shortSource(s.data_source)}`;
+  const loading = !!s.data_loading;
+  $('loadingBar').classList.toggle('hidden', !loading);
+  // 行情尚未就绪：价格区用小号字体 + 动态转圈，避免沿用 22px 大价格字号显得突兀
+  const priceEl = $('price');
+  if (loading) {
+    priceEl.className = 'price is-loading';
+    priceEl.innerHTML = '<span class="spin sm"></span> 加载中';
+  } else {
+    priceEl.className = 'price';
+    priceEl.textContent = fmt(s.price);
+  }
+  $('dataSource').textContent = `数据源 ${loading ? '加载中…' : shortSource(s.data_source)}`;
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">V</span> ${esc(s.server.version)}`;
@@ -323,7 +419,10 @@ function renderStatus(s) {
   renderDataWarn(s);
 
   const badge = $('modeBadge');
-  const modeLabel = s.mode !== 'live' ? '本地模拟' : (s.testnet ? '交易所模拟' : '主网实盘');
+  const exName = (s.exchange === 'okx') ? 'OKX' : '币安';
+  const modeLabel = s.mode !== 'live'
+    ? '本地模拟'
+    : (s.testnet ? `模拟盘·${exName}` : `主网实盘·${exName}`);
   badge.textContent = modeLabel;
   badge.className = `badge ${s.mode === 'live' ? (s.testnet ? 'paper' : 'live') : 'paper'}`;
 
@@ -426,19 +525,27 @@ function renderStatus(s) {
   $('armState').className = `badge ${s.mode === 'live' ? (s.testnet ? 'paper' : 'live') : 'paper'}`;
   // 三个模式按钮的高亮跟着真实状态走
   const connected = s.mode === 'live' && s.armed;
-  $('paperBtn').classList.toggle('selected', s.mode !== 'live');
-  $('testnetBtn').classList.toggle('selected', s.mode === 'live' && s.testnet);
-  $('liveBtn').classList.toggle('selected', s.mode === 'live' && !s.testnet);
+  // 交易模式按钮高亮：展开某个模式面板时该按钮立刻变绿（选哪个绿哪个）；
+  // 没有面板展开时，绿色跟随真实模式
+  const panelOpen = !$('testnetBox').classList.contains('hidden') || !$('liveBox').classList.contains('hidden');
+  if (panelOpen) {
+    $('paperBtn').classList.toggle('selected', false);
+    $('testnetBtn').classList.toggle('selected', !$('testnetBox').classList.contains('hidden'));
+    $('liveBtn').classList.toggle('selected', !$('liveBox').classList.contains('hidden'));
+  } else {
+    $('paperBtn').classList.toggle('selected', s.mode !== 'live');
+    $('testnetBtn').classList.toggle('selected', s.mode === 'live' && s.testnet);
+    $('liveBtn').classList.toggle('selected', s.mode === 'live' && !s.testnet);
+  }
   // 已连上就在按钮上打个勾，不用再靠面板里的文字判断
   $('testnetBtn').classList.toggle('ok', connected && s.testnet);
   $('liveBtn').classList.toggle('ok', connected && !s.testnet);
-  if (connected) $('hintTestnet').classList.add('hidden');
   $('keysPresent').textContent = s.live_keys ? '已配置' : '未配置';
   renderRisk(s.risk);
   renderResearchAuto(s.research_auto);
   // 交易页的四项状态跟总览页保持一致，别一个说已连接一个说未连接
   if (connected) {
-    $('connState').textContent = s.testnet ? '已连接（交易所模拟）' : '已连接（主网实盘）';
+    $('connState').textContent = s.testnet ? `已连接（模拟盘·${exName}）` : `已连接（主网实盘·${exName}）`;
     $('connState').className = 'up';
     $('liveBalance').textContent = `${fmt(s.equity)} USDT`;
     $('livePos').textContent = s.position
@@ -451,11 +558,6 @@ function renderStatus(s) {
     $('livePos').textContent = '--';
   }
   renderAutoArm(s.auto_arm);
-  // 没配 Key 时提示一次就够，不主动把表单摊开（免得变成骚扰）
-  if (!s.live_keys && !testnetAutoShown) {
-    testnetAutoShown = true;
-    $('hintTestnet').classList.remove('hidden');
-  }
   $('autoState').textContent = s.auto.running ? '运行中' : '停止';
   $('autoState').className = `badge ${s.auto.running ? 'on' : 'off'}`;
   $('autoMeta').textContent = s.auto.running
@@ -657,6 +759,31 @@ $('runResearch').addEventListener('click', async () => {
 });
 
 /* ---------------- 交易 ---------------- */
+// 当前选中的交易所（币安 / OKX）：按面板 scope 读取分段控件
+function currentExchange(scope) {
+  const box = scope === 'live' ? $('liveBox') : $('testnetBox');
+  const sel = box.querySelector('.ex-choice .seg.sel');
+  return sel ? sel.dataset.ex : 'binance';
+}
+// 切到 OKX 时显示 Passphrase 行，切到币安时隐藏
+function syncPassRow(scope) {
+  const ex = currentExchange(scope);
+  const row = scope === 'live' ? $('livePassRow') : $('tnPassRow');
+  if (row) row.classList.toggle('show', ex === 'okx');
+}
+// 交易所分段控件：单选高亮 + 同步 Passphrase 行
+document.querySelectorAll('.ex-choice').forEach((choice) => {
+  const scope = choice.dataset.scope;
+  choice.querySelectorAll('.seg').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      choice.querySelectorAll('.seg').forEach((b) => b.classList.remove('sel'));
+      btn.classList.add('sel');
+      syncPassRow(scope);
+    });
+  });
+  syncPassRow(scope);
+});
+
 $('paperBtn').addEventListener('click', async () => {
   try {
     await api('/api/trading/disarm', 'POST', {});
@@ -682,14 +809,16 @@ function closeModePanels() {
   ['testnetBtn', 'liveBtn'].forEach((b) => $(b).classList.remove('open'));
 }
 
-// 「交易所模拟」：配过 Key 就直接切过去；没配才展开表单
+// 「模拟盘」：所选交易所配过 Key 就直接切过去；没配才展开表单
 $('testnetBtn').addEventListener('click', async () => {
-  if (lastStatus && lastStatus.live_keys) {
+  const ex = currentExchange('testnet');
+  const hasKey = lastStatus && lastStatus['keys_' + ex];
+  if (hasKey) {
     const btn = $('testnetBtn');
     btn.disabled = true;
     try {
-      const res = await api('/api/trading/arm', 'POST', { mode: 'testnet' });
-      toast(`已连上交易所模拟（demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
+      const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
+      toast(`已连上${ex === 'okx' ? 'OKX' : '币安'}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
       closeModePanels();
       poll();
     } catch (e) {
@@ -704,19 +833,22 @@ $('testnetBtn').addEventListener('click', async () => {
 
 $('liveBtn').addEventListener('click', () => openPanel('liveBox', 'liveBtn'));
 
-// 保存测试网 Key → 写 .env → 立刻自检
+// 保存模拟盘 Key → 写 .env → 立刻自检
 $('tnSaveBtn').addEventListener('click', async () => {
   const btn = $('tnSaveBtn');
+  const ex = currentExchange('testnet');
+  const pass = ex === 'okx' ? $('tnPass').value.trim() : '';
   btn.disabled = true; btn.textContent = '保存中…';
   try {
-    const d = await api('/api/exchange/keys', 'POST', { key: $('tnKey').value.trim(), secret: $('tnSecret').value.trim() });
-    $('tnKey').value = ''; $('tnSecret').value = '';
+    const d = await api('/api/exchange/keys', 'POST', {
+      exchange: ex, mode: 'demo', key: $('tnKey').value.trim(), secret: $('tnSecret').value.trim(), passphrase: pass,
+    });
+    $('tnKey').value = ''; $('tnSecret').value = ''; $('tnPass').value = '';
     $('tnStatus').textContent = formatSelftest(d);
     if (d.ok) {
-      const res = await api('/api/trading/arm', 'POST', { mode: 'testnet' });
-      toast(`已连上交易所模拟（demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
+      const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
+      toast(`已连上${ex === 'okx' ? 'OKX' : '币安'}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
       closeModePanels();     // 连上了就把配置框收起来，只留徽章状态
-      $('hintTestnet').classList.add('hidden');
       poll();
     } else {
       toast(`连接失败：${d.error || '未知错误'}`, 'err');
@@ -752,15 +884,24 @@ async function runSelftest(el) {
 }
 
 $('armBtn').addEventListener('click', async () => {
+  const ex = currentExchange('live');
+  const key = $('liveKey').value.trim();
+  const secret = $('liveSecret').value.trim();
+  const pass = ex === 'okx' ? $('livePass').value.trim() : '';
   try {
+    // 主网面板里填了 Key 就先落盘（只写 .env + 自检，不联网下单）
+    if (key && secret) {
+      const d = await api('/api/exchange/keys', 'POST', { exchange: ex, mode: 'live', key, secret, passphrase: pass });
+      if (!d.ok) { toast(`Key 校验失败：${d.error || '未知错误'}`, 'err'); return; }
+    }
     await api('/api/trading/arm', 'POST', {
-      mode: 'live',
+      mode: 'live', exchange: ex,
       confirm: $('confirmText').value,
       testnet: $('testnetChk').checked,
     });
-    toast('主网实盘已解锁（重启服务会自动回到模拟）', 'ok');
+    toast(`${ex === 'okx' ? 'OKX' : '币安'}主网实盘已解锁（重启服务会自动回到模拟）`, 'ok');
     closeModePanels();
-    $('confirmText').value = '';
+    $('confirmText').value = ''; $('liveKey').value = ''; $('liveSecret').value = ''; $('livePass').value = '';
     poll();
   } catch (e) { toast(`解锁失败：${e.message}`, 'err'); }
 });
@@ -819,9 +960,25 @@ $('haltBtn').addEventListener('click', async () => {
 });
 
 $('clearCacheBtn').addEventListener('click', () => {
+  if (window.desktop) { poll(); toast('已刷新', 'ok'); return; }
   // 强制重新加载界面，绕过浏览器/代理缓存的旧版 JS/CSS
   try { window.location.reload(true); } catch (e) { window.location.reload(); }
 });
+
+$('llmSaveBtn').addEventListener('click', saveLlmSettings);
+$('llmTestBtn').addEventListener('click', testLlmSettings);
+
+/* ---------------- 桌面窗口控制（Electron） ---------------- */
+if (window.desktop) {
+  document.body.classList.add('desktop');
+  const wc = $('winControls');
+  if (wc) {
+    wc.classList.remove('hidden');
+    $('tbMin').addEventListener('click', () => window.desktop.minimize());
+    $('tbMax').addEventListener('click', () => window.desktop.maximize());
+    $('tbClose').addEventListener('click', () => window.desktop.close());
+  }
+}
 
 /* ---------------- 机会信号排行榜 ---------------- */
 function renderOpportunities(rows) {

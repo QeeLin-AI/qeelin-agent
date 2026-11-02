@@ -43,11 +43,16 @@ class WebApp:
         self.exchange_env = "testnet"      # 自检探测到的可用环境：testnet | demo
         self.last_scan: dict | None = None
         self.token = os.getenv("CRYPTOAGENT_WEB_TOKEN", "").strip()
-        # 重启后自动解锁（只允许假钱环境）。CRYPTOAGENT_AUTO_ARM = demo | testnet | off
+        # 重启后自动解锁（只允许假钱环境）。CRYPTOAGENT_AUTO_ARM = <exchange>:<env>，
+        # 例如 okx:demo / binance:testnet；没有交易所前缀时默认 binance（兼容旧配置）。
         self.auto_arm = os.getenv("CRYPTOAGENT_AUTO_ARM", "").strip().lower()
+        _aa = self.auto_arm.split(":", 1)
+        self.auto_arm_exchange = _aa[0] if len(_aa) == 2 else "binance"
+        self.auto_arm_env = _aa[-1]
         self.auto_arm_state: dict = {
-            "enabled": self.auto_arm in ("demo", "testnet"),
-            "env": self.auto_arm,
+            "enabled": self.auto_arm_env in ("demo", "testnet"),
+            "env": self.auto_arm_env,
+            "exchange": self.auto_arm_exchange,
             "ok": False,
             "at": "",
             "attempts": 0,
@@ -153,11 +158,12 @@ class WebApp:
     # -- 重启后自动解锁 --------------------------------------------------
     def _auto_arm_loop(self, max_attempts: int = 6) -> None:
         """开机自启时网络往往还没好，所以带退避重试。只对 demo/testnet 生效。"""
-        env = self.auto_arm
+        env = self.auto_arm_env
+        exchange = self.auto_arm_exchange
         for attempt in range(1, max_attempts + 1):
             self.auto_arm_state["attempts"] = attempt
             try:
-                res = self.engine.arm(env, confirm="", testnet=True)
+                res = self.engine.arm(env, confirm="", testnet=True, exchange=exchange)
                 self.auto_arm_state.update(
                     {
                         "ok": True,
@@ -166,7 +172,7 @@ class WebApp:
                         "balance": res.get("balance"),
                     }
                 )
-                print(f"[auto-arm] 已自动解锁 {env}，余额 {res.get('balance')}")
+                print(f"[auto-arm] 已自动解锁 {exchange}:{env}，余额 {res.get('balance')}")
                 # 注意：这里只自动「解锁交易所」，不自动启动交易循环。
                 # 交易循环由用户在前端点「启动」显式开启，避免打开页面就自动下单。
                 return
@@ -181,21 +187,27 @@ class WebApp:
         """开关「重启后自动解锁」，并写进 .env 持久化。只接受 demo / testnet。"""
         on = bool(payload.get("on", False))
         env = str(payload.get("env", "demo")).strip().lower()
+        exchange = str(payload.get("exchange", "binance")).strip().lower()
         if on and env not in ("demo", "testnet"):
             raise ApiError("自动解锁只支持 demo 或 testnet（真钱必须手动确认）", 400)
-        value = env if on else "off"
+        if on and exchange not in ("binance", "okx"):
+            raise ApiError("自动解锁只支持 binance 或 okx", 400)
+        value = f"{exchange}:{env}" if on else "off"
         update_dotenv({"CRYPTOAGENT_AUTO_ARM": value})
         self.auto_arm = value
+        self.auto_arm_exchange = exchange
+        self.auto_arm_env = env
         self.auto_arm_state["enabled"] = on
         self.auto_arm_state["env"] = env
+        self.auto_arm_state["exchange"] = exchange
         if on:
             # 立刻生效一次，不用等重启
             try:
-                res = self.engine.arm(env, confirm="", testnet=True)
+                res = self.engine.arm(env, confirm="", testnet=True, exchange=exchange)
                 self.auto_arm_state.update(
                     {"ok": True, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "error": "", "balance": res.get("balance")}
                 )
-                self.exchange_env = env
+                self.exchange_env = f"{exchange}:{env}"
             except Exception as exc:  # noqa: BLE001
                 self.auto_arm_state["ok"] = False
                 self.auto_arm_state["error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
@@ -655,25 +667,73 @@ class WebApp:
                 return data
         return None
 
-    def exchange_test(self) -> dict:
-        """连接自检：分别探测测试网 / Demo Trading，报告哪个通、延迟、余额、精度。只读。"""
-        import os
+    def exchange_test(self, exchange: str = "binance", mode: str | None = None) -> dict:
+        """连接自检：探测所选交易所的模拟盘 / 主网，报告哪个通、延迟、余额、精度。只读。
 
-        from ..execution import BinanceFuturesClient
+        mode 指定只测 'demo' 或 'live' 一套 Key；不传则向后兼容：demo 优先、再 live。
+        模拟盘与主网是两套独立 Key，按环境分别读取。
+        """
+        from ..execution import OKXClient, BinanceFuturesClient, read_api_keys
 
-        key = os.getenv("BINANCE_API_KEY", "")
-        secret = os.getenv("BINANCE_API_SECRET", "")
+        exchange = (exchange or "binance").lower()
         probe: dict[str, str] = {}
-        if not key or not secret:
+        if mode == "live":
+            envs = ["live"]
+        elif mode == "demo":
+            envs = ["demo"]
+        elif exchange == "okx":
+            envs = ["demo", "live"]
+        else:
+            envs = ["demo", "testnet"]
+
+        if exchange == "okx":
+            for env in envs:
+                testnet = env != "live"
+                key, secret, passphrase = read_api_keys("okx", testnet=testnet)
+                if not key or not secret:
+                    probe[env] = "未设置 OKX " + ("模拟盘" if testnet else "主网") + " API Key"
+                    continue
+                try:
+                    t0 = time.time()
+                    client = OKXClient(key, secret, passphrase, env=env, timeout=8)
+                    client.ping()
+                    latency = int((time.time() - t0) * 1000)
+                    st = client.server_time()
+                    acct = client.account()
+                    tick, step, _ = client.filters(self.cfg.market.symbol)
+                    self.exchange_env = f"okx:{env}"
+                    return {
+                        "ok": True,
+                        "stage": "done",
+                        "exchange": "okx",
+                        "env": env,
+                        "base": client.base,
+                        "latency_ms": latency,
+                        "server_time": st,
+                        "balance": acct["balance"],
+                        "available": acct["available"],
+                        "filters": {"tick": tick, "step": step, "min_notional": 5.0},
+                        "probe": probe,
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    probe[env] = f"{type(exc).__name__}: {str(exc)[:160]}"
             return {
                 "ok": False,
-                "stage": "keys",
+                "stage": "network" if any(probe.values()) else "keys",
+                "exchange": "okx",
                 "probe": probe,
-                "error": "未设置 BINANCE_API_KEY / BINANCE_API_SECRET（可在本页填，或写进 .env 后重启）",
+                "error": "OKX 模拟盘/主网都连不上（多半是网络被墙，需要代理）"
+                if any(probe.values())
+                else "未设置 OKX_API_KEY / OKX_API_SECRET（可在本页填，或写进 .env 后重启）",
             }
 
-        # demo 优先：老测试网走 CDN，共享出口 IP 经常被别人刷到 418 封禁
-        for env in ("demo", "testnet"):
+        # 币安路径
+        for env in envs:
+            testnet = env != "live"
+            key, secret, _ = read_api_keys("binance", testnet=testnet)
+            if not key or not secret:
+                probe[env] = "未设置币安 " + ("Demo" if testnet else "主网") + " API Key"
+                continue
             try:
                 t0 = time.time()
                 client = BinanceFuturesClient(key, secret, env=env, timeout=8)
@@ -687,6 +747,7 @@ class WebApp:
                 return {
                     "ok": True,
                     "stage": "done",
+                    "exchange": "binance",
                     "env": env,
                     "base": client.base,
                     "latency_ms": latency,
@@ -701,9 +762,12 @@ class WebApp:
                 probe[env] = f"{type(exc).__name__}: {str(exc)[:160]}"
         return {
             "ok": False,
-            "stage": "network",
+            "stage": "network" if any(probe.values()) else "keys",
+            "exchange": "binance",
             "probe": probe,
-            "error": "测试网和 Demo Trading 都连不上（多半是网络被墙，需要代理）",
+            "error": "测试网/Demo 和主网都连不上（多半是网络被墙，需要代理）"
+            if any(probe.values())
+            else "未设置 BINANCE_API_KEY / BINANCE_API_SECRET（可在本页填，或写进 .env 后重启）",
         }
 
     # -- 多品种 ---------------------------------------------------------
@@ -854,6 +918,22 @@ class WebApp:
             if not (0.01 <= v <= 1.0):
                 raise ApiError("仓位上限只能在 1% ~ 100% 之间", 400)
             r.max_position_pct = v
+        if "daily_loss_limit_pct" in payload:
+            try:
+                v = float(payload["daily_loss_limit_pct"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("daily_loss_limit_pct 必须是数字", 400) from exc
+            if not (0.01 <= v <= 0.30):
+                raise ApiError("当日亏损上限只能在 1% ~ 30% 之间", 400)
+            r.daily_loss_limit_pct = v
+        if "max_drawdown_pct" in payload:
+            try:
+                v = float(payload["max_drawdown_pct"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("max_drawdown_pct 必须是数字", 400) from exc
+            if not (0.05 <= v <= 0.50):
+                raise ApiError("最大回撤只能在 5% ~ 50% 之间", 400)
+            r.max_drawdown_pct = v
         try:
             save_config(self.cfg, config_path())
             saved = True
@@ -910,39 +990,121 @@ class WebApp:
         }
 
     def save_keys(self, payload: dict) -> dict:
-        """把测试网/主网 Key 存进项目根 .env（不回显、不落日志），然后立刻自检。"""
+        """把所选交易所、所选环境（demo/live）的 Key 存进项目根 .env（不回显、不落日志），然后立刻自检。
+
+        模拟盘与主网用两套独立 Key，分开存储、互不覆盖：
+        - 币安  demo → BINANCE_DEMO_* / live → BINANCE_*
+        - OKX   demo → OKX_DEMO_*     / live → OKX_*
+        """
+        exchange = str(payload.get("exchange", "binance")).strip().lower()
+        if exchange not in ("binance", "okx"):
+            raise ApiError("exchange 只能是 binance / okx", 400)
+        mode = str(payload.get("mode", "demo")).strip().lower()
+        if mode not in ("demo", "live"):
+            raise ApiError("mode 只能是 demo / live", 400)
         key = str(payload.get("key", "")).strip()
         secret = str(payload.get("secret", "")).strip()
+        passphrase = str(payload.get("passphrase", "")).strip()
         if not key or not secret:
             raise ApiError("API Key / Secret 都不能为空", 400)
         if len(key) < 20 or len(secret) < 20:
             raise ApiError("Key 或 Secret 长度不对，检查是否复制完整", 400)
-        update_dotenv({"BINANCE_API_KEY": key, "BINANCE_API_SECRET": secret})
-        res = self.exchange_test()
+        if exchange == "okx" and len(passphrase) < 4:
+            raise ApiError("OKX 需要 Passphrase（开户时设置的，不是登录密码）", 400)
+
+        if exchange == "okx":
+            env_keys = (
+                {"OKX_DEMO_API_KEY": key, "OKX_DEMO_API_SECRET": secret, "OKX_DEMO_PASSPHRASE": passphrase}
+                if mode == "demo"
+                else {"OKX_API_KEY": key, "OKX_API_SECRET": secret, "OKX_PASSPHRASE": passphrase}
+            )
+        else:
+            env_keys = (
+                {"BINANCE_DEMO_API_KEY": key, "BINANCE_DEMO_API_SECRET": secret}
+                if mode == "demo"
+                else {"BINANCE_API_KEY": key, "BINANCE_API_SECRET": secret}
+            )
+        update_dotenv(env_keys)
+        res = self.exchange_test(exchange, mode)
         res["saved"] = True
         res["key_tail"] = key[-4:]
+        res["exchange"] = exchange
+        res["mode"] = mode
         return res
+
+    def llm_settings(self) -> dict:
+        """读当前 LLM 配置（api_key 脱敏，只回显尾号）。"""
+        c = self.cfg.llm
+        key = os.getenv(c.api_key_env, "")
+        return {
+            "provider": c.provider,
+            "model": c.model,
+            "base_url": c.base_url,
+            "api_key_env": c.api_key_env,
+            "api_key_set": bool(key),
+            "api_key_tail": key[-4:] if key else "",
+            "temperature": c.temperature,
+            "max_tokens": c.max_tokens,
+        }
+
+    def set_llm_settings(self, payload: dict) -> dict:
+        """写 LLM 配置到 .env（provider/model/base_url/api_key），同步内存配置，下次决策即时生效。"""
+        updates: dict[str, str] = {}
+        provider = str(payload.get("provider", "")).strip()
+        model = str(payload.get("model", "")).strip()
+        base_url = str(payload.get("base_url", "")).strip()
+        api_key = str(payload.get("api_key", "")).strip()
+        if provider:
+            updates["CRYPTOAGENT_LLM_PROVIDER"] = provider
+        if model:
+            updates["CRYPTOAGENT_LLM_MODEL"] = model
+        if base_url:
+            updates["CRYPTOAGENT_LLM_BASE_URL"] = base_url
+        if api_key:
+            updates[self.cfg.llm.api_key_env] = api_key
+        if not updates:
+            raise ApiError("没有需要保存的配置", 400)
+        update_dotenv(updates)
+        # 同步内存配置：TradingPipeline 每次决策时用 self.cfg.llm 新建，改这里即时生效
+        if "CRYPTOAGENT_LLM_PROVIDER" in updates:
+            self.cfg.llm.provider = updates["CRYPTOAGENT_LLM_PROVIDER"]
+        if "CRYPTOAGENT_LLM_MODEL" in updates:
+            self.cfg.llm.model = updates["CRYPTOAGENT_LLM_MODEL"]
+        if "CRYPTOAGENT_LLM_BASE_URL" in updates:
+            self.cfg.llm.base_url = updates["CRYPTOAGENT_LLM_BASE_URL"]
+        return self.llm_settings()
 
     def arm(self, payload: dict) -> dict:
         mode = str(payload.get("mode", "paper"))
         confirm = str(payload.get("confirm", ""))
         testnet = bool(payload.get("testnet", True))
+        exchange = str(payload.get("exchange", "binance")).strip().lower()
         # 老期货测试网（testnet.binancefuture.com）已并入 Demo Trading，共享 CDN 出口 IP
-        # 极容易被限流封禁（418）。「交易所模拟」一律走 demo，不再碰老测试网。
+        # 极容易被限流封禁（418）。「模拟盘」一律走 demo，不再碰老测试网。
         if mode == "testnet":
             mode = "demo"
         try:
-            return self.engine.arm(mode, confirm, testnet=testnet)
+            return self.engine.arm(mode, confirm, testnet=testnet, exchange=exchange)
         except PermissionError as exc:
             raise ApiError(str(exc), 403) from exc
         except ExchangeError as exc:
             raise ApiError(str(exc), 502) from exc
 
     def exchange_status(self) -> dict:
+        import os
+
         e = self.engine
-        keys = bool(__import__("os").getenv("BINANCE_API_KEY"))
+        keys_binance = bool(os.getenv("BINANCE_API_KEY"))
+        keys_okx = bool(os.getenv("OKX_API_KEY"))
         out = {
-            "keys_present": keys,
+            "exchange": e.state.get("exchange", "binance"),
+            "keys_binance": keys_binance,
+            "keys_okx": keys_okx,
+            "keys_present": keys_binance or keys_okx,
+            "keys_binance_demo": bool(os.getenv("BINANCE_DEMO_API_KEY")) or keys_binance,
+            "keys_okx_demo": bool(os.getenv("OKX_DEMO_API_KEY")) or keys_okx,
+            "keys_binance_live": keys_binance,
+            "keys_okx_live": keys_okx,
             "armed": e.armed,
             "mode": e.state["mode"],
             "testnet": e.state.get("testnet", True),
@@ -951,11 +1113,13 @@ class WebApp:
             "positions": [],
             "error": "",
         }
-        if not keys or not e.armed:
-            out["error"] = "" if keys else "未设置 BINANCE_API_KEY / BINANCE_API_SECRET"
+        if not (keys_binance or keys_okx) or not e.armed:
+            out["error"] = "" if (keys_binance or keys_okx) else "未设置 API Key"
             return out
         try:
-            client = e.live_client or e.connect(testnet=e.state.get("testnet", True))
+            client = e.live_client or e.connect(
+                testnet=e.state.get("testnet", True), exchange=e.state.get("exchange", "binance")
+            )
             client.armed = True
             client.ping()
             out["connected"] = True
@@ -1123,6 +1287,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.live_status()})
         if path == "/api/symbols":
             return self._json({"ok": True, "data": app.symbols()})
+        if path == "/api/settings/llm":
+            return self._json({"ok": True, "data": app.llm_settings()})
         if path == "/api/scan":
             return self._json({"ok": True, "data": app.last_scan})
         if path == "/api/decisions/latest":
@@ -1180,6 +1346,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.exchange_status()})
         if path == "/api/exchange/keys":
             return self._json({"ok": True, "data": app.save_keys(payload)})
+        if path == "/api/settings/llm":
+            return self._json({"ok": True, "data": app.set_llm_settings(payload)})
         if path == "/api/live":
             data = app.start_live() if payload.get("on", True) else app.stop_live()
             return self._json({"ok": True, "data": data})
@@ -1224,10 +1392,9 @@ def serve(cfg: AppConfig, host: str = "127.0.0.1", port: int = 8000, open_browse
             + "\n  或者保持默认 127.0.0.1，用 SSH 隧道访问（推荐）。"
         )
     app = WebApp(cfg, live=True)
-    try:
-        app.engine.refresh_data()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[web] 数据加载失败（页面仍可打开）：{exc}")
+    # 启动即打开窗口：K 线在后台线程下载（fapi 被墙时会 fallback 到 gate，首次约 30~40 秒），
+    # 不再同步阻塞 HTTP 服务启动。前端通过 status.data_loading 展示「K 线加载中」，加载完自动刷新。
+    app.engine.start_data_load()
 
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = ThreadingHTTPServer((host, port), handler)
@@ -1237,7 +1404,7 @@ def serve(cfg: AppConfig, host: str = "127.0.0.1", port: int = 8000, open_browse
         url = f"{url}/?token={token}"
         open_browser = open_browser and loopback
     print(f"\n  QeeLin-Agent 控制台已启动：{url}")
-    print(f"  数据源：{app.engine.data_source or '未加载'}   模式：{app.engine.state['mode']}")
+    print(f"  数据源：后台加载中（K 线下载完自动刷新）   模式：{app.engine.state['mode']}")
     print("  按 Ctrl+C 停止\n")
     if open_browser:
         threading.Thread(target=lambda: (time.sleep(0.6), webbrowser.open(url)), daemon=True).start()

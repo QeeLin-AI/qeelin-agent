@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QeeLin-Agent 控制台</title>
-<link rel="stylesheet" href="/static/style.css?v=0.5.14" />
+<link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
 <header class="topbar">
@@ -31,16 +31,25 @@
     <button id="clearCacheBtn" class="btn ghost" title="强制重新加载界面，清除浏览器缓存的旧版本">强制刷新</button>
     <button id="haltBtn" class="btn danger ghost">熔断</button>
   </div>
+  <div class="win-controls hidden" id="winControls">
+    <button id="tbMin" class="wc-btn" title="最小化">─</button>
+    <button id="tbMax" class="wc-btn" title="最大化">□</button>
+    <button id="tbClose" class="wc-btn wc-close" title="关闭">✕</button>
+  </div>
 </header>
 
 <div id="dataWarn" class="data-warn hidden"></div>
 <div id="accountWarn" class="data-warn hidden"></div>
+<div id="loadingBar" class="loading-bar hidden">
+  <span class="spin"></span> K 线行情加载中（首次需从交易所拉取约 6000 根，约 30~40 秒）…
+</div>
 
 <nav class="tabs">
   <button class="tab active" data-tab="overview">总览</button>
   <button class="tab" data-tab="decision">决策</button>
   <button class="tab" data-tab="research">因子研究</button>
   <button class="tab" data-tab="trading">交易</button>
+  <button class="tab" data-tab="settings">设置</button>
 </nav>
 
 <main>
@@ -156,24 +165,32 @@
         <div class="card-head"><h2>交易模式</h2><span id="armState" class="badge paper">PAPER</span></div>
         <div class="mode-row">
           <button id="paperBtn" class="btn selected">本地模拟</button>
-          <button id="testnetBtn" class="btn">交易所模拟</button>
+          <button id="testnetBtn" class="btn">模拟盘</button>
           <button id="liveBtn" class="btn">主网实盘</button>
         </div>
         <p class="muted" style="margin:8px 0 0">
-          本地模拟＝自己撮合，不联网下单；交易所模拟＝真的发单到币安，用的是<a href="https://demo.binance.com" target="_blank" rel="noreferrer">假钱 Demo 账户</a>；主网实盘＝真钱。
+          本地模拟＝自己撮合，不联网下单；模拟盘＝发单到所选交易所的模拟盘账户（币安 / OKX），用的是假钱 Demo 账户；主网实盘＝真钱。
         </p>
-        <p id="hintTestnet" class="muted hidden" style="margin:6px 0 0">
-          想接真 API（假钱）：点上面的「交易所模拟」填 Key。币安 2026 年已把期货测试网并入
-          <code>demo.binance.com</code>，Key 要在那里生成。先跑 <code>run.cmd netcheck</code> 看你的网络通不通。
+        <p class="muted" style="margin:6px 0 0">
+          想接交易所 API：点上面的「模拟盘 / 主网实盘」，选币安或 OKX，再填对应的 Key 即可。
         </p>
 
         <div id="testnetBox" class="live-box hidden">
-          <div class="warn bare">
-            交易所模拟＝币安 Demo Trading（原期货测试网）：独立沙盒站点，注册即送虚拟 USDT。<b>它的 API Key 必须单独申请</b>，
-            主网 Key、现货测试网 Key 都用不了。这里的下单不会花一分钱。
+          <div class="ex-choice" data-scope="testnet">
+            <span class="ex-label">交易所</span>
+            <button type="button" class="seg sel" data-ex="binance">币安</button>
+            <button type="button" class="seg" data-ex="okx">OKX</button>
           </div>
-          <label class="field">API Key<input id="tnKey" type="text" placeholder="testnet 的 API Key" autocomplete="off" /></label>
-          <label class="field">API Secret<input id="tnSecret" type="password" placeholder="testnet 的 Secret（只显示一次）" autocomplete="off" /></label>
+          <div class="warn bare">
+            模拟盘＝交易所 Demo 沙盒账户：注册即送虚拟资金，<b>API Key 必须单独申请</b>，主网 Key 用不了。这里的下单不会花一分钱。
+          </div>
+          <p class="muted hint-key" style="margin:8px 0 0">
+            申请路径：币安 Demo Key 在 <code>demo.binance.com</code> 申请；OKX 模拟盘 Key 在
+            OKX → 交易 → 模拟交易 → 个人中心 → 创建模拟盘 API Key。两者都是<strong>独立 Key</strong>，和主网 Key 不通用，请分别保存。
+          </p>
+          <label class="field">API Key<input id="tnKey" type="text" placeholder="模拟盘的 API Key" autocomplete="off" /></label>
+          <label class="field">API Secret<input id="tnSecret" type="password" placeholder="模拟盘的 Secret（只显示一次）" autocomplete="off" /></label>
+          <label class="field" id="tnPassRow">Passphrase（OKX 专用）<input id="tnPass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
           <div class="actions">
             <button id="tnSaveBtn" class="btn">保存到 .env 并连接</button>
             <button id="tnTestBtn" class="btn ghost">连接自检</button>
@@ -186,16 +203,28 @@
         </div>
 
         <div id="liveBox" class="live-box hidden">
+          <div class="ex-choice" data-scope="live">
+            <span class="ex-label">交易所</span>
+            <button type="button" class="seg sel" data-ex="binance">币安</button>
+            <button type="button" class="seg" data-ex="okx">OKX</button>
+          </div>
           <div class="warn">
             ⚠ 主网实盘会动用真实资金。请先确认：API Key 只开了合约交易权限、已禁用提现、绑定 IP，
             并且你用的是独立子账户。
           </div>
+          <p class="muted hint-key" style="margin:8px 0 0">
+            申请路径：币安 / OKX 主网 Key 在各自官网「API 管理」申请。OKX 用<strong>主账户 Key</strong>（不是模拟盘 Key）。
+            请只开合约交易权限、禁用提现、绑定 IP。
+          </p>
+          <label class="field">API Key<input id="liveKey" type="text" placeholder="主网 API Key" autocomplete="off" /></label>
+          <label class="field">API Secret<input id="liveSecret" type="password" placeholder="主网 Secret" autocomplete="off" /></label>
+          <label class="field" id="livePassRow">Passphrase（OKX 专用）<input id="livePass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
           <label class="field">在下面输入「我确认使用真实资金」以解锁
             <input id="confirmText" type="text" placeholder="我确认使用真实资金" autocomplete="off" />
           </label>
           <button id="armBtn" class="btn danger">解锁主网实盘</button>
           <p id="keyStatus" class="muted"></p>
-          <label class="inline"><input id="testnetChk" type="checkbox" /> 走交易所模拟环境（等同上面的「交易所模拟」）</label>
+          <label class="inline"><input id="testnetChk" type="checkbox" /> 走模拟盘环境（等同上面的「模拟盘」）</label>
         </div>
 
         <div class="kv">
@@ -208,7 +237,7 @@
         <button id="selftestBtn" class="btn ghost">连接自检</button>
 
         <div class="divider"><span>交易参数</span></div>
-        <label class="field">杠杆 <span id="levNow" class="lev-chip">自动</span>
+        <label class="field">杠杆
           <select id="levSelect">
             <option value="0">自动（跟随决策，上限以交易所为准）</option>
             <option value="1">1x 不加杠杆</option>
@@ -223,12 +252,35 @@
           </select>
         </label>
         <p class="muted" style="margin:4px 0 0">
-          杠杆只决定<b>占用多少保证金</b>，不放大风险：单笔最大亏损按「仓位 × 杠杆 × 止损」算，
-          被 <b id="riskCap">1%</b> 硬顶封住。所以调到 5x 时，仓位会被自动压小，亏损上限不变。
+          杠杆只决定占用多少保证金、不放大风险；亏损与仓位由下方四项硬顶控制：总持仓风险 / 仓位持仓上限 / 当日亏损上限 / 最大回撤。
         </p>
         <div class="kv" style="margin-top:8px">
-          <div><span>单笔风险上限</span><b id="riskPerTrade">--</b></div>
-          <div><span>单策略仓位上限</span><b id="riskPosCap">--</b></div>
+          <label class="field">总持仓风险（%）
+            <span class="input-suffix">
+              <input id="riskTotal" type="number" min="0.1" max="5" step="0.1" />
+              <span class="suffix">% 权益</span>
+            </span>
+          </label>
+          <label class="field">仓位持仓上限（%）
+            <span class="input-suffix">
+              <input id="riskPosCapInput" type="number" min="1" max="100" step="1" />
+              <span class="suffix">% 权益</span>
+            </span>
+          </label>
+        </div>
+        <div class="kv" style="margin-top:8px">
+          <label class="field">当日亏损上限（%）
+            <span class="input-suffix">
+              <input id="riskDaily" type="number" min="1" max="30" step="0.5" />
+              <span class="suffix">% 权益</span>
+            </span>
+          </label>
+          <label class="field">最大回撤（%）
+            <span class="input-suffix">
+              <input id="riskDrawdown" type="number" min="5" max="50" step="1" />
+              <span class="suffix">% 权益</span>
+            </span>
+          </label>
         </div>
       </div>
 
@@ -259,9 +311,36 @@
       </table>
     </div>
   </section>
+
+  <!-- ============ 设置 ============ -->
+  <section id="tab-settings" class="panel">
+    <div class="card">
+      <div class="card-head"><h2>LLM 模型设置</h2><span class="muted" id="llmStatus">--</span></div>
+      <label class="field">服务商
+        <select id="llmProvider">
+          <option value="mock">mock（离线规则兜底）</option>
+          <option value="openai">OpenAI 兼容网关</option>
+        </select>
+      </label>
+      <label class="field">模型名称
+        <input id="llmModel" type="text" placeholder="如 agnes-3.0-flash / deepseek-chat" />
+      </label>
+      <label class="field">Base URL
+        <input id="llmBaseUrl" type="text" placeholder="https://api.xxx.com/v1" />
+      </label>
+      <label class="field">API Key
+        <input id="llmApiKey" type="password" placeholder="sk-...（留空则不修改）" />
+      </label>
+      <div class="actions">
+        <button id="llmSaveBtn" class="btn primary">保存</button>
+        <button id="llmTestBtn" class="btn ghost">测试连接</button>
+      </div>
+      <p class="muted">改完立即生效（下次决策使用新配置）。API Key 只回显尾号，留空表示保持原值。</p>
+    </div>
+  </section>
 </main>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=0.5.14"></script>
+<script src="/static/app.js"></script>
 </body>
 </html>
