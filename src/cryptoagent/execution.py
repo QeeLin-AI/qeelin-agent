@@ -67,9 +67,11 @@ def build_client(
 def read_api_keys(exchange: str, testnet: bool = True) -> tuple[str, str, str]:
     """读取项目 .env 里的 API Key。
 
-    币安 / OKX 的「模拟盘」与「主网」是**两套独立 Key**，分开存储互不覆盖：
-    - 模拟盘：BINANCE_DEMO_* / OKX_DEMO_*（缺失时回退主网 Key，兼容旧配置）
-    - 主网  ：BINANCE_*       / OKX_*
+    币安 / OKX 的「模拟盘」与「主网」是**两套独立 Key**，四套互不通用、互不回退：
+    - 币安模拟盘：BINANCE_DEMO_API_KEY / BINANCE_DEMO_API_SECRET
+    - 币安主网  ：BINANCE_API_KEY      / BINANCE_API_SECRET
+    - OKX 模拟盘：OKX_DEMO_API_KEY     / OKX_DEMO_API_SECRET / OKX_DEMO_PASSPHRASE
+    - OKX 主网  ：OKX_API_KEY          / OKX_API_SECRET      / OKX_PASSPHRASE
 
     返回 (key, secret, passphrase)，只有 OKX 有 passphrase。
     """
@@ -78,17 +80,17 @@ def read_api_keys(exchange: str, testnet: bool = True) -> tuple[str, str, str]:
     ex = (exchange or "binance").lower()
     if ex == "okx":
         if testnet:
-            key = os.getenv("OKX_DEMO_API_KEY") or os.getenv("OKX_API_KEY", "")
-            secret = os.getenv("OKX_DEMO_API_SECRET") or os.getenv("OKX_API_SECRET", "")
-            passphrase = os.getenv("OKX_DEMO_PASSPHRASE") or os.getenv("OKX_PASSPHRASE", "")
+            key = os.getenv("OKX_DEMO_API_KEY", "")
+            secret = os.getenv("OKX_DEMO_API_SECRET", "")
+            passphrase = os.getenv("OKX_DEMO_PASSPHRASE", "")
         else:
             key = os.getenv("OKX_API_KEY", "")
             secret = os.getenv("OKX_API_SECRET", "")
             passphrase = os.getenv("OKX_PASSPHRASE", "")
     else:  # binance
         if testnet:
-            key = os.getenv("BINANCE_DEMO_API_KEY") or os.getenv("BINANCE_API_KEY", "")
-            secret = os.getenv("BINANCE_DEMO_API_SECRET") or os.getenv("BINANCE_API_SECRET", "")
+            key = os.getenv("BINANCE_DEMO_API_KEY", "")
+            secret = os.getenv("BINANCE_DEMO_API_SECRET", "")
         else:
             key = os.getenv("BINANCE_API_KEY", "")
             secret = os.getenv("BINANCE_API_SECRET", "")

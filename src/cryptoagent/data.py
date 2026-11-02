@@ -151,9 +151,19 @@ def _mark_dead(host: str) -> None:
     _DEAD_UNTIL[host] = time.time() + DEAD_COOLDOWN
 
 
-def _get(url: str, params: dict, timeout: int = 6) -> list:
+# OKX 会拦非浏览器 UA（403），统一用浏览器 UA
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _get(url: str, params: dict, timeout: int = 6):
     q = urllib.parse.urlencode(params)
-    req = urllib.request.Request(f"{url}?{q}", headers={"User-Agent": "QeeLin-Agent/0.3"})
+    req = urllib.request.Request(
+        f"{url}?{q}",
+        headers={"User-Agent": _UA, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9"},
+    )
     with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -278,7 +288,82 @@ def _fetch_gate(cfg: MarketConfig, need: int) -> pd.DataFrame:
     return df
 
 
-def fetch_binance(cfg: MarketConfig, max_bars: int | None = None) -> pd.DataFrame:
+OKX_BARS = {
+    "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1H", "2h": "2H", "4h": "4H", "6h": "6H", "8h": "8H", "12h": "12H", "1d": "1D",
+}
+
+
+def okx_inst(symbol: str) -> str:
+    """BTCUSDT → BTC-USDT-SWAP（OKX 的 U 本位永续）。"""
+    s = symbol.upper().replace("-", "").replace("_", "")
+    if s.endswith("USDT"):
+        return f"{s[:-4]}-USDT-SWAP"
+    return s
+
+
+def _okx_rows_to_df(rows: list[list]) -> pd.DataFrame:
+    df = pd.DataFrame(
+        rows, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"]
+    )
+    df.index = pd.to_datetime(df["ts"].astype("int64"), unit="ms", utc=True)
+    df.index.name = "ts"
+    df = df[["open", "high", "low", "close", "vol"]].astype(float)
+    df.columns = ["open", "high", "low", "close", "volume"]
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    df["funding_rate"] = 0.0
+    return df
+
+
+def _fetch_okx(cfg: MarketConfig, need: int) -> pd.DataFrame:
+    """OKX U 本位永续历史 K 线（公开接口，100 根/次，用 after 往前翻）。"""
+    inst = okx_inst(cfg.symbol)
+    bar = OKX_BARS.get(cfg.interval, "1H")
+    rows: list[list] = []
+    after = ""
+    while len(rows) < need:
+        params = {"instId": inst, "bar": bar, "limit": "100"}
+        if after:
+            params["after"] = after
+        batch = []
+        for attempt in range(2):  # 429/网络抖动重试一次，别整源判死
+            try:
+                payload = _get(f"{OKX}/api/v5/market/history-candles", params, timeout=10)
+                batch = payload.get("data") or []
+                break
+            except Exception:
+                if attempt == 1:
+                    raise
+                time.sleep(1.0)
+        if not batch:
+            break
+        rows = batch + rows
+        after = batch[-1][0]  # 本批最老的一根，下一页取比它更早的
+        if len(batch) < 100:
+            break
+        time.sleep(0.12)  # 限速：OKX history-candles 20 次/2 秒
+    if not rows:
+        raise DataError("okx 返回空数据")
+    df = _okx_rows_to_df(rows)
+    # OKX 的 volume 是「张数」，量纲和币安不同，用成交额近似还原成 base 量
+    return df.tail(need)
+
+
+def _fetch_okx_recent(symbol: str, interval: str, limit: int) -> pd.DataFrame:
+    """最近 N 根（含未收盘），给页面短周期图用。"""
+    bar = OKX_BARS.get(interval, "5m")
+    payload = _get(
+        f"{OKX}/api/v5/market/candles",
+        {"instId": okx_inst(symbol), "bar": bar, "limit": str(min(max(limit, 20), 300))},
+        timeout=8,
+    )
+    rows = payload.get("data") or []
+    if not rows:
+        raise DataError("okx candles 返回空数据")
+    return _okx_rows_to_df(rows)
+
+
+def fetch_binance(cfg: MarketConfig, max_bars: int | None = None, prefer: str = "binance") -> pd.DataFrame:
     """按可用性依次尝试：fapi 永续 → vision 镜像 → gate 永续。
 
     返回的 DataFrame 带 `attrs["source"]`（哪个源成功）与 `attrs["has_funding"]`。
@@ -287,11 +372,14 @@ def fetch_binance(cfg: MarketConfig, max_bars: int | None = None) -> pd.DataFram
     need = max_bars or cfg.bars
     errors: list[str] = []
     # 只做合约：fapi 永续 → demo 合约 → Gate 永续，不再回退现货镜像
-    pairs = (
+    pairs = [
         ("binance-fapi", _fetch_fapi, FAPI),
         ("binance-fapi-demo", _fetch_demo_fapi, DEMO),
         ("gate-futures", _fetch_gate, GATE),
-    )
+    ]
+    # 选的是 OKX 就把 OKX 永续排在第一位；它挂了仍会依次兜底，不会没数据
+    if (prefer or "").lower() == "okx":
+        pairs.insert(0, ("okx-swap", _fetch_okx, OKX))
     for name, fn, host in pairs:
         if _dead(host):
             errors.append(f"{name}: 上次失败，{int(DEAD_COOLDOWN)}s 内跳过")
@@ -372,7 +460,7 @@ KL_INTERVALS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 
 
 def fetch_klines(
-    symbol: str, interval: str = "5m", limit: int = 240, ttl: float = KL_TTL
+    symbol: str, interval: str = "5m", limit: int = 240, ttl: float = KL_TTL, prefer: str = "binance"
 ) -> tuple[pd.DataFrame, str]:
     """拉最近 N 根实时 K 线（含当前未收盘的那根）。返回 (df, 来源)。
 
@@ -382,13 +470,23 @@ def fetch_klines(
     if interval not in KL_INTERVALS:
         raise DataError(f"不支持的周期 {interval}，可选 {', '.join(KL_INTERVALS)}")
     limit = max(20, min(int(limit), 1000))
-    key = (symbol, interval, limit)
+    prefer = (prefer or "binance").lower()
+    key = (symbol, interval, limit, prefer)
     now = time.time()
     hit = _KL_CACHE.get(key)
     if hit and (now - hit[0]) < ttl:
         return hit[1], hit[2]
 
     errors: list[str] = []
+    # 0) 选了 OKX → 先用 OKX 永续行情，和下单的交易所保持一致
+    if prefer == "okx":
+        try:
+            df = _fetch_okx_recent(symbol, interval, limit)
+            _KL_CACHE[key] = (now, df, "okx-swap")
+            return df, "okx-swap"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"okx: {type(exc).__name__} {str(exc)[:60]}")
+
     # 1) U 本位永续（合约交易的价格基准，优先）
     if not _dead(FAPI):
         try:
@@ -445,14 +543,19 @@ def fetch_klines(
     raise DataError("实时 K 线获取失败：\n  " + "\n  ".join(errors))
 
 
-def fetch_live_price(symbol: str, timeout: int = 6) -> tuple[float, str]:
+def fetch_live_price(symbol: str, timeout: int = 6, prefer: str = "binance") -> tuple[float, str]:
     """最新成交价（秒级）。依次试 4 个交易所，返回 (price, source)，全失败才抛错。
 
     币安镜像在部分地区会返回 451（法律限制），所以必须有备胎。
     """
     errors: list[str] = []
     now = time.time()
-    for name, fn, host in LIVE_SOURCES:
+    sources = LIVE_SOURCES
+    if (prefer or "").lower() == "okx":
+        sources = tuple(x for x in LIVE_SOURCES if x[0] == "okx") + tuple(
+            x for x in LIVE_SOURCES if x[0] != "okx"
+        )
+    for name, fn, host in sources:
         if float(_DEAD_LIVE.get(host, 0.0)) > now:
             errors.append(f"{name}: 30s 内失败过，跳过")
             continue
@@ -472,15 +575,31 @@ _24H_CACHE: dict[str, tuple[float, tuple[float, float]]] = {}
 _24H_TTL = 60.0
 
 
-def fetch_24h(symbol: str, timeout: int = 6) -> tuple[float, float]:
+def fetch_24h(symbol: str, timeout: int = 6, prefer: str = "binance") -> tuple[float, float]:
     """返回 (最新价, 24h 涨跌幅%)，多源回退，60 秒进程内缓存。"""
-    key = symbol
+    prefer = (prefer or "binance").lower()
+    key = (symbol, prefer)
     now = time.time()
     hit = _24H_CACHE.get(key)
     if hit and (now - hit[0]) < _24H_TTL:
         return hit[1]
 
     errors: list[str] = []
+    # 0) 选了 OKX → 用 OKX 永续的 24h 统计，和价格同一个交易所
+    if prefer == "okx":
+        try:
+            payload = _get(
+                f"{OKX}/api/v5/market/ticker", {"instId": okx_inst(symbol)}, timeout=timeout
+            )
+            item = payload["data"][0]
+            last = float(item["last"])
+            open24 = float(item.get("open24h") or 0.0)
+            chg = ((last - open24) / open24 * 100.0) if open24 else 0.0
+            _24H_CACHE[key] = (now, (last, chg))
+            return last, chg
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"okx: {type(exc).__name__} {str(exc)[:60]}")
+
     # 1) 币安永续 24hr
     try:
         data = _get(f"{FAPI}/fapi/v1/ticker/24hr", {"symbol": symbol}, timeout=timeout)
@@ -518,6 +637,7 @@ def load_market(
     force_download: bool = False,
     strict: bool = False,
     max_age_bars: int = 2,
+    prefer: str = "binance",
 ) -> tuple[pd.DataFrame, str]:
     """返回 (行情, 来源说明)。
 
@@ -529,7 +649,9 @@ def load_market(
     cache_dir = Path(cfg.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{cfg.symbol}_{cfg.interval}_{cfg.bars}"
-    real_cache = cache_dir / f"{stem}.real.csv"
+    # 不同交易所的行情分开缓存，免得切了交易所还在读币安的旧 CSV
+    tag = ".okx" if (prefer or "").lower() == "okx" else ""
+    real_cache = cache_dir / f"{stem}{tag}.real.csv"
     synth_cache = cache_dir / f"{stem}_s{cfg.seed}.synthetic.csv"
 
     def _read(path: Path) -> pd.DataFrame:
@@ -548,11 +670,14 @@ def load_market(
         if real_cache.exists() and not force_download:
             df = _read(real_cache)
             if not _stale(df):
-                return df, f"cache:{cfg.symbol} {cfg.interval} 末根 {df.index[-1]:%Y-%m-%d %H:%M}Z"
+                kind = "okx-cache" if tag else "cache"
+                return df, f"{kind}:{cfg.symbol} {cfg.interval} 末根 {df.index[-1]:%Y-%m-%d %H:%M}Z"
         try:
-            df = fetch_binance(cfg)
-            df.to_csv(real_cache)
+            df = fetch_binance(cfg, prefer=prefer)
             src = df.attrs.get("source", "binance")
+            # 兜底源（币安/Gate）的数据别写进 OKX 专用缓存，否则下次会拿别人的行情当 OKX
+            if not (tag and not str(src).startswith("okx")):
+                df.to_csv(real_cache)
             note = "" if df.attrs.get("has_funding") else "（无资金费率，按 0 计）"
             return df, f"{src}:{cfg.symbol} {cfg.interval}{note}"
         except DataError as exc:

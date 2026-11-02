@@ -18,7 +18,8 @@ const shortSource = (src) => {
   if (kind.startsWith('synthetic')) return '合成假数据';
   if (kind.startsWith('stale-cache')) return `旧缓存 ${sym}`.trim();
   if (kind === 'cache') return `本地缓存 ${sym}`.trim();
-  const label = { 'binance-vision': '币安镜像', 'binance-spot': '币安现货', 'binance-fapi': '币安永续', 'binance-fapi-demo': '币安合约(模拟)', 'gate-futures': 'Gate 永续' }[kind] || kind;
+  if (kind === 'okx-cache') return `OKX缓存 ${sym}`.trim();
+  const label = { 'binance-vision': '币安镜像', 'binance-spot': '币安现货', 'binance-fapi': '币安永续', 'binance-fapi-demo': '币安合约(模拟)', 'gate-futures': 'Gate 永续', 'okx-swap': 'OKX永续' }[kind] || kind;
   return `${label} ${sym}`.trim();
 };
 
@@ -342,7 +343,7 @@ $('runScan').addEventListener('click', async () => {
 });
 
 /* ---------------- 实时报价 / 数据源告警 ---------------- */
-const LIVE_SOURCE_LABEL = { 'binance-fapi': '币安永续', 'binance-spot': '币安现货', 'binance-vision': '币安镜像', 'gate-futures': 'Gate 永续', 'okx': 'OKX', 'bybit': 'Bybit' };
+const LIVE_SOURCE_LABEL = { 'binance-fapi': '币安永续', 'binance-spot': '币安现货', 'binance-vision': '币安镜像', 'gate-futures': 'Gate 永续', 'okx': 'OKX永续', 'bybit': 'Bybit' };
 
 function renderLive(s) {
   const live = s.live || {};
@@ -557,7 +558,16 @@ function renderStatus(s) {
   // 面板开着的时候，状态行和切换按钮要跟着实时刷新
   if (!$('testnetBox').classList.contains('hidden')) renderExchangePanel('testnet');
   if (!$('liveBox').classList.contains('hidden')) renderExchangePanel('live');
-  $('keysPresent').textContent = s.live_keys ? '已配置' : '未配置';
+  // 四套 Key 分开显示，别再笼统写「已配置」
+  if ($('keysPresent')) {
+    const K = s.keys || {};
+    const tags = [];
+    if (K.binance && K.binance.demo) tags.push('币安模拟盘');
+    if (K.binance && K.binance.live) tags.push('币安主网');
+    if (K.okx && K.okx.demo) tags.push('OKX模拟盘');
+    if (K.okx && K.okx.live) tags.push('OKX主网');
+    $('keysPresent').textContent = tags.length ? tags.join(' / ') : '未配置';
+  }
   renderRisk(s.risk);
   renderResearchAuto(s.research_auto);
   // 交易页的四项状态跟总览页保持一致，别一个说已连接一个说未连接
@@ -806,7 +816,7 @@ function syncPassRow(scope) {
   const row = scope === 'live' ? $('livePassRow') : $('tnPassRow');
   if (row) row.classList.toggle('show', ex === 'okx');
 }
-// 某交易所在该环境下有没有 Key（模拟盘缺 Key 时后端会借用主网 Key，这里如实显示）
+// 某交易所在该环境下有没有 Key（模拟盘 / 主网四套 Key 各自独立，互不回退）
 function hasKeys(ex, mode) {
   const k = lastStatus && lastStatus.keys && lastStatus.keys[ex];
   return !!(k && k[mode]);
@@ -824,19 +834,16 @@ function renderExchangePanel(scope) {
   if (!el) return;
   el.innerHTML = ['binance', 'okx'].map((ex) => {
     const own = hasKeys(ex, mode);
-    const fallback = mode === 'demo' && hasKeys(ex, 'live');
     const cur = isConnectedExchange(ex, scope);
-    let label = '未配 Key';
-    if (own) label = '已配 Key';
-    else if (fallback) label = '借用主网 Key';
-    const cls = cur ? 'cur' : (own || fallback ? 'has' : 'none');
+    const label = own ? '已配 Key' : '未配 Key';
+    const cls = cur ? 'cur' : (own ? 'has' : 'none');
     return `<span class="${cls}">${exCn(ex)}：${label}${cur ? ' · 当前连接' : ''}</span>`;
   }).join('<span class="sep">｜</span>');
 
   const btn = $(scope === 'live' ? 'liveSwitchBtn' : 'tnSwitchBtn');
   if (!btn) return;
   const ex = currentExchange(scope);
-  const ready = hasKeys(ex, mode) || (mode === 'demo' && hasKeys(ex, 'live'));
+  const ready = hasKeys(ex, mode);
   if (isConnectedExchange(ex, scope)) { btn.textContent = `已连${exCn(ex)}`; btn.disabled = true; }
   else if (ready) { btn.textContent = `切换到${exCn(ex)}`; btn.disabled = false; }
   else { btn.textContent = `先填${exCn(ex)}的 Key`; btn.disabled = true; }
@@ -890,7 +897,7 @@ $('testnetBtn').addEventListener('click', async () => {
     return;
   }
   const ex = currentExchange('testnet');
-  const hasKey = hasKeys(ex, 'demo') || hasKeys(ex, 'live');
+  const hasKey = hasKeys(ex, 'demo');
   if (hasKey) {
     if (blockIfAutoRunning('连接交易所')) return;
     const btn = $('testnetBtn');

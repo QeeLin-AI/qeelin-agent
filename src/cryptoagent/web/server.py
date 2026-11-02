@@ -126,7 +126,9 @@ class WebApp:
     def _live_loop(self) -> None:
         while not self._live_stop.is_set():
             try:
-                price, src = fetch_live_price(self.cfg.market.symbol)
+                price, src = fetch_live_price(
+                    self.cfg.market.symbol, prefer=self.engine.state.get("exchange", "binance")
+                )
                 self.live_price = price
                 self.live_source = src
                 self.live_ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -137,7 +139,9 @@ class WebApp:
             now = time.time()
             if now - self._live_change_at >= 60:
                 try:
-                    _last, chg = fetch_24h(self.cfg.market.symbol)
+                    _last, chg = fetch_24h(
+                        self.cfg.market.symbol, prefer=self.engine.state.get("exchange", "binance")
+                    )
                     self.live_change = round(chg, 3)
                     self._live_change_at = now
                 except Exception:  # noqa: BLE001
@@ -420,7 +424,9 @@ class WebApp:
         limit = max(20, min(int(limit), 1000))
         symbol = self.cfg.market.symbol
         try:
-            df, src = fetch_klines(symbol, interval, limit)
+            df, src = fetch_klines(
+                symbol, interval, limit, prefer=self.engine.state.get("exchange", "binance")
+            )
         except DataError as exc:
             raise ApiError(str(exc), 502) from exc
         return {
@@ -724,7 +730,7 @@ class WebApp:
                 "probe": probe,
                 "error": "OKX 模拟盘/主网都连不上（多半是网络被墙，需要代理）"
                 if any(probe.values())
-                else "未设置 OKX_API_KEY / OKX_API_SECRET（可在本页填，或写进 .env 后重启）",
+                else "未设置 OKX 模拟盘/主网 API Key（可在本页填，或写进 .env 后重启）",
             }
 
         # 币安路径
@@ -767,7 +773,7 @@ class WebApp:
             "probe": probe,
             "error": "测试网/Demo 和主网都连不上（多半是网络被墙，需要代理）"
             if any(probe.values())
-            else "未设置 BINANCE_API_KEY / BINANCE_API_SECRET（可在本页填，或写进 .env 后重启）",
+            else "未设置币安模拟盘/主网 API Key（可在本页填，或写进 .env 后重启）",
         }
 
     # -- 多品种 ---------------------------------------------------------

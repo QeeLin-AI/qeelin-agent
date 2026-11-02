@@ -99,11 +99,39 @@ class TradingEngine:
 
     # ------------------------------------------------------------------
     def refresh_data(self, force: bool = False) -> tuple[pd.DataFrame, str]:
-        df, src = load_market(self.cfg.market, force_download=force)
+        # 行情源跟着「当前选的交易所」走：选 OKX 就用 OKX 永续的 K 线
+        df, src = load_market(
+            self.cfg.market, force_download=force, prefer=self.state.get("exchange", "binance")
+        )
         with self.lock:
             self.df = df
             self.data_source = src
         return df, src
+
+    def reload_for_exchange(self) -> None:
+        """切换交易所后把行情源也切过去：后台重拉，不卡住 HTTP 请求。"""
+        if getattr(self, "_reloading", False):
+            return
+        self._reloading = True
+        exchange = self.state.get("exchange", "binance")
+
+        def _worker() -> None:
+            try:
+                self.data_loading = True
+                from .data import _DEAD_UNTIL, _KL_CACHE
+
+                _KL_CACHE.clear()          # 短周期图也别再吐旧交易所的缓存
+                _DEAD_UNTIL.clear()        # 手动切换要重新探测，别被 10 分钟熔断挡住
+                self.refresh_data(force=True)
+                print(f"[data] 行情源已切到 {exchange}：{self.data_source}")
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"切换行情源失败：{type(exc).__name__}: {exc}"
+                print(f"[data] {self.last_error}")
+            finally:
+                self.data_loading = False
+                self._reloading = False
+
+        threading.Thread(target=_worker, daemon=True, name="reload-market").start()
 
     def start_data_load(self) -> None:
         """后台线程加载 K 线，不阻塞 Web 服务启动（窗口秒开）。
@@ -234,17 +262,19 @@ class TradingEngine:
         key, secret, passphrase = read_api_keys(exchange, testnet)
         if exchange == "okx":
             if not key or not secret:
-                raise ExchangeError(
-                    "未设置 OKX_API_KEY / OKX_API_SECRET（模拟盘需填模拟盘 Key，不是主网 Key）"
-                )
+                need = "OKX_DEMO_API_KEY / OKX_DEMO_API_SECRET" if testnet else "OKX_API_KEY / OKX_API_SECRET"
+                raise ExchangeError(f"未设置 {need}（模拟盘与主网是两套独立 Key）")
             self.live_client = OKXClient(
                 key, secret, passphrase, testnet=testnet, armed=self.armed, env=env
             )
         else:
             if not key or not secret:
-                raise ExchangeError(
-                    "未设置 BINANCE_API_KEY / BINANCE_API_SECRET（模拟盘需填 Demo Key，不是主网 Key）"
+                need = (
+                    "BINANCE_DEMO_API_KEY / BINANCE_DEMO_API_SECRET"
+                    if testnet
+                    else "BINANCE_API_KEY / BINANCE_API_SECRET"
                 )
+                raise ExchangeError(f"未设置 {need}（模拟盘与主网是两套独立 Key）")
             self.live_client = BinanceFuturesClient(
                 key, secret, testnet=testnet, armed=self.armed, env=env
             )
@@ -265,6 +295,7 @@ class TradingEngine:
         exchange = (exchange or self.state.get("exchange", "binance")).lower()
         if exchange not in ("binance", "okx"):
             raise ValueError("exchange 只能是 binance / okx")
+        prev_exchange = self.state.get("exchange", "binance")
         if mode == "paper":
             self.armed = False
             self.state["mode"] = "paper"
@@ -280,6 +311,8 @@ class TradingEngine:
             self.state["testnet"] = True
             self.state["exchange"] = exchange
             self._save()
+            if prev_exchange != exchange:
+                self.reload_for_exchange()
             return {
                 "mode": "testnet",
                 "armed": True,
@@ -303,6 +336,8 @@ class TradingEngine:
         self.state["testnet"] = testnet
         self.state["exchange"] = exchange
         self._save()
+        if prev_exchange != exchange:
+            self.reload_for_exchange()
         return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
     def switch_symbol(self, symbol: str) -> dict:
@@ -743,17 +778,17 @@ class TradingEngine:
                 "history": hist,
                 "last_error": self.last_error,
                 "exchange": self.state.get("exchange", "binance"),
-                "keys_binance": bool(os.getenv("BINANCE_API_KEY")),
-                "keys_okx": bool(os.getenv("OKX_API_KEY")),
+                "keys_binance": bool(os.getenv("BINANCE_DEMO_API_KEY")) or bool(os.getenv("BINANCE_API_KEY")),
+                "keys_okx": bool(os.getenv("OKX_DEMO_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
                 "live_keys": bool(os.getenv("BINANCE_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
-                # 模拟盘 / 主网 是两套独立 Key，分开报告，便于 UI 区分
+                # 模拟盘 / 主网 是四套独立 Key，分开报告，绝不互相回退
                 "keys": {
                     "binance": {
-                        "demo": bool(os.getenv("BINANCE_DEMO_API_KEY")) or bool(os.getenv("BINANCE_API_KEY")),
+                        "demo": bool(os.getenv("BINANCE_DEMO_API_KEY")),
                         "live": bool(os.getenv("BINANCE_API_KEY")),
                     },
                     "okx": {
-                        "demo": bool(os.getenv("OKX_DEMO_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
+                        "demo": bool(os.getenv("OKX_DEMO_API_KEY")),
                         "live": bool(os.getenv("OKX_API_KEY")),
                     },
                 },
