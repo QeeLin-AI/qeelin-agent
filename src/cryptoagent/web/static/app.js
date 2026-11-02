@@ -529,6 +529,14 @@ function renderStatus(s) {
       ? `${exName} · ${s.testnet ? '模拟盘' : '主网实盘'}${s.armed ? '' : '（未连接）'}`
       : '';
   }
+  // 已连接状态条：把「连着谁 / 切换 / 断开」放在面板外面，一眼能看到
+  if ($('connBar')) {
+    const showBar = s.mode === 'live' && s.armed;
+    $('connBar').classList.toggle('hidden', !showBar);
+    if (showBar) {
+      $('connBarText').textContent = `已连接：${exName} · ${s.testnet ? '模拟盘（Demo 假钱）' : '主网实盘（真钱）'}`;
+    }
+  }
   // 三个模式按钮的高亮跟着真实状态走
   const connected = s.mode === 'live' && s.armed;
   // 交易模式按钮高亮：展开某个模式面板时该按钮立刻变绿（选哪个绿哪个）；
@@ -943,6 +951,27 @@ $('tnSwitchBtn').addEventListener('click', async () => {
       poll();
     } catch (e) { toast(e.message, 'err'); }
   });
+});
+
+// 状态条上的「切换交易所」：直接展开当前模式对应的面板
+$('connSwitchBtn').addEventListener('click', () => {
+  const scope = (lastStatus && lastStatus.mode === 'live' && !lastStatus.testnet) ? 'live' : 'testnet';
+  const boxId = scope === 'live' ? 'liveBox' : 'testnetBox';
+  openPanel(boxId, scope === 'live' ? 'liveBtn' : 'testnetBtn');
+  selectExchange(scope, (lastStatus && lastStatus.exchange) || 'binance');
+  renderExchangePanel(scope);
+  $(boxId).scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+// 状态条上的「断开」
+$('connDisarmBtn').addEventListener('click', async () => {
+  if (blockIfAutoRunning('断开连接')) return;
+  try {
+    await api('/api/trading/disarm', 'POST', {});
+    closeModePanels();
+    toast('已断开交易所，回到本地模拟', 'ok');
+    poll();
+  } catch (e) { toast(e.message, 'err'); }
 });
 
 // 保存模拟盘 Key → 写 .env → 立刻自检

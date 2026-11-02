@@ -247,6 +247,10 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .seg.sel { border-color: var(--green); color: var(--green); background: rgba(22,199,132,.10); font-weight: 600; }
 #tnPassRow, #livePassRow { display: none; }
 #tnPassRow.show, #livePassRow.show { display: flex; }
+/* 已连接状态条：把「当前连的是谁 + 切换 + 断开」摆到面板外面，不用先点开设置 */
+.conn-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 2px; padding: 8px 12px; border: 1px solid rgba(22,199,132,.35); background: rgba(22,199,132,.08); border-radius: 8px; font-size: 12px; }
+.conn-bar .conn-text { color: var(--text); margin-right: auto; }
+.btn.sm { padding: 4px 10px; font-size: 12px; }
 /* 每个交易所的 Key / 连接状态一览 */
 .ex-status { margin: 8px 0 10px; font-size: 12px; line-height: 1.8; color: var(--muted); }
 .ex-status .sep { color: var(--line); margin: 0 6px; }
