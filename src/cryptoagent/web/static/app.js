@@ -269,6 +269,23 @@ $('riskDrawdown').addEventListener('change', async () => {
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
+function renderAutoResume(a) {
+  const chk = $('autoResumeChk');
+  const el = $('autoResumeState');
+  if (!chk || !el) return;
+  const on = !!(a && a.enabled);
+  chk.checked = on;
+  if (!a) { el.textContent = ''; return; }
+  if (!on) { el.textContent = '重启后自动恢复交易：关闭。开了之后服务重启会自动接着跑（模拟盘）。'; return; }
+  if (a.resumed) {
+    el.textContent = `重启后自动恢复交易：已开启 · 已恢复于 ${a.at || ''}（每 ${a.interval_sec || 300}s，自动下单=${a.execute ? '是' : '否'}）`;
+  } else if (a.error) {
+    el.textContent = `重启后自动恢复交易：已开启 · 本次未恢复：${a.error}`;
+  } else {
+    el.textContent = '重启后自动恢复交易：已开启（仅模拟盘）';
+  }
+}
+
 function renderAutoArm(a) {
   const chk = $('autoArmChk');
   const el = $('autoArmState');
@@ -289,6 +306,19 @@ function renderAutoArm(a) {
     el.textContent = `重启后自动解锁：已开启（${env}）`;
   }
 }
+
+$('autoResumeChk').addEventListener('change', async () => {
+  const on = $('autoResumeChk').checked;
+  try {
+    const d = await api('/api/trading/auto-resume', 'POST', { on });
+    renderAutoResume(d.auto_resume);
+    toast(on ? '已开启：服务重启后会自动恢复自动交易（仅模拟盘）' : '已关闭自动恢复', 'ok');
+    poll();
+  } catch (e) {
+    $('autoResumeChk').checked = !on;
+    toast(`设置失败：${e.message}`, 'err');
+  }
+});
 
 $('autoArmChk').addEventListener('change', async () => {
   const on = $('autoArmChk').checked;
@@ -585,6 +615,7 @@ function renderStatus(s) {
     $('livePos').textContent = '--';
   }
   renderAutoArm(s.auto_arm);
+  renderAutoResume(s.auto_resume);
   $('autoState').textContent = s.auto.running ? '运行中' : '停止';
   $('autoState').className = `badge ${s.auto.running ? 'on' : 'off'}`;
   $('autoMeta').textContent = s.auto.running

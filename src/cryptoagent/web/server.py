@@ -58,6 +58,16 @@ class WebApp:
             "attempts": 0,
             "error": "",
         }
+        # 重启后自动恢复「自动交易」：CRYPTOAGENT_AUTO_RESUME=on 才生效，且只在模拟盘（testnet/demo）。
+        self.auto_resume = os.getenv("CRYPTOAGENT_AUTO_RESUME", "off").strip().lower()
+        self.auto_resume_state: dict = {
+            "enabled": self.auto_resume == "on",
+            "resumed": False,
+            "at": "",
+            "interval_sec": 0,
+            "execute": False,
+            "error": "",
+        }
         # 自动研究（因子进化）：按 research.auto_interval_sec 定时重跑研究，更新因子库
         self.research_auto_state: dict = {
             "enabled": self.cfg.research.auto_interval_sec > 0,
@@ -107,6 +117,8 @@ class WebApp:
         if live and self.auto_arm_state["enabled"]:
             self.auto_arm_state["error"] = "启动中，等待网络…"
             threading.Thread(target=self._auto_arm_loop, name="auto-arm", daemon=True).start()
+        if live and self.auto_resume == "on":
+            threading.Thread(target=self._auto_resume_loop, name="auto-resume", daemon=True).start()
         if live and self.research_auto_state["enabled"]:
             self.start_research_auto()
 
@@ -217,12 +229,62 @@ class WebApp:
                 self.auto_arm_state["error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
         return {"auto_arm": self.auto_arm_state, "saved": value}
 
+    def set_auto_resume(self, payload: dict) -> dict:
+        """开关「重启后自动恢复自动交易」。只对模拟盘生效，主网实盘永不自动恢复。"""
+        on = bool(payload.get("on", False))
+        value = "on" if on else "off"
+        update_dotenv({"CRYPTOAGENT_AUTO_RESUME": value})
+        self.auto_resume = value
+        self.auto_resume_state["enabled"] = on
+        if not on:
+            self.auto_resume_state["resumed"] = False
+        return {"auto_resume": self.auto_resume_state, "saved": value}
+
+    def _auto_resume_loop(self, max_wait: int = 300) -> None:
+        """重启后恢复自动交易。三个条件都满足才动手：
+        1) .env 里 CRYPTOAGENT_AUTO_RESUME=on；2) 重启前确实在跑；3) 当前是模拟盘且已解锁。
+        主网实盘永不自动恢复——真钱必须每次手动确认。
+        """
+        eng = self.engine
+        if not getattr(eng, "auto_was_running", False):
+            self.auto_resume_state["error"] = "上次退出时未在运行，跳过"
+            return
+        waited = 0
+        while waited < 90 and not self.auto_arm_state.get("ok"):
+            time.sleep(2)
+            waited += 2
+        if not (eng.armed and eng.state.get("mode") == "live" and eng.state.get("testnet")):
+            self.auto_resume_state["error"] = "交易所未解锁或不是模拟盘，跳过自动恢复"
+            return
+        if eng.state.get("halt"):
+            self.auto_resume_state["error"] = "熔断开关打开，跳过"
+            return
+        waited = 0
+        while waited < max_wait and eng.df is None:
+            time.sleep(2)
+            waited += 2
+        prev = eng.state.get("auto") or {}
+        interval = int(prev.get("interval_sec") or 300)
+        execute = bool(prev.get("execute"))
+        eng.start_auto(interval, execute)
+        self.auto_resume_state.update(
+            {
+                "resumed": True,
+                "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "interval_sec": interval,
+                "execute": execute,
+                "error": "",
+            }
+        )
+        print(f"[auto-resume] 已恢复自动交易：每 {interval}s，自动下单={execute}")
+
     # ------------------------------------------------------------------
     def status(self) -> dict:
         # 有实时价就传给引擎，权益/浮盈亏/权益曲线都按实时价算
         st = self.engine.status(price_override=self.live_price)
         st["live"] = self.live_status()
         st["auto_arm"] = self.auto_arm_state
+        st["auto_resume"] = self.auto_resume_state
         st["research_auto"] = self.research_auto_state
         st["risk"] = self.risk_config()
         st["account_view"] = "local"
@@ -1338,6 +1400,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.set_risk(payload)})
         if path == "/api/trading/auto-arm":
             return self._json({"ok": True, "data": app.set_auto_arm(payload)})
+        if path == "/api/trading/auto-resume":
+            return self._json({"ok": True, "data": app.set_auto_resume(payload)})
         if path == "/api/trading/auto":
             if payload.get("running"):
                 data = eng.start_auto(

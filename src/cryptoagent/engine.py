@@ -34,8 +34,10 @@ class TradingEngine:
         self.state_path = Path(cfg.runs_dir) / "engine_state.json"
         self.state = self._default_state()
         self._load()
-        # 打开/重启后不自动运行交易循环：线程只在用户点「启动」时由 start_auto 创建，
-        # 这里把持久化的 running 标记复位，避免界面误显示「运行中」。
+        # 打开/重启后默认不自动运行交易循环：线程只在用户点「启动」时由 start_auto 创建。
+        # 先把「上次是否是运行中」记下来，供 CRYPTOAGENT_AUTO_RESUME=on 时在模拟盘下恢复。
+        _prev_auto = dict(self.state.get("auto") or {})
+        self.auto_was_running = bool(_prev_auto.get("running"))
         self.state.setdefault("auto", {})["running"] = False
 
         self.df: pd.DataFrame | None = None
