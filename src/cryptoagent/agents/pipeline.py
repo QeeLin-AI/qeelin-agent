@@ -87,6 +87,26 @@ class Decision:
     degraded: bool = False
 
 
+def round_price(x: float) -> float:
+    """按价格量级保留小数位。
+
+    原来固定 round(x, 2)：BTC 没问题，但 DOGE(0.07)、PEPE(0.00001) 这类会被抹成同一个价，
+    导致空单止损落到现价下方、交易所报 -2021 Order would immediately trigger。
+    """
+    x = float(x)
+    if x >= 1000:
+        return round(x, 2)
+    if x >= 100:
+        return round(x, 3)
+    if x >= 1:
+        return round(x, 4)
+    if x >= 0.1:
+        return round(x, 5)
+    if x >= 0.01:
+        return round(x, 6)
+    return round(x, 8)
+
+
 def _build_order(proposal: dict, decision: RiskDecision, price: float, equity: float) -> dict | None:
     if not decision.approved or decision.action == "flat" or decision.size_pct <= 0:
         return None
@@ -104,8 +124,8 @@ def _build_order(proposal: dict, decision: RiskDecision, price: float, equity: f
         "notional_usd": round(notional, 2),
         "leverage": decision.leverage,
         "entry_ref_price": price,
-        "stop_loss_price": round(price * (1 - sign * stop), 2),
-        "take_profit_price": round(price * (1 + sign * tp), 2),
+        "stop_loss_price": round_price(price * (1 - sign * stop)),
+        "take_profit_price": round_price(price * (1 + sign * tp)),
         "risk_usd": round(notional * stop, 2),
         "max_loss_pct_of_equity": round(decision.size_pct * decision.leverage * stop, 4),
         "status": "PLANNED",  # 默认不发送

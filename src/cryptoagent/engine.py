@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .agents.pipeline import Decision, TradingPipeline, render_markdown
+from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
 from .config import AppConfig
 from .data import load_market
 from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
@@ -216,7 +216,7 @@ class TradingEngine:
             "action": "OPEN",
             "side": side,
             "qty": round(qty, 6),
-            "price": round(fill, 2),
+            "price": round_price(fill),
             "fee": round(fee, 4),
             "reason": reason,
         }
@@ -242,7 +242,7 @@ class TradingEngine:
             "action": "CLOSE",
             "side": pos["side"],
             "qty": round(pos["qty"], 6),
-            "price": round(fill, 2),
+            "price": round_price(fill),
             "fee": round(fee, 4),
             "pnl": round(pnl - fee, 4),
             "reason": reason,
@@ -474,6 +474,20 @@ class TradingEngine:
             lev = float(order["leverage"])
             stop = float(order["stop_loss_price"])
             tp = float(order["take_profit_price"])
+
+            # 方向兜底：空单止损必须高于现价、多单必须低于现价，否则交易所直接 -2021
+            # （历史计划里存着的老价格也可能已经穿越现价，执行前统一校正一次）
+            gap = 0.003
+            if side == "SHORT":
+                if stop <= price * (1 + 0.0005):
+                    stop = round_price(price * (1 + gap))
+                if tp >= price * (1 - 0.0005):
+                    tp = round_price(price * (1 - gap))
+            else:
+                if stop >= price * (1 - 0.0005):
+                    stop = round_price(price * (1 - gap))
+                if tp <= price * (1 + 0.0005):
+                    tp = round_price(price * (1 + gap))
 
             if self.state["mode"] == "live":
                 if not self.armed or self.live_client is None:
