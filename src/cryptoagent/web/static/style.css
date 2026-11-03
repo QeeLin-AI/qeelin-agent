@@ -781,38 +781,73 @@ select option { background: var(--panel); color: var(--text); }
 .input-suffix input[type="number"] { width: 72px; }
 
 /* ---------- 交易参数：分组卡片 ---------- */
-.risk-group { margin-top: 16px; }
-.risk-group-title {
+.set-group { margin-top: 16px; }
+.set-group-title {
   display: flex; align-items: center; gap: 7px;
   font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 9px;
 }
-.risk-group-title::before {
+.set-group-title::before {
   content: ""; width: 3px; height: 13px; border-radius: 2px; background: var(--cyan);
 }
-.risk-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
-.risk-field {
+.set-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.set-field {
   background: var(--panel-2); border: 1px solid transparent; border-radius: 8px;
   padding: 10px 12px; margin: 0; display: flex; flex-direction: column; gap: 7px;
   transition: border-color .15s ease;
 }
-.risk-field:hover { border-color: var(--line); }
-.risk-field.wide { grid-column: span 2; }
-.risk-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.risk-field .input-suffix {
+.set-field:hover { border-color: var(--line); }
+.set-field.wide { grid-column: span 2; }
+.set-grid.narrow { grid-template-columns: minmax(240px, 460px); }
+.set-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.set-field .input-suffix {
   width: 100%; justify-content: flex-end; gap: 7px; align-self: stretch;
   border-bottom: 1px solid #33405a; padding-bottom: 4px;
 }
-.risk-field .input-suffix:focus-within { border-bottom-color: var(--cyan); }
-.risk-field .input-suffix input[type="number"] {
+.set-field .input-suffix:focus-within { border-bottom-color: var(--cyan); }
+.set-field .input-suffix input[type="number"] {
   width: auto; flex: 1; text-align: right; font-variant-numeric: tabular-nums;
   background: transparent; border: none; border-radius: 0; padding: 0;
   font-size: 15px; font-weight: 600;
 }
-.risk-field .input-suffix input[type="number"]:focus { outline: none; }
-.risk-field select { width: 100%; max-width: none; margin: 0; }
-.risk-hint { font-size: 11.5px; color: var(--muted); line-height: 1.65; margin: 8px 0 0; }
-html[data-theme="light"] .risk-field { background: var(--panel); border-color: var(--line); }
-html[data-theme="light"] .risk-field .input-suffix input[type="number"] { border-bottom-color: var(--line); }
+.set-field .input-suffix input[type="number"]:focus { outline: none; }
+.set-field select { width: 100%; max-width: none; margin: 0; }
+.set-hint { font-size: 11.5px; color: var(--muted); line-height: 1.65; margin: 8px 0 0; }
+html[data-theme="light"] .set-field { background: var(--panel); border-color: var(--line); }
+html[data-theme="light"] .set-field .input-suffix input[type="number"] { border-bottom-color: var(--line); }
+
+/* 长文本字段：整行「标签左 / 输入右」，字段之间用细分隔线 */
+.set-box { border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; margin-top: 10px; }
+.set-row {
+  display: flex; align-items: center; gap: 14px; margin: 0; padding: 10px 0;
+  border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted);
+}
+.set-row:last-child { border-bottom: none; }
+.set-row > .row-label { flex: 0 0 138px; white-space: nowrap; }
+.set-row > input, .set-row > select { flex: 1; min-width: 0; width: auto; max-width: none; }
+.set-row > input[type="text"], .set-row > input[type="password"] {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px;
+}
+
+/* 只读状态卡 */
+.set-stats { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); margin-top: 10px; }
+.set-stat {
+  background: var(--panel-2); border-radius: 8px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 5px; font-size: 12px; min-width: 0;
+}
+.set-stat > span { color: var(--muted); }
+.set-stat > b { font-size: 14px; font-weight: 600; color: var(--text); word-break: break-all; }
+
+/* 卡片内的开关列表 */
+.set-switch-list { margin-top: 10px; }
+.set-switch-list .switch-row { margin: 0; padding: 9px 0; border-top: 1px solid var(--line); }
+html[data-theme="light"] .set-box { border-color: var(--line); }
+
+/* 状态行（峰谷时段等） */
+.set-status-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 10px; }
+
+/* 模拟盘折叠区用青色，与主网的红色危险框区分 */
+.live-box.demo { border-color: rgba(34, 211, 238, .32); background: rgba(34, 211, 238, .045); }
+html[data-theme="light"] .live-box.demo { border-color: rgba(14, 116, 144, .3); background: rgba(34, 211, 238, .06); }
 /* 表格单元格：数值不换行，长文本可换行，避免撑爆或溢出 */
 .table td { word-break: break-word; }
 .table td[class*="mono"], .table td.num { white-space: nowrap; }

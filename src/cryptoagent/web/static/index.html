@@ -276,19 +276,21 @@
   <section id="tab-settings" class="panel">
     <div class="card">
       <div class="card-head"><h2>交易与交易所</h2><span id="exNow" class="muted"></span><span id="armState" class="badge paper">PAPER</span></div>
-    <div class="mode-row">
-      <button id="paperBtn" class="btn selected">本地模拟</button>
-      <button id="testnetBtn" class="btn">模拟盘</button>
-      <button id="liveBtn" class="btn">主网实盘</button>
+    <div class="set-group">
+      <div class="set-group-title">运行模式</div>
+      <div class="mode-row">
+        <button id="paperBtn" class="btn selected">本地模拟</button>
+        <button id="testnetBtn" class="btn">模拟盘</button>
+        <button id="liveBtn" class="btn">主网实盘</button>
+      </div>
+      <p class="set-hint">
+        本地模拟＝自己撮合，不联网下单；模拟盘＝发单到所选交易所的 Demo 账户（假钱）；主网实盘＝真钱。<br />
+        想接交易所 API：点「模拟盘 / 主网实盘」展开凭据设置，选币安或 OKX 再填 Key；<b>再点一次已选中的按钮即可收起</b>。
+      </p>
     </div>
-    <p class="muted" style="margin:8px 0 0">
-      本地模拟＝自己撮合，不联网下单；模拟盘＝发单到所选交易所的模拟盘账户（币安 / OKX），用的是假钱 Demo 账户；主网实盘＝真钱。
-    </p>
-    <p class="muted" style="margin:6px 0 0">
-      想接交易所 API：点「模拟盘 / 主网实盘」展开设置，选币安或 OKX 再填对应的 Key；<b>再点一次已选中的按钮即可收起 / 重新展开</b>。
-    </p>
 
-    <div id="testnetBox" class="live-box hidden">
+    <div id="testnetBox" class="live-box demo hidden">
+      <div class="set-group-title">模拟盘凭据</div>
       <div class="ex-choice" data-scope="testnet">
         <span class="ex-label">交易所</span>
         <button type="button" class="seg sel" data-ex="binance">币安</button>
@@ -302,29 +304,32 @@
         OKX → 交易 → 模拟交易 → 个人中心 → 创建模拟盘 API Key。两者都是<strong>独立 Key</strong>，和主网 Key 不通用，请分别保存。
       </p>
       <p id="tnExStatus" class="ex-status"></p>
+      <div class="set-box">
+        <label class="set-row"><span class="row-label">API Key</span><input id="tnKey" type="text" placeholder="模拟盘的 API Key" autocomplete="off" /></label>
+        <label class="set-row"><span class="row-label">API Secret</span><input id="tnSecret" type="password" placeholder="模拟盘的 Secret（只显示一次）" autocomplete="off" /></label>
+        <label class="set-row" id="tnPassRow"><span class="row-label">Passphrase</span><input id="tnPass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
+      </div>
       <div class="actions">
-        <button id="tnSwitchBtn" class="btn">连接到所选交易所</button>
+        <button id="tnSaveBtn" class="btn primary">保存到 .env 并连接</button>
+        <button id="tnTestBtn" class="btn ghost">连接自检</button>
+        <button id="tnSwitchBtn" class="btn ghost">连接到所选交易所</button>
         <button id="tnDisarmBtn" class="btn ghost">断开（回到本地模拟）</button>
       </div>
-      <label class="field">API Key<input id="tnKey" type="text" placeholder="模拟盘的 API Key" autocomplete="off" /></label>
-      <label class="field">API Secret<input id="tnSecret" type="password" placeholder="模拟盘的 Secret（只显示一次）" autocomplete="off" /></label>
-      <label class="field" id="tnPassRow">Passphrase（OKX 专用）<input id="tnPass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
-      <div class="actions">
-        <button id="tnSaveBtn" class="btn">保存到 .env 并连接</button>
-        <button id="tnTestBtn" class="btn ghost">连接自检</button>
-      </div>
       <p id="tnStatus" class="muted"></p>
-      <label class="inline">
-        <input id="autoArmChk" type="checkbox" /> 服务重启后自动解锁（写进 .env）
-      </label>
-      <p id="autoArmState" class="muted"></p>
-      <label class="inline">
-        <input id="autoResumeChk" type="checkbox" /> 服务重启后自动恢复自动交易（仅模拟盘，主网必须手动）
-      </label>
-      <p id="autoResumeState" class="muted"></p>
+      <div class="set-switch-list">
+        <label class="inline">
+          <input id="autoArmChk" type="checkbox" /> 服务重启后自动解锁（写进 .env）
+        </label>
+        <p id="autoArmState" class="muted"></p>
+        <label class="inline">
+          <input id="autoResumeChk" type="checkbox" /> 服务重启后自动恢复自动交易（仅模拟盘，主网必须手动）
+        </label>
+        <p id="autoResumeState" class="muted"></p>
+      </div>
     </div>
 
     <div id="liveBox" class="live-box hidden">
+      <div class="set-group-title">主网凭据</div>
       <div class="ex-choice" data-scope="live">
         <span class="ex-label">交易所</span>
         <button type="button" class="seg sel" data-ex="binance">币安</button>
@@ -339,37 +344,44 @@
         请只开合约交易权限、禁用提现、绑定 IP。
       </p>
       <p id="liveExStatus" class="ex-status"></p>
+      <div class="set-box">
+        <label class="set-row"><span class="row-label">API Key</span><input id="liveKey" type="text" placeholder="主网 API Key" autocomplete="off" /></label>
+        <label class="set-row"><span class="row-label">API Secret</span><input id="liveSecret" type="password" placeholder="主网 Secret" autocomplete="off" /></label>
+        <label class="set-row" id="livePassRow"><span class="row-label">Passphrase</span><input id="livePass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
+        <label class="set-row"><span class="row-label">确认文本</span><input id="confirmText" type="text" placeholder="我确认使用真实资金" autocomplete="off" /></label>
+      </div>
       <div class="actions">
+        <button id="armBtn" class="btn danger">解锁主网实盘</button>
         <button id="liveDisarmBtn" class="btn ghost">断开（回到本地模拟）</button>
       </div>
-      <label class="field">API Key<input id="liveKey" type="text" placeholder="主网 API Key" autocomplete="off" /></label>
-      <label class="field">API Secret<input id="liveSecret" type="password" placeholder="主网 Secret" autocomplete="off" /></label>
-      <label class="field" id="livePassRow">Passphrase（OKX 专用）<input id="livePass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
-      <label class="field">在下面输入「我确认使用真实资金」以解锁
-        <input id="confirmText" type="text" placeholder="我确认使用真实资金" autocomplete="off" />
-      </label>
-      <button id="armBtn" class="btn danger">解锁主网实盘</button>
       <p id="keyStatus" class="muted"></p>
-      <label class="inline"><input id="testnetChk" type="checkbox" /> 走模拟盘环境（等同上面的「模拟盘」）</label>
+      <div class="set-switch-list">
+        <label class="inline"><input id="testnetChk" type="checkbox" /> 走模拟盘环境（等同上面的「模拟盘」）</label>
+      </div>
     </div>
 
-    <div class="kv">
-      <div><span>API Key</span><b id="keysPresent">--</b></div>
-      <div><span>连接状态</span><b id="connState">未连接</b></div>
-      <div><span>账户余额</span><b id="liveBalance">--</b></div>
-      <div><span>交易所持仓</span><b id="livePos">--</b></div>
+    <div class="set-group">
+      <div class="set-group-title">连接状态</div>
+      <div class="set-stats">
+        <div class="set-stat"><span>API Key</span><b id="keysPresent">--</b></div>
+        <div class="set-stat"><span>连接状态</span><b id="connState">未连接</b></div>
+        <div class="set-stat"><span>账户余额</span><b id="liveBalance">--</b></div>
+        <div class="set-stat"><span>交易所持仓</span><b id="livePos">--</b></div>
+      </div>
+      <div class="actions">
+        <button id="syncBtn" class="btn ghost">同步交易所账户</button>
+        <button id="selftestBtn" class="btn ghost">连接自检</button>
+      </div>
     </div>
-    <button id="syncBtn" class="btn ghost">同步交易所账户</button>
-    <button id="selftestBtn" class="btn ghost">连接自检</button>
     </div>
     <div class="card">
       <div class="card-head"><h2>交易参数</h2><span class="muted">杠杆与四项硬顶</span></div>
 
-      <div class="risk-group">
-        <div class="risk-group-title">杠杆</div>
-        <div class="risk-grid">
-          <label class="risk-field wide">
-            <span class="risk-label">模式</span>
+      <div class="set-group">
+        <div class="set-group-title">杠杆</div>
+        <div class="set-grid narrow">
+          <label class="set-field">
+            <span class="set-label">模式</span>
             <select id="levSelect">
               <option value="0">自动（跟随决策，上限取配置与交易所较小值）</option>
               <option value="1">1x 不加杠杆</option>
@@ -384,35 +396,35 @@
             </select>
           </label>
         </div>
-        <p class="risk-hint">杠杆只决定占用多少保证金、不放大风险；真正的约束是下面四项硬顶。</p>
+        <p class="set-hint">杠杆只决定占用多少保证金、不放大风险；真正的约束是下面四项硬顶。</p>
       </div>
 
-      <div class="risk-group">
-        <div class="risk-group-title">四项硬顶</div>
-        <div class="risk-grid">
-          <label class="risk-field">
-            <span class="risk-label">单笔风险上限</span>
+      <div class="set-group">
+        <div class="set-group-title">四项硬顶</div>
+        <div class="set-grid">
+          <label class="set-field">
+            <span class="set-label">单笔风险上限</span>
             <span class="input-suffix">
               <input id="riskTotal" type="number" min="0.1" max="5" step="0.1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
-          <label class="risk-field">
-            <span class="risk-label">仓位持仓上限</span>
+          <label class="set-field">
+            <span class="set-label">仓位持仓上限</span>
             <span class="input-suffix">
               <input id="riskPosCapInput" type="number" min="1" max="100" step="1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
-          <label class="risk-field">
-            <span class="risk-label">当日亏损上限</span>
+          <label class="set-field">
+            <span class="set-label">当日亏损上限</span>
             <span class="input-suffix">
               <input id="riskDaily" type="number" min="1" max="30" step="0.5" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
-          <label class="risk-field">
-            <span class="risk-label">最大回撤</span>
+          <label class="set-field">
+            <span class="set-label">最大回撤</span>
             <span class="input-suffix">
               <input id="riskDrawdown" type="number" min="5" max="50" step="1" />
               <span class="suffix">% 权益</span>
@@ -421,142 +433,171 @@
         </div>
       </div>
 
-      <div class="risk-group">
-        <div class="risk-group-title">仓位方式</div>
-        <div class="risk-grid">
-          <label class="risk-field">
-            <span class="risk-label">仓位怎么定</span>
+      <div class="set-group">
+        <div class="set-group-title">仓位方式</div>
+        <div class="set-grid">
+          <label class="set-field">
+            <span class="set-label">仓位大小</span>
             <select id="riskSizingMode">
               <option value="llm">听交易员（模型给多少用多少）</option>
               <option value="risk">按风险预算反推</option>
               <option value="max">两者取大（更激进）</option>
             </select>
           </label>
-          <label class="risk-field">
-            <span class="risk-label">单笔风险预算</span>
+          <label class="set-field">
+            <span class="set-label">单笔风险预算</span>
             <span class="input-suffix">
               <input id="riskBudget" type="number" min="0.1" max="5" step="0.1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
-          <label class="risk-field">
-            <span class="risk-label">杠杆下限</span>
+          <label class="set-field">
+            <span class="set-label">杠杆下限</span>
             <span class="input-suffix">
               <input id="riskMinLev" type="number" min="1" max="50" step="1" />
               <span class="suffix">x</span>
             </span>
           </label>
         </div>
-        <p class="risk-hint">「按风险预算反推」= 仓位由 预算 ÷ 止损幅度 决定，模型只负责方向与止损；「两者取大」会托底到预算，模型给得更大时听模型。</p>
+        <p class="set-hint">「按风险预算反推」= 仓位由 预算 ÷ 止损幅度 决定，模型只负责方向与止损；「两者取大」会托底到预算，模型给得更大时听模型。</p>
       </div>
     </div>
     <div class="card">
       <div class="card-head"><h2>LLM 模型设置</h2><span class="muted" id="llmStatus">--</span></div>
-      <label class="field">服务商
-        <select id="llmProvider">
-          <option value="mock">mock（离线规则兜底）</option>
-          <option value="openai">OpenAI 兼容网关</option>
-        </select>
-      </label>
-      <label class="field">模型名称
-        <input id="llmModel" type="text" placeholder="如 agnes-3.0-flash / deepseek-chat" />
-      </label>
-      <label class="field">Base URL
-        <input id="llmBaseUrl" type="text" placeholder="https://api.xxx.com/v1" />
-      </label>
-      <label class="field">API Key
-        <input id="llmApiKey" type="password" placeholder="sk-...（留空则不修改）" />
-      </label>
-      <div class="field" style="margin:12px 0">
-        <span style="color:var(--text);font-size:13px;font-weight:600">峰谷计价（DeepSeek 官方）</span>
-        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+
+      <div class="set-group">
+        <div class="set-group-title">接入参数</div>
+        <div class="set-grid">
+          <label class="set-field">
+            <span class="set-label">服务商</span>
+            <select id="llmProvider">
+              <option value="mock">mock（离线规则兜底）</option>
+              <option value="openai">OpenAI 兼容网关</option>
+            </select>
+          </label>
+          <label class="set-field">
+            <span class="set-label">模型名称</span>
+            <input id="llmModel" type="text" placeholder="如 deepseek-flash / deepseek-v4-pro" />
+          </label>
+        </div>
+        <div class="set-box">
+          <label class="set-row"><span class="row-label">Base URL</span><input id="llmBaseUrl" type="text" placeholder="https://api.xxx.com/v1" /></label>
+          <label class="set-row"><span class="row-label">API Key</span><input id="llmApiKey" type="password" placeholder="sk-...（留空则不修改）" /></label>
+        </div>
+        <p class="set-hint">改完立即生效（下次决策使用新配置）。API Key 只回显尾号，留空表示保持原值。</p>
+      </div>
+
+      <div class="set-group">
+        <div class="set-group-title">峰谷计价（DeepSeek 官方）</div>
+        <div class="set-status-line">
           <span id="llmOffpeak" class="tag">--</span>
           <span class="muted" id="llmPeakHint" style="font-size:11.5px">--</span>
         </div>
+        <div class="set-grid">
+          <label class="set-field">
+            <span class="set-label">峰时决策</span>
+            <select id="llmPeakMode">
+              <option value="full">照常使用 LLM（质量优先）</option>
+              <option value="thrift">省钱模式（峰时用规则兜底）</option>
+            </select>
+          </label>
+          <label class="set-field">
+            <span class="set-label">节假日（可选）</span>
+            <input id="llmPeakHolidays" type="text" placeholder="2026-10-01,2026-10-02" />
+          </label>
+        </div>
+        <div class="set-switch-list">
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">因子研究仅在谷时调用 LLM</span>
+              <span class="d">研究可延后：峰时改用模板提议器，谷时（半价）再跑 LLM，省一半费用</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="llmOffpeakResearch" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+        </div>
       </div>
-      <label class="field">峰时决策
-        <select id="llmPeakMode">
-          <option value="full">照常使用 LLM（推荐，质量优先）</option>
-          <option value="thrift">省钱模式（峰时用规则兜底，会标注降级）</option>
-        </select>
-      </label>
-      <label class="switch-row">
-        <span class="switch-label">
-          <span class="t">因子研究仅在谷时调用 LLM</span>
-          <span class="d">研究可延后：峰时改用模板提议器，谷时（半价）再跑 LLM，省一半费用</span>
-        </span>
-        <label class="switch"><input type="checkbox" id="llmOffpeakResearch" /><span class="track"><span class="thumb"></span></span></label>
-      </label>
-      <label class="field">节假日（可选）
-        <input id="llmPeakHolidays" type="text" placeholder="2026-10-01,2026-10-02（这些日期按谷时计价）" />
-      </label>
+
       <div class="actions">
         <button id="llmSaveBtn" class="btn primary">保存</button>
         <button id="llmTestBtn" class="btn ghost">测试连接</button>
       </div>
-      <p class="muted">改完立即生效（下次决策使用新配置）。API Key 只回显尾号，留空表示保持原值。</p>
     </div>
 
     <div class="card">
       <div class="card-head"><h2>情绪 / 新闻源（A1）</h2><span class="muted" id="sentimentStatus">--</span></div>
-      <label class="switch-row">
-        <span class="switch-label">
-          <span class="t">启用情绪分析</span>
-          <span class="d">关闭后分析师不再接入任何舆情源，仅用本地价格行为代理（确定性兜底，永不报错）</span>
-        </span>
-        <label class="switch"><input type="checkbox" id="sentimentEnabled" /><span class="track"><span class="thumb"></span></span></label>
-      </label>
-      <label class="field">新闻源
-        <select id="sentimentSource">
-          <option value="price_action">价格行为代理（本地，无需联网）</option>
-          <option value="cryptopanic">CryptoPanic 聚合新闻（需 API Key）</option>
-        </select>
-      </label>
-      <label class="field" id="cpKeyRow">CryptoPanic API Key
-        <input id="sentimentApiKey" type="password" placeholder="留空则不修改" />
-      </label>
-      <div class="actions" style="margin-left:0;margin-top:4px">
+
+      <div class="set-group">
+        <div class="set-group-title">数据源</div>
+        <div class="set-switch-list" style="margin-top:0">
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">启用情绪分析</span>
+              <span class="d">关闭后分析师不再接入任何舆情源，仅用本地价格行为代理（确定性兜底，永不报错）</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="sentimentEnabled" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+        </div>
+        <div class="set-grid narrow">
+          <label class="set-field">
+            <span class="set-label">新闻源</span>
+            <select id="sentimentSource">
+              <option value="price_action">价格行为代理（本地，无需联网）</option>
+              <option value="cryptopanic">CryptoPanic 聚合新闻（需 API Key）</option>
+            </select>
+          </label>
+        </div>
+        <div class="set-box">
+          <label class="set-row" id="cpKeyRow"><span class="row-label">CryptoPanic Key</span><input id="sentimentApiKey" type="password" placeholder="留空则不修改" /></label>
+        </div>
+        <p class="set-hint">未配置 Key 或源不可达时自动降级到本地价格行为代理，交易主循环绝不中断。</p>
+      </div>
+      <div class="actions">
         <button id="sentimentSaveBtn" class="btn primary">保存</button>
       </div>
-      <p class="muted">未配置 Key 或源不可达时自动降级到本地价格行为代理，交易主循环绝不中断。</p>
     </div>
 
     <div class="card">
       <div class="card-head"><h2>通知 / 告警（A2）</h2><span class="muted" id="notifyStatus">--</span></div>
-      <label class="switch-row">
-        <span class="switch-label">
-          <span class="t">启用通知</span>
-          <span class="d">主开关：关闭后不向任何通道投递（控制台与应用内日志也将暂停）</span>
-        </span>
-        <label class="switch"><input type="checkbox" id="notifyEnabled" /><span class="track"><span class="thumb"></span></span></label>
-      </label>
-      <div class="field" style="margin:12px 0">
-        <span style="color:var(--text);font-size:13px;font-weight:600">投递通道</span>
-        <div class="chips" id="notifyChannels">
+
+      <div class="set-group">
+        <div class="set-group-title">投递通道</div>
+        <div class="set-switch-list" style="margin-top:0">
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">启用通知</span>
+              <span class="d">主开关：关闭后不向任何通道投递（控制台与应用内日志也将暂停）</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="notifyEnabled" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+        </div>
+        <div class="chips" id="notifyChannels" style="margin-top:10px">
           <label class="chip"><input type="checkbox" value="console" /> 控制台</label>
           <label class="chip"><input type="checkbox" value="inapp" /> 应用内</label>
           <label class="chip"><input type="checkbox" value="webhook" /> Webhook</label>
           <label class="chip"><input type="checkbox" value="telegram" /> Telegram</label>
           <label class="chip"><input type="checkbox" value="email" /> 邮件</label>
         </div>
-        <span class="muted" style="font-size:11.5px">至少保留「控制台 / 应用内」其一，确保通知可查</span>
+        <p class="set-hint">至少保留「控制台 / 应用内」其一，确保通知可查。</p>
       </div>
-      <label class="field">Webhook URL<input id="notifyWebhook" type="text" placeholder="https://..." /></label>
-      <div class="kv" style="margin-top:8px">
-        <label class="field">Telegram Token<input id="notifyTgToken" type="password" placeholder="bot...:..." /></label>
-        <label class="field">Telegram Chat ID<input id="notifyTgChat" type="text" placeholder="123456789" /></label>
+
+      <div class="set-group">
+        <div class="set-group-title">外部通道凭据</div>
+        <div class="set-box">
+          <label class="set-row"><span class="row-label">Webhook URL</span><input id="notifyWebhook" type="text" placeholder="https://..." /></label>
+          <label class="set-row"><span class="row-label">Telegram Token</span><input id="notifyTgToken" type="password" placeholder="bot...:..." /></label>
+          <label class="set-row"><span class="row-label">Telegram Chat ID</span><input id="notifyTgChat" type="text" placeholder="123456789" /></label>
+          <label class="set-row"><span class="row-label">SMTP 主机</span><input id="notifySmtpHost" type="text" placeholder="smtp.xxx.com" /></label>
+          <label class="set-row"><span class="row-label">SMTP 端口</span><input id="notifySmtpPort" type="text" placeholder="465" /></label>
+          <label class="set-row"><span class="row-label">SMTP 账号</span><input id="notifySmtpUser" type="text" placeholder="user@xxx.com" /></label>
+          <label class="set-row"><span class="row-label">SMTP 密码</span><input id="notifySmtpPass" type="password" placeholder="app password" /></label>
+          <label class="set-row"><span class="row-label">收件人</span><input id="notifySmtpTo" type="text" placeholder="to@xxx.com" /></label>
+        </div>
+        <p class="set-hint">外部通道凭据只写入 .env（不入仓库、不回显明文）；任一通道失败均被捕获并跳过，绝不中断交易。</p>
       </div>
-      <div class="kv" style="margin-top:8px">
-        <label class="field">SMTP 主机<input id="notifySmtpHost" type="text" placeholder="smtp.xxx.com" /></label>
-        <label class="field">SMTP 端口<input id="notifySmtpPort" type="text" placeholder="465" /></label>
-        <label class="field">SMTP 账号<input id="notifySmtpUser" type="text" placeholder="user@xxx.com" /></label>
-        <label class="field">SMTP 密码<input id="notifySmtpPass" type="password" placeholder="app password" /></label>
-        <label class="field">收件人<input id="notifySmtpTo" type="text" placeholder="to@xxx.com" /></label>
-      </div>
-      <div class="actions" style="margin-left:0;margin-top:4px">
+
+      <div class="actions">
         <button id="notifySaveBtn" class="btn primary">保存</button>
       </div>
-      <p class="muted">外部通道凭据只写入 .env（不入仓库、不回显明文）；任一通道失败均被捕获并跳过，绝不中断交易。</p>
     </div>
   </section>
 </main>
