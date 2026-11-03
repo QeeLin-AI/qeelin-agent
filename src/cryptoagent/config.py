@@ -79,6 +79,44 @@ class RiskConfig:
     max_slippage_bps: float = 10.0
     min_confidence: float = 0.55
     kill_switch_file: str = "runs/TRADING_HALT"
+    # —— 组合层风控（A3）——
+    # 注意：单笔最大名义敞口 = max_position_pct × max_leverage = 0.30 × 3 = 0.90（占权益），
+    # 所以这两个上限必须 ≥ 0.90，否则会误拒一笔正常的满仓单。它们真正的作用是
+    # 在多品种/多笔同时持仓时约束「叠加敞口」，而非限制单笔。
+    max_portfolio_notional_pct: float = 1.20   # 全部持仓名义敞口上限（占权益）
+    correlated_exposure_pct: float = 0.90      # 同一相关性组内同向敞口上限（占权益）
+    # 相关性分组：同组品种视为高度相关，同向叠加敞口受 correlated_exposure_pct 约束。
+    # 默认把大盘币放一组、山寨币放一组；接了真实相关性矩阵后可覆盖。
+    correlation_groups: list[list[str]] = field(
+        default_factory=lambda: [
+            ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"],
+            ["XRPUSDT", "DOGEUSDT"],
+        ]
+    )
+
+
+@dataclass
+class SentimentConfig:
+    """情绪/新闻源配置（A1）。默认 price_action 为本地确定性代理，绝不依赖外网。"""
+    enabled: bool = True
+    source: str = "price_action"          # price_action | cryptopanic
+    cryptopanic_api_key_env: str = "CRYPTOPANIC_API_KEY"
+    cache_ttl_sec: int = 600
+
+
+@dataclass
+class NotifyConfig:
+    """通知/告警配置（A2）。多通道，默认仅控制台 + 应用内日志，绝不因通知失败而中断交易。"""
+    channels: list[str] = field(default_factory=lambda: ["console", "inapp"])
+    webhook_url_env: str = "CRYPTOAGENT_WEBHOOK_URL"
+    telegram_token_env: str = "CRYPTOAGENT_TG_TOKEN"
+    telegram_chat_env: str = "CRYPTOAGENT_TG_CHAT"
+    email_smtp_host_env: str = "CRYPTOAGENT_SMTP_HOST"
+    email_smtp_port_env: str = "CRYPTOAGENT_SMTP_PORT"
+    email_user_env: str = "CRYPTOAGENT_SMTP_USER"
+    email_pass_env: str = "CRYPTOAGENT_SMTP_PASS"
+    email_to_env: str = "CRYPTOAGENT_SMTP_TO"
+    inapp_path: str = "runs/notifications.jsonl"
 
 
 @dataclass
@@ -102,6 +140,8 @@ class AppConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     research: ResearchConfig = field(default_factory=ResearchConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    sentiment: SentimentConfig = field(default_factory=SentimentConfig)
+    notify: NotifyConfig = field(default_factory=NotifyConfig)
     runs_dir: str = "runs"
 
 

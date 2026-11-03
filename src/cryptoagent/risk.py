@@ -70,6 +70,7 @@ class RiskEngine:
         atr_pct: float | None = None,
         vol_percentile: float | None = None,
         exchange_max_leverage: float | None = None,
+        positions: list[dict] | None = None,
     ) -> RiskDecision:
         cfg = self.cfg
         reasons: list[str] = []
@@ -160,5 +161,34 @@ class RiskEngine:
         size = max(0.0, min(size, cfg.max_position_pct))
         if size < 0.005:
             return RiskDecision(False, "flat", 0.0, 0.0, reasons + ["缩放后仓位过小，放弃"], checks)
+
+        # 11. 组合层风控（A3）：多品种同时持仓时的总敞口与相关性敞口
+        positions = positions or []
+        equity = state.equity
+        dirn = 1.0 if action == "long" else -1.0
+        proposed_notional = size * lev * equity
+        existing_notional = float(sum(float(p.get("notional", 0.0)) for p in positions))
+        total_notional = existing_notional + proposed_notional
+        cap_total = cfg.max_portfolio_notional_pct * equity
+        if not self._record(checks, "portfolio_notional", total_notional <= cap_total,
+                            f"组合名义敞口 {total_notional:,.0f} / 上限 {cap_total:,.0f}"):
+            return RiskDecision(False, "flat", 0.0, 0.0,
+                                [f"组合总敞口 {total_notional:,.0f} 超过上限 {cap_total:,.0f}，本次不开仓"], checks)
+
+        # 同一相关性组内、与本次同向的敞口（含本次）不得越线
+        group = next((g for g in cfg.correlation_groups if proposal.get("symbol") in g), [])
+        same_dir_notional = proposed_notional
+        for p in positions:
+            if p.get("symbol") in group:
+                p_dirn = 1.0 if str(p.get("side", "")).upper().startswith("L") else -1.0
+                if abs(p_dirn - dirn) < 1e-9:
+                    same_dir_notional += float(p.get("notional", 0.0))
+        cap_corr = cfg.correlated_exposure_pct * equity
+        if group and not self._record(checks, "correlated_exposure",
+                                     same_dir_notional <= cap_corr,
+                                     f"相关组同向敞口 {same_dir_notional:,.0f} / 上限 {cap_corr:,.0f}（{','.join(group)}）"):
+            return RiskDecision(False, "flat", 0.0, 0.0,
+                                [f"相关组 {','.join(group)} 同向敞口 {same_dir_notional:,.0f} 超限，拒绝同向加仓"],
+                                checks)
 
         return RiskDecision(True, action, size, lev, reasons or ["通过全部风控检查"], checks)

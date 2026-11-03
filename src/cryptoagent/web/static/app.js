@@ -101,6 +101,38 @@ async function poll() {
   } catch (e) {
     console.error(e);
   }
+  try {
+    renderNotifications();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+/* A2：通知 / 告警面板 */
+async function renderNotifications() {
+  const d = await api('/api/notifications', 'POST', {});
+  const items = (d && d.items) || [];
+  const chs = (d && d.channels) || [];
+  const chEl = $('notifChannels');
+  if (chEl) chEl.textContent = '渠道：' + chs.join(' / ');
+  const el = $('notifList');
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = '<div class="muted center">暂无通知。风控拦截、平仓盈亏、熔断都会推送到这里（也可配置 Telegram / 邮件）。</div>';
+    return;
+  }
+  const lvlCls = { critical: 'down', warn: 'amber', info: 'muted' };
+  el.innerHTML = items.slice().reverse().map((n) => {
+    const c = lvlCls[n.level] || 'muted';
+    return `<div class="notif-item">
+      <span class="notif-lvl ${c}">${esc(n.level)}</span>
+      <div class="notif-body">
+        <div class="notif-title">${esc(n.title)}</div>
+        <div class="notif-msg">${esc(n.message)}</div>
+      </div>
+      <span class="notif-ts muted">${esc((n.ts || '').slice(5))}</span>
+    </div>`;
+  }).join('');
 }
 
 /* ---------------- LLM 设置 ---------------- */
@@ -491,8 +523,26 @@ function factorSigHtml(p) {
   const names = active.map((s) => `${s.name}(${s.target >= 0 ? '+' : ''}${s.target.toFixed(2)})`).join('、') || '无（全部被留出集淘汰）';
   const cls = c > 0.05 ? 'up' : c < -0.05 ? 'down' : 'muted';
   const dir = c > 0.05 ? '偏多' : c < -0.05 ? '偏空' : '中性';
+  // B4：因子贡献度条形——哪些因子真正在「贡献信号」
+  let bars = '';
+  const contribs = (p.factor_contributions || []).filter((x) => x.weight > 0)
+    .sort((a, b) => Math.abs(b.share) - Math.abs(a.share)).slice(0, 8);
+  if (contribs.length) {
+    const maxAbs = Math.max(...contribs.map((x) => Math.abs(x.share)), 0.0001);
+    bars = `<div class="factor-bars">`
+      + contribs.map((x) => {
+        const w = (Math.abs(x.share) / maxAbs) * 100;
+        const d = x.share >= 0 ? 'up' : 'down';
+        return `<div class="fb-row">
+          <span class="fb-name">${esc(x.name)}</span>
+          <span class="fb-track"><span class="fb-fill ${d}" style="width:${w.toFixed(1)}%"></span></span>
+          <span class="fb-val ${d}">${x.share >= 0 ? '+' : ''}${(x.share * 100).toFixed(1)}%</span>
+        </div>`;
+      }).join('')
+      + `</div>`;
+  }
   return `<div class="thesis">因子信号 <b class="${cls}">${c >= 0 ? '+' : ''}${Number(c).toFixed(2)}</b>（${dir}）
-    · ${esc(names)}。留出集为负的因子已自动淘汰，不参与决策。</div>`;
+    · ${esc(names)}。留出集为负的因子已自动淘汰，不参与决策。</div>${bars}`;
 }
 
 function renderResearchAuto(a) {
@@ -842,9 +892,19 @@ function renderStatus(s) {
   // 成交表
   const tb = $('fillsTable').querySelector('tbody');
   if (s.fills && s.fills.length) {
+    // A4：计划价 vs 成交价偏差、滑点、手续费、盈亏，全部回流展示
+    const avgSlip = (() => {
+      const xs = s.fills.map((f) => f.slippage_bps).filter((x) => x !== null && x !== undefined);
+      return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+    })();
+    if ($('fillMeta')) {
+      $('fillMeta').textContent = `开仓 / 平仓流水（最近 ${s.fills.length} 条）`
+        + (avgSlip !== null ? ` · 平均滑点 ${avgSlip >= 0 ? '+' : ''}${avgSlip.toFixed(2)}bps` : '');
+    }
     tb.innerHTML = s.fills.map((f) => {
       const cls = f.side === 'LONG' ? 'up' : 'down';
-      const fee = f.fee ? `<span class="muted"> 费${fmt(Math.abs(f.fee), 4)}</span>` : '';
+      const slip = f.slippage_bps !== null && f.slippage_bps !== undefined
+        ? `<span class="${f.slippage_bps > 0 ? 'down' : 'up'}">${f.slippage_bps >= 0 ? '+' : ''}${Number(f.slippage_bps).toFixed(2)}</span>` : '--';
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       return `<tr${tip}>
       <td class="mono">${esc(f.symbol || s.symbol)}</td>
@@ -852,12 +912,15 @@ function renderStatus(s) {
       <td class="${cls}">${esc(actionCn(f.action))}</td>
       <td class="${cls}">${esc(sideCn(f.side))}</td>
       <td>${fmtQty(f.qty)}</td>
+      <td>${f.plan_price ? fmtPx(f.plan_price) : '--'}</td>
       <td>${fmtPx(f.price)}</td>
-      <td class="${(f.pnl || 0) >= 0 ? 'up' : 'down'}">${f.pnl !== undefined ? fmt(f.pnl) : '--'}${fee}</td>
+      <td>${slip}</td>
+      <td class="muted">${f.fee !== undefined ? fmt(f.fee, 4) : '--'}</td>
+      <td class="${(f.pnl || 0) >= 0 ? 'up' : 'down'}">${f.pnl !== undefined ? fmt(f.pnl) : '--'}</td>
     </tr>`;
     }).join('');
   } else {
-    tb.innerHTML = '<tr><td colspan="7" class="muted center">暂无成交</td></tr>';
+    tb.innerHTML = '<tr><td colspan="10" class="muted center">暂无成交</td></tr>';
   }
 
   // 持仓表
@@ -1154,7 +1217,8 @@ function renderDecision(d, switchTab = true) {
     const cls = x.stance > 0.1 ? 'up' : x.stance < -0.1 ? 'down' : 'muted';
     return `<div class="analyst">
       <h3>${esc(x.role)} <span class="stance ${cls}">${x.stance >= 0 ? '+' : ''}${Number(x.stance).toFixed(2)}</span></h3>
-      <p>${esc(x.summary)}</p>
+      <div class="analyst-body collapsed"><p>${esc(x.summary)}</p></div>
+      <button class="link analyst-toggle" type="button" onclick="const a=this.closest('.analyst');a.classList.toggle('open');this.textContent=a.classList.contains('open')?'收起':'展开全文'">展开全文</button>
       ${(x.data_flags || []).map((f) => `<div class="flag">⚑ ${esc(f)}</div>`).join('')}
     </div>`;
   }).join('');

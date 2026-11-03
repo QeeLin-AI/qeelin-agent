@@ -341,6 +341,13 @@ class WebApp:
         }
         return st
 
+    def notifications(self, limit: int = 50) -> dict:
+        """A2：返回应用内通知列表（由 notify.Notifier 写入 JSONL）。"""
+        from ..notify import load_notifications
+
+        items = load_notifications(self.cfg.notify.inapp_path, limit=limit)
+        return {"items": items, "channels": self.cfg.notify.channels}
+
     # -- 交易所账户视图 --------------------------------------------------
     def exchange_snapshot(self, ttl: float = 20.0) -> dict:
         """交易所真实余额/持仓/成交，覆盖总览页的本地账本字段。
@@ -1693,6 +1700,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": data})
         if path == "/api/killswitch":
             return self._json({"ok": True, "data": eng.set_halt(bool(payload.get("on", False)))})
+        if path == "/api/notifications":
+            return self._json({"ok": True, "data": app.notifications(int(payload.get("limit", 50)))})
         if path == "/api/exchange/sync":
             return self._json({"ok": True, "data": app.exchange_status()})
         if path == "/api/exchange/keys":

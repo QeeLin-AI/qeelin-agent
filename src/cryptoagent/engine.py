@@ -20,6 +20,7 @@ from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_p
 from .config import AppConfig
 from .data import load_market
 from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
+from .notify import get_notifier
 from .risk import AccountState
 
 
@@ -164,6 +165,31 @@ class TradingEngine:
         assert self.df is not None
         return float(self.df["close"].iloc[-1])
 
+    # ------------------------------------------------------------------
+    # 通知（A2）：多通道、fail-safe，绝不因通知失败中断交易
+    # ------------------------------------------------------------------
+    def _notify(self, level: str, title: str, message: str, meta: dict | None = None) -> None:
+        try:
+            if not hasattr(self, "_notifier"):
+                self._notifier = get_notifier(self.cfg.notify)
+            self._notifier.send(level, title, message, meta)
+        except Exception:  # noqa: BLE001 - 通知是旁路，任何异常都不应影响主流程
+            pass
+
+    def _positions_for_risk(self, price: float) -> list[dict]:
+        """把当前持仓整理成风险引擎需要的格式（A3 组合层风控使用）。"""
+        pos = self.state.get("position")
+        if not pos:
+            return []
+        entry = float(pos.get("entry") or price)
+        qty = float(pos.get("qty") or 0.0)
+        lev = float(pos.get("leverage") or 1.0)
+        return [{
+            "symbol": self.cfg.market.symbol,
+            "side": pos.get("side"),
+            "notional": qty * entry * lev,
+        }]
+
     def _roll_day(self) -> None:
         if self.state["day"] != _today():
             self.state["day"] = _today()
@@ -199,7 +225,7 @@ class TradingEngine:
     # 模拟撮合
     # ------------------------------------------------------------------
     def _paper_open(self, side: str, qty: float, price: float, lev: float,
-                    stop: float, tp: float, reason: str) -> dict:
+                    stop: float, tp: float, reason: str, plan_price: float | None = None) -> dict:
         slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
         fill = price * (1 + slip) if side == "LONG" else price * (1 - slip)
         fee = qty * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
@@ -214,12 +240,19 @@ class TradingEngine:
             "opened_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "mode": "paper",
         }
+        # A4：记录计划价与滑点，便于事后审计「计划 vs 成交」偏差
+        slip_bps = None
+        if plan_price:
+            slip_bps = round((fill - plan_price) / plan_price * 10_000.0, 2)
         fill_rec = {
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "action": "OPEN",
             "side": side,
+            "symbol": self.cfg.market.symbol,
             "qty": round(qty, 6),
             "price": round_price(fill),
+            "plan_price": round_price(plan_price) if plan_price else None,
+            "slippage_bps": slip_bps,
             "fee": round(fee, 4),
             "reason": reason,
         }
@@ -449,9 +482,16 @@ class TradingEngine:
                 ex_max = None
         decision = pipe.run(
             df, state=self.account_state(price), debate_rounds=rounds, persist=False,
-            exchange_max_leverage=ex_max,
+            exchange_max_leverage=ex_max, positions=self._positions_for_risk(price),
         )
         self.last_decision = decision
+
+        # A2：决策被风控引擎拒绝时告警（approved=False 且 action=flat 才是真拒绝）
+        if not decision.risk_decision["approved"] and decision.risk_decision["action"] == "flat":
+            reasons = decision.risk_decision.get("reasons", [])
+            self._notify("warn", f"{decision.symbol} 决策被风控拦截",
+                         "；".join(reasons[:3]) or "未通过风控检查",
+                         {"symbol": decision.symbol, "checks": decision.risk_decision.get("checks")})
 
         out = Path(self.cfg.runs_dir) / "decisions"
         out.mkdir(parents=True, exist_ok=True)
@@ -571,8 +611,14 @@ class TradingEngine:
                             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "OPEN",
                             "side": side,
+                            "symbol": self.cfg.market.symbol,
                             "qty": qty,
                             "price": res.price or price,
+                            "plan_price": round_price(order.get("entry_ref_price")),
+                            "slippage_bps": round(
+                                ((res.price or price) - float(order.get("entry_ref_price") or price))
+                                / float(order.get("entry_ref_price") or price) * 10_000.0, 2
+                            ) if order.get("entry_ref_price") else None,
                             "fee": 0.0,
                             "reason": f"live:{res.order_id}",
                         }
@@ -585,7 +631,8 @@ class TradingEngine:
                     self.last_error = str(exc)
                     return {"ok": False, "error": str(exc)}
             else:
-                rec = self._paper_open(side, qty, price, lev, stop, tp, reason)
+                rec = self._paper_open(side, qty, price, lev, stop, tp, reason,
+                                       plan_price=order.get("entry_ref_price"))
                 self._consume_plan()
                 self._save()
                 return {"ok": True, "mode": "paper", "fill": rec}
@@ -621,11 +668,21 @@ class TradingEngine:
                     self.state["position"] = None
                     self._save()
                     self._log_live("CLOSE", pos["side"], pos["qty"], exit_px, res.order_id)
+                    # A2：平仓后报告已实现盈亏
+                    self._notify("info" if pnl >= 0 else "critical",
+                                 f"{pos['side']} 平仓（实盘）",
+                                 f"已实现盈亏 {pnl:+,.2f} U（{reason}）",
+                                 {"symbol": self.cfg.market.symbol, "pnl": round(pnl, 2), "reason": reason})
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
                     return {"ok": False, "error": str(exc)}
             rec = self._paper_close(price, reason)
             self._save()
+            # A2：平仓后报告已实现盈亏
+            self._notify("info" if rec["pnl"] >= 0 else "critical",
+                         f"{pos['side']} 平仓（模拟）",
+                         f"已实现盈亏 {rec['pnl']:+,.2f} U（{reason}）",
+                         {"symbol": self.cfg.market.symbol, "pnl": rec["pnl"], "reason": reason})
             return {"ok": True, "mode": "paper", "fill": rec}
 
     def check_stops(self, price: float | None = None) -> dict | None:
@@ -862,5 +919,8 @@ class TradingEngine:
         self.state["halt"] = bool(halt)
         if halt:
             self.stop_auto()
+            # A2：触发熔断时立即告警
+            self._notify("critical", "已触发熔断开关", "交易已停止，请人工排查后手动解除",
+                         {"symbol": self.cfg.market.symbol})
         self._save()
         return {"halt": halt}

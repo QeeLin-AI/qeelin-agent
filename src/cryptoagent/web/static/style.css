@@ -369,6 +369,10 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .analyst { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
 .analyst h3 { margin: 0 0 6px; font-size: 13px; display: flex; justify-content: space-between; }
 .analyst p { margin: 0; color: var(--muted); font-size: 13px; }
+/* B3：分析师卡片默认折叠摘要，点击展开全文 */
+.analyst-body.collapsed { max-height: 3.6em; overflow: hidden; transition: max-height .2s ease; }
+.analyst.open .analyst-body.collapsed { max-height: 40em; }
+.analyst-toggle { margin-top: 6px; padding: 0; font-size: 12px; }
 .analyst .flag { margin-top: 8px; font-size: 11px; color: var(--amber); }
 .stance { font-variant-numeric: tabular-nums; font-weight: 700; }
 
@@ -378,6 +382,25 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .bull h3 { color: var(--green); }
 .bear h3 { color: var(--red); }
 .thesis { margin-top: 12px; padding: 12px 14px; background: rgba(59,130,246,.08); border-left: 3px solid var(--blue); border-radius: 6px; }
+/* B4：因子贡献度条形 */
+.factor-bars { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.fb-row { display: grid; grid-template-columns: 130px 1fr 64px; align-items: center; gap: 8px; font-size: 12px; }
+.fb-name { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-track { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.fb-fill { display: block; height: 100%; border-radius: 4px; }
+.fb-fill.up { background: var(--green); }
+.fb-fill.down { background: var(--red); }
+.fb-val { text-align: right; font-variant-numeric: tabular-nums; }
+/* A2：通知面板 */
+.notif-list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }
+.notif-item { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: start; padding: 8px 10px; background: var(--panel-2); border-radius: 6px; }
+.notif-lvl { font-size: 11px; font-weight: 500; padding: 2px 6px; border-radius: 4px; text-align: center; }
+.notif-lvl.down { color: var(--red); background: rgba(227,75,74,.12); }
+.notif-lvl.amber { color: var(--amber); background: rgba(250,238,218,.18); }
+.notif-lvl.muted { color: var(--muted); background: rgba(136,135,128,.12); }
+.notif-title { font-size: 13px; }
+.notif-msg { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.notif-ts { font-size: 11px; white-space: nowrap; }
 
 .proposal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
 .proposal-grid .item { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; }

@@ -39,6 +39,7 @@ from ..config import AppConfig
 from ..risk import AccountState, RiskDecision, RiskEngine
 from ..factors.signal import compute_factor_signal
 from ..factors.shortterm import compute_breakout_signal
+from ..sentiment import get_sentiment_source
 from .llm import LLMClient
 from .roles import (
     AnalystReport,
@@ -159,12 +160,15 @@ class TradingPipeline:
         debate_rounds: int = 2,
         persist: bool = True,
         exchange_max_leverage: float | None = None,
+        positions: list[dict] | None = None,
     ) -> Decision:
         state = state or AccountState(equity=self.cfg.backtest.initial_equity,
                                       peak_equity=self.cfg.backtest.initial_equity,
                                       day_start_equity=self.cfg.backtest.initial_equity)
         snap = MarketSnapshot.from_df(df, self.cfg.market.symbol, self.cfg.market.interval)
-        reports: list[AnalystReport] = run_analysts(self.llm, snap)
+        # A1：情绪/新闻源（默认价格行为代理，配了 CryptoPanic 才用真实舆情）
+        sentiment = get_sentiment_source(self.cfg.sentiment).fetch(snap.symbol, snap)
+        reports: list[AnalystReport] = run_analysts(self.llm, snap, sentiment=sentiment)
         debate: Debate = run_debate(self.llm, snap, reports, rounds=debate_rounds)
         proposal, deg_trader = propose_trade(self.llm, snap, reports, debate)
         proposal["symbol"] = snap.symbol
@@ -186,9 +190,24 @@ class TradingPipeline:
             fsig["composite"] = round((fsig["composite"] + short_sig) / 2.0, 4)
         proposal["factor_composite"] = fsig["composite"]
         proposal["factor_signals"] = fsig["signals"]
+        # B4：因子贡献度 = 各因子 target×weight，归一化为占比，用于「哪些因子在赚钱」可视化
+        total_w = sum(max(0.0, float(s.get("weight", 0.0))) for s in fsig["signals"]) or 1.0
+        contributions = []
+        for s in fsig["signals"]:
+            w = max(0.0, float(s.get("weight", 0.0)))
+            contrib = float(s.get("target", 0.0)) * w
+            contributions.append({
+                "name": s.get("name"),
+                "target": s.get("target"),
+                "weight": s.get("weight"),
+                "contribution": round(contrib, 4),
+                "share": round(contrib / total_w, 4),
+                "holdout_sharpe": s.get("holdout_sharpe"),
+            })
+        proposal["factor_contributions"] = contributions
         _apply_factor_signal(proposal, fsig["composite"])
 
-        officer, deg_risk = risk_review(self.llm, snap, proposal, state, self.cfg.risk)
+        officer, deg_risk = risk_review(self.llm, snap, proposal, state, self.cfg.risk, positions=positions)
 
         adjusted = dict(proposal)
         if officer["verdict"] == "reject":
@@ -203,6 +222,7 @@ class TradingPipeline:
             atr_pct=snap.atr_pct,
             vol_percentile=snap.vol_percentile,
             exchange_max_leverage=exchange_max_leverage,
+            positions=positions,
         )
         order = _build_order(adjusted, decision, snap.price, state.equity)
         if order is not None:

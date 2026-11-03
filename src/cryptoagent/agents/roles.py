@@ -17,6 +17,7 @@ import pandas as pd
 from ..config import RiskConfig
 from ..data import bars_per_year
 from ..risk import AccountState
+from ..sentiment import SentimentResult
 from .llm import (
     LLMClient,
     SYSTEM_ANALYST,
@@ -177,10 +178,17 @@ def _sentiment_score(s: MarketSnapshot) -> float:
     return float(np.tanh(0.5 * short))
 
 
-def run_analysts(llm: LLMClient, snap: MarketSnapshot) -> list[AnalystReport]:
+def run_analysts(
+    llm: LLMClient, snap: MarketSnapshot, sentiment: "SentimentResult | None" = None
+) -> list[AnalystReport]:
     t_score = _technical_score(snap)
     f_score = _funding_score(snap)
     s_score = _sentiment_score(snap)
+    senti_flag = "无新闻源，使用价格行为代理（非真实情绪）"
+    # A1：接到真实舆情时，用其分数覆盖价格行为代理，并把来源写进数据标记
+    if sentiment is not None and sentiment.fresh:
+        s_score = sentiment.score
+        senti_flag = f"真实舆情：{sentiment.label}（{sentiment.source}）"
 
     tech_mock = (
         f"价格 {snap.price:,.0f}，24 根收益 {snap.ret_24:+.2%}，"
@@ -195,18 +203,25 @@ def run_analysts(llm: LLMClient, snap: MarketSnapshot) -> list[AnalystReport]:
         f"{'多头拥挤，存在多头付费压力' if snap.funding_z > 1 else '空头拥挤，空头付费' if snap.funding_z < -1 else '费率中性，无显著拥挤'}。"
         f"结论：{'反向偏空' if f_score < -0.15 else '反向偏多' if f_score > 0.15 else '无信号'}。"
     )
-    senti_mock = (
-        f"缺少新闻/社交数据源，情绪以价格行为代理：1 根收益 {snap.ret_1:+.2%}，"
-        f"相对于波动 {snap.vol_24:.2%} 属于{'异常放大' if abs(snap.ret_1) > 2 * snap.vol_24 else '正常范围'}。"
-        f"结论：{'短线偏多' if s_score > 0.15 else '短线偏空' if s_score < -0.15 else '中性'}。"
-    )
+    if sentiment is not None and sentiment.fresh and sentiment.headlines:
+        hl = "；".join(sentiment.headlines[:4])
+        senti_mock = (
+            f"舆情源（{sentiment.source}）综合情绪：{sentiment.label}（分 {sentiment.score:+.2f}）。"
+            f"近期标题：{hl}"
+        )
+    else:
+        senti_mock = (
+            f"缺少新闻/社交数据源，情绪以价格行为代理：1 根收益 {snap.ret_1:+.2%}，"
+            f"相对于波动 {snap.vol_24:.2%} 属于{'异常放大' if abs(snap.ret_1) > 2 * snap.vol_24 else '正常范围'}。"
+            f"结论：{'短线偏多' if s_score > 0.15 else '短线偏空' if s_score < -0.15 else '中性'}。"
+        )
 
     reports = []
     specs = [
         ("技术面分析师", t_score, tech_mock, "价格/均线/RSI/ATR 均为实时计算"),
         ("资金费率分析师", f_score, funding_mock,
          "资金费率为真实结算数据" if snap.funding_last != 0 else "资金费率数据缺失，按 0 处理"),
-        ("情绪面分析师", s_score, senti_mock, "无新闻源，使用价格行为代理（非真实情绪）"),
+        ("情绪面分析师", s_score, senti_mock, senti_flag),
     ]
 
     def _run_one(spec):
@@ -265,6 +280,7 @@ def run_debate(
 
     history: list[dict] = []
     bull_case, bear_case = bull_mock, bear_mock
+    last_bull, last_bear = bull_mock, bear_mock
     for i in range(max(1, rounds)):
         context = "\n".join(
             f"[{r.role}] 立场 {r.stance:+.2f}：{r.summary}" for r in reports
@@ -273,17 +289,32 @@ def run_debate(
         if history:
             prior = "\n上一轮：\n" + "\n".join(f"{h['side']}：{h['text']}" for h in history[-2:])
 
-        bull_resp = llm.text(
-            SYSTEM_RESEARCHER,
-            f"{snap.to_prompt()}\n\n分析师观点：\n{context}{prior}\n\n你是多头研究员，第 {i + 1} 轮发言。",
-            bull_mock if i == 0 else f"第 {i + 1} 轮：维持多头判断，{bull_mock}",
+        # 交叉质询：第 1 轮多头先立论，之后每一轮都针对对方上一轮发言反驳，
+        # 不再各说各话——这比「多头说完空头说」更能暴露逻辑漏洞。
+        if i == 0:
+            bull_user = (
+                f"{snap.to_prompt()}\n\n分析师观点：\n{context}{prior}\n\n"
+                f"你是多头研究员，第 {i + 1} 轮先立论，提出你的核心多头论据。"
+            )
+            bull_mock_i = bull_mock
+        else:
+            bull_user = (
+                f"{snap.to_prompt()}\n\n分析师观点：\n{context}{prior}\n\n"
+                f"你是多头研究员，第 {i + 1} 轮。空头刚才反驳你：\n「{last_bear}」\n"
+                "请针对性反驳空头，并强化你的核心论点。"
+            )
+            bull_mock_i = f"第 {i + 1} 轮：维持多头判断，{bull_mock}"
+        bull_resp = llm.text(SYSTEM_RESEARCHER, bull_user, bull_mock_i)
+
+        bear_user = (
+            f"{snap.to_prompt()}\n\n分析师观点：\n{context}{prior}\n多头刚说：\n「{bull_resp.content}」\n\n"
+            f"你是空头研究员，第 {i + 1} 轮，请针对性反驳多头的论点。"
         )
-        bear_resp = llm.text(
-            SYSTEM_RESEARCHER,
-            f"{snap.to_prompt()}\n\n分析师观点：\n{context}\n多头刚说：{bull_resp.content}\n\n你是空头研究员，第 {i + 1} 轮发言。",
-            bear_mock if i == 0 else f"第 {i + 1} 轮：维持空头判断，{bear_mock}",
-        )
+        bear_mock_i = bear_mock if i == 0 else f"第 {i + 1} 轮：维持空头判断，{bear_mock}"
+        bear_resp = llm.text(SYSTEM_RESEARCHER, bear_user, bear_mock_i)
+
         bull_case, bear_case = bull_resp.content, bear_resp.content
+        last_bull, last_bear = bull_resp.content, bear_resp.content
         history.append({"round": i + 1, "side": "多头", "text": bull_resp.content})
         history.append({"round": i + 1, "side": "空头", "text": bear_resp.content})
 
@@ -393,6 +424,7 @@ def risk_review(
     proposal: dict,
     state: AccountState,
     cfg: RiskConfig,
+    positions: list[dict] | None = None,
 ) -> tuple[dict, bool]:
     multiplier = 1.0
     reasons = []
@@ -408,17 +440,31 @@ def risk_review(
     if proposal.get("action") != "flat" and abs(snap.funding_z) > 2.5:
         multiplier *= 0.7
         reasons.append(f"资金费率 z-score {snap.funding_z:+.1f} 极端，减仓 30%")
+    # B2：已有同向/同品种持仓时，独立风控官主动减仓，避免叠加风险（代码硬规则之外的一层）
+    if proposal.get("action") != "flat" and positions:
+        same = [p for p in positions if p.get("symbol") == snap.symbol]
+        if same:
+            multiplier *= 0.7
+            reasons.append(f"已持有 {snap.symbol} 持仓，减仓 30% 避免叠加风险")
 
     mock = {
         "verdict": "reduce" if multiplier < 1.0 else "approve",
         "size_multiplier": round(multiplier, 3),
         "reasons": reasons or ["未发现额外风险，维持原仓位"],
     }
+    pos_text = "无"
+    if positions:
+        pos_text = "；".join(
+            f"{p.get('symbol')}({p.get('side')}, 名义 {float(p.get('notional', 0)):,.0f})"
+            for p in positions
+        )
     user = (
         f"{snap.to_prompt()}\n\n账户：权益 {state.equity:,.0f}，回撤 {state.drawdown:.2%}，"
         f"当日盈亏 {state.daily_pnl_pct:+.2%}，连续亏损 {state.consecutive_losses} 笔。\n"
+        f"当前持仓：{pos_text}\n"
         f"交易员提案：{proposal}\n\n"
         "请评估风险。你只能维持(approve)或缩小(reduce)仓位，或直接拒绝(reject)。"
+        "尤其关注与现有持仓的方向叠加与相关性。"
     )
     data, resp = llm.json(SYSTEM_RISK, user, RISK_SCHEMA, mock)
 
