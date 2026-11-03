@@ -433,6 +433,68 @@
       </div>
       <p class="muted">改完立即生效（下次决策使用新配置）。API Key 只回显尾号，留空表示保持原值。</p>
     </div>
+
+    <div class="card">
+      <div class="card-head"><h2>情绪 / 新闻源（A1）</h2><span class="muted" id="sentimentStatus">--</span></div>
+      <label class="switch-row">
+        <span class="switch-label">
+          <span class="t">启用情绪分析</span>
+          <span class="d">关闭后分析师不再接入任何舆情源，仅用本地价格行为代理（确定性兜底，永不报错）</span>
+        </span>
+        <label class="switch"><input type="checkbox" id="sentimentEnabled" /><span class="track"><span class="thumb"></span></span></label>
+      </label>
+      <label class="field">新闻源
+        <select id="sentimentSource">
+          <option value="price_action">价格行为代理（本地，无需联网）</option>
+          <option value="cryptopanic">CryptoPanic 聚合新闻（需 API Key）</option>
+        </select>
+      </label>
+      <label class="field" id="cpKeyRow">CryptoPanic API Key
+        <input id="sentimentApiKey" type="password" placeholder="留空则不修改" />
+      </label>
+      <div class="actions" style="margin-left:0;margin-top:4px">
+        <button id="sentimentSaveBtn" class="btn primary">保存</button>
+      </div>
+      <p class="muted">未配置 Key 或源不可达时自动降级到本地价格行为代理，交易主循环绝不中断。</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>通知 / 告警（A2）</h2><span class="muted" id="notifyStatus">--</span></div>
+      <label class="switch-row">
+        <span class="switch-label">
+          <span class="t">启用通知</span>
+          <span class="d">主开关：关闭后不向任何通道投递（控制台与应用内日志也将暂停）</span>
+        </span>
+        <label class="switch"><input type="checkbox" id="notifyEnabled" /><span class="track"><span class="thumb"></span></span></label>
+      </label>
+      <div class="field" style="margin:12px 0">
+        <span style="color:var(--text);font-size:13px;font-weight:600">投递通道</span>
+        <div class="chips" id="notifyChannels">
+          <label class="chip"><input type="checkbox" value="console" /> 控制台</label>
+          <label class="chip"><input type="checkbox" value="inapp" /> 应用内</label>
+          <label class="chip"><input type="checkbox" value="webhook" /> Webhook</label>
+          <label class="chip"><input type="checkbox" value="telegram" /> Telegram</label>
+          <label class="chip"><input type="checkbox" value="email" /> 邮件</label>
+        </div>
+        <span class="muted" style="font-size:11.5px">至少保留「控制台 / 应用内」其一，确保通知可查</span>
+      </div>
+      <label class="field">Webhook URL<input id="notifyWebhook" type="text" placeholder="https://..." /></label>
+      <div class="kv" style="margin-top:8px">
+        <label class="field">Telegram Token<input id="notifyTgToken" type="password" placeholder="bot...:..." /></label>
+        <label class="field">Telegram Chat ID<input id="notifyTgChat" type="text" placeholder="123456789" /></label>
+      </div>
+      <div class="kv" style="margin-top:8px">
+        <label class="field">SMTP 主机<input id="notifySmtpHost" type="text" placeholder="smtp.xxx.com" /></label>
+        <label class="field">SMTP 端口<input id="notifySmtpPort" type="text" placeholder="465" /></label>
+        <label class="field">SMTP 账号<input id="notifySmtpUser" type="text" placeholder="user@xxx.com" /></label>
+        <label class="field">SMTP 密码<input id="notifySmtpPass" type="password" placeholder="app password" /></label>
+        <label class="field">收件人<input id="notifySmtpTo" type="text" placeholder="to@xxx.com" /></label>
+      </div>
+      <div class="actions" style="margin-left:0;margin-top:4px">
+        <button id="notifySaveBtn" class="btn primary">保存</button>
+      </div>
+      <p class="muted">外部通道凭据只写入 .env（不入仓库、不回显明文）；任一通道失败均被捕获并跳过，绝不中断交易。</p>
+    </div>
   </section>
 </main>
 

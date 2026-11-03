@@ -85,7 +85,7 @@ function showTab(name, push = true) {
   $(`tab-${name}`).classList.add('active');
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name === 'overview') renderPnl();
-  if (name === 'settings') loadLlmSettings();
+  if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); }
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -164,6 +164,103 @@ async function saveLlmSettings(quiet = false) {
     $('llmApiKey').value = '';
     loadLlmSettings();
     poll();
+    return true;
+  } catch (e) {
+    toast(e.message, 'err');
+    return false;
+  }
+}
+
+/* ---------------- A1 情绪 / 新闻源设置 ---------------- */
+async function loadSentimentSettings() {
+  try {
+    const d = await api('/api/settings/sentiment');
+    $('sentimentEnabled').checked = !!d.enabled;
+    $('sentimentSource').value = d.source || 'price_action';
+    $('sentimentApiKey').value = '';
+    $('sentimentApiKey').placeholder = d.cryptopanic_key_set
+      ? `已设置（尾号 ${d.cryptopanic_key_tail}），留空保持原值`
+      : '留空则不修改';
+    $('sentimentStatus').textContent = `当前 ${d.source === 'cryptopanic' ? 'CryptoPanic' : '价格行为代理'}${d.enabled ? '' : '（已关闭）'}`;
+    toggleCpKeyRow();
+  } catch (e) { console.error(e); }
+}
+
+function toggleCpKeyRow() {
+  const row = $('cpKeyRow');
+  if (!row) return;
+  row.style.display = $('sentimentSource').value === 'cryptopanic' ? '' : 'none';
+}
+
+async function saveSentimentSettings(quiet = false) {
+  const payload = {
+    enabled: $('sentimentEnabled').checked,
+    source: $('sentimentSource').value,
+  };
+  const key = $('sentimentApiKey').value.trim();
+  if (key) payload.cryptopanic_api_key = key;
+  try {
+    await api('/api/settings/sentiment', 'POST', payload);
+    if (!quiet) toast('情绪 / 新闻源设置已保存', 'ok');
+    $('sentimentApiKey').value = '';
+    loadSentimentSettings();
+    return true;
+  } catch (e) {
+    toast(e.message, 'err');
+    return false;
+  }
+}
+
+/* ---------------- A2 通知 / 告警设置 ---------------- */
+async function loadNotifySettings() {
+  try {
+    const d = await api('/api/settings/notify');
+    $('notifyEnabled').checked = !!d.enabled;
+    const chs = d.channels || [];
+    document.querySelectorAll('#notifyChannels input[type="checkbox"]').forEach((cb) => {
+      cb.checked = chs.includes(cb.value);
+    });
+    $('notifyWebhook').value = '';
+    $('notifyTgToken').value = '';
+    $('notifyTgChat').value = '';
+    $('notifySmtpHost').value = '';
+    $('notifySmtpPort').value = '';
+    $('notifySmtpUser').value = '';
+    $('notifySmtpPass').value = '';
+    $('notifySmtpTo').value = '';
+    const setHint = (id, ok, tail, label) => {
+      const el = $(id);
+      if (!el) return;
+      el.placeholder = ok ? `${label}已配置（尾号 ${tail}）` : `${label}未配置`;
+    };
+    setHint('notifyWebhook', d.webhook_set, '', 'Webhook URL');
+    setHint('notifyTgToken', d.telegram_set, '', 'Telegram');
+    setHint('notifySmtpHost', d.email_set, '', 'SMTP');
+    $('notifyStatus').textContent = `当前通道：${(chs.length ? chs : ['无']).join(' / ')}${d.enabled ? '' : '（主开关已关）'}`;
+  } catch (e) { console.error(e); }
+}
+
+async function saveNotifySettings(quiet = false) {
+  const channels = [];
+  document.querySelectorAll('#notifyChannels input[type="checkbox"]').forEach((cb) => {
+    if (cb.checked) channels.push(cb.value);
+  });
+  const payload = {
+    enabled: $('notifyEnabled').checked,
+    channels,
+    webhook_url: $('notifyWebhook').value.trim(),
+    telegram_token: $('notifyTgToken').value.trim(),
+    telegram_chat: $('notifyTgChat').value.trim(),
+    email_smtp_host: $('notifySmtpHost').value.trim(),
+    email_smtp_port: $('notifySmtpPort').value.trim(),
+    email_user: $('notifySmtpUser').value.trim(),
+    email_pass: $('notifySmtpPass').value.trim(),
+    email_to: $('notifySmtpTo').value.trim(),
+  };
+  try {
+    await api('/api/settings/notify', 'POST', payload);
+    if (!quiet) toast('通知 / 告警设置已保存', 'ok');
+    loadNotifySettings();
     return true;
   } catch (e) {
     toast(e.message, 'err');
@@ -1218,7 +1315,7 @@ function renderDecision(d, switchTab = true) {
     return `<div class="analyst">
       <h3>${esc(x.role)} <span class="stance ${cls}">${x.stance >= 0 ? '+' : ''}${Number(x.stance).toFixed(2)}</span></h3>
       <div class="analyst-body collapsed"><p>${esc(x.summary)}</p></div>
-      <button class="link analyst-toggle" type="button" onclick="const a=this.closest('.analyst');a.classList.toggle('open');this.textContent=a.classList.contains('open')?'收起':'展开全文'">展开全文</button>
+      <button class="analyst-toggle" type="button" onclick="const a=this.closest('.analyst');a.classList.toggle('open');this.textContent=a.classList.contains('open')?'收起':'展开全文'">展开全文</button>
       ${(x.data_flags || []).map((f) => `<div class="flag">⚑ ${esc(f)}</div>`).join('')}
     </div>`;
   }).join('');
@@ -1676,6 +1773,9 @@ $('clearCacheBtn').addEventListener('click', () => {
 
 $('llmSaveBtn').addEventListener('click', saveLlmSettings);
 $('llmTestBtn').addEventListener('click', testLlmSettings);
+$('sentimentSaveBtn').addEventListener('click', saveSentimentSettings);
+$('notifySaveBtn').addEventListener('click', saveNotifySettings);
+$('sentimentSource').addEventListener('change', toggleCpKeyRow);
 
 /* ---------------- 桌面窗口控制（Electron） ---------------- */
 if (window.desktop) {

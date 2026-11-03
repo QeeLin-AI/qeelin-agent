@@ -48,6 +48,7 @@ class NotifyConfig:
     """
 
     channels: list[str] = field(default_factory=lambda: ["console", "inapp"])
+    enabled: bool = True
     webhook_url_env: str = "CRYPTOAGENT_WEBHOOK_URL"
     telegram_token_env: str = "CRYPTOAGENT_TG_TOKEN"
     telegram_chat_env: str = "CRYPTOAGENT_TG_CHAT"
@@ -113,6 +114,9 @@ class Notifier:
         meta: dict | None = None,
     ) -> Notification:
         """构建通知并分发到所有启用的通道，返回该通知。"""
+        # 主开关关闭：整体静默（getattr 兜底，容忍旧版 NotifyConfig 无 enabled 字段）
+        if not getattr(self.cfg, "enabled", True):
+            return None
         n = Notification(
             level=level,
             title=title,

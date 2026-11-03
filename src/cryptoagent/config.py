@@ -107,6 +107,7 @@ class SentimentConfig:
 @dataclass
 class NotifyConfig:
     """通知/告警配置（A2）。多通道，默认仅控制台 + 应用内日志，绝不因通知失败而中断交易。"""
+    enabled: bool = True                 # 主开关：关闭后不投递任何通道
     channels: list[str] = field(default_factory=lambda: ["console", "inapp"])
     webhook_url_env: str = "CRYPTOAGENT_WEBHOOK_URL"
     telegram_token_env: str = "CRYPTOAGENT_TG_TOKEN"
