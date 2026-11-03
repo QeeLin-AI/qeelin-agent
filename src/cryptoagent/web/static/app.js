@@ -183,7 +183,8 @@ async function loadSymbols() {
     const sel = $('symbolSelect');
     sel.innerHTML = list.map((x) => {
       const mark = x.cached ? '' : (x.synthetic_only ? '（合成）' : '（未下载）');
-      return `<option value="${esc(x.symbol)}">${esc(x.symbol.replace('USDT', '/USDT'))}${mark}</option>`;
+      const star = x.pinned ? '★ ' : '';
+      return `<option value="${esc(x.symbol)}">${star}${esc(x.symbol.replace('USDT', '/USDT'))}${mark}</option>`;
     }).join('');
     const active = list.find((x) => x.active);
     if (active) sel.value = active.symbol;
@@ -216,6 +217,263 @@ $('symbolSelect').addEventListener('change', async () => {
     sel.disabled = false;
   }
 });
+
+/* ---------------- 交易品种管理（自主添加） ---------------- */
+let symExchange = 'binance';
+let symDelArmed = null;
+let symDelTimer = null;
+let symSearchTimer = null;
+let symPollTimer = null;
+
+function setSymExchange(ex) {
+  symExchange = ex === 'okx' ? 'okx' : 'binance';
+  document.querySelectorAll('#symExChoice .seg').forEach((b) => {
+    b.classList.toggle('sel', b.dataset.symEx === symExchange);
+  });
+}
+
+function symExLabel(ex) {
+  return ex === 'okx' ? 'OKX' : '币安';
+}
+
+function symTag(x) {
+  if (x.pinned) return '<span class="sym-tag pin">★ 置顶</span>';
+  if (x.active) return '<span class="sym-tag cur">当前</span>';
+  if (x.prefetching) return '<span class="sym-tag wait">缓存中…</span>';
+  if (x.error) return `<span class="sym-tag err" title="${esc(x.error)}">拉取失败</span>`;
+  if (x.cached) return `<span class="sym-tag ok">已缓存 ${esc(String(x.last || '').slice(5, 16))}</span>`;
+  if (x.synthetic_only) return '<span class="sym-tag wait">合成数据</span>';
+  return '<span class="sym-tag">未下载</span>';
+}
+
+function renderSymList() {
+  const box = $('symList');
+  if (!box) return;
+  const list = symbolList || [];
+  if ($('symCount')) $('symCount').textContent = `${list.length} 个`;
+  if (!list.length) {
+    box.innerHTML = '<div class="muted center">还没有品种</div>';
+    return;
+  }
+  box.innerHTML = list.map((x) => {
+    const armed = symDelArmed === x.symbol;
+    return `<div class="sym-row">
+      <span class="sym-name">${esc(x.symbol)}</span>
+      ${symTag(x)}
+      ${(x.exchanges || []).length ? `<span class="sym-ex">${(x.exchanges || []).map(symExLabel).join(' / ')}</span>` : ''}
+      <span class="sym-actions">
+        <button class="btn ghost sm" data-sym-pin="${esc(x.symbol)}" data-pin-to="${x.pinned ? '0' : '1'}" title="${x.pinned ? '取消置顶' : '置顶到最前'}">${x.pinned ? '取消置顶' : '置顶'}</button>
+        ${x.active ? '<span class="muted">使用中</span>' : `
+        <button class="btn ghost sm" data-sym-switch="${esc(x.symbol)}">切换</button>
+        <button class="btn ghost sm${armed ? ' danger' : ''}" data-sym-del="${esc(x.symbol)}">${armed ? '确认删除' : '删除'}</button>`}</span>
+    </div>`;
+  }).join('');
+}
+
+function startSymPoll() {
+  clearInterval(symPollTimer);
+  symPollTimer = setInterval(async () => {
+    if (!$('symModal') || $('symModal').classList.contains('hidden')) {
+      clearInterval(symPollTimer);
+      symPollTimer = null;
+      return;
+    }
+    try {
+      await loadSymbols();
+      renderSymList();
+      if (!(symbolList || []).some((x) => x.prefetching)) {
+        clearInterval(symPollTimer);
+        symPollTimer = null;
+      }
+    } catch (e) { /* 网络抖动忽略，下次再试 */ }
+  }, 2500);
+}
+
+async function openSymModal() {
+  if (!$('symModal')) return;
+  $('symModal').classList.remove('hidden');
+  $('symMsg').textContent = '';
+  $('symInput').value = '';
+  $('symSuggest').classList.add('hidden');
+  setSymExchange((lastStatus && lastStatus.exchange) || 'binance');
+  renderSymList();
+  setTimeout(() => $('symInput').focus(), 60);
+  try {
+    await loadSymbols();
+    renderSymList();
+    if ((symbolList || []).some((x) => x.prefetching)) startSymPoll();
+  } catch (e) { /* 列表拉不到就先显示缓存 */ }
+}
+
+function closeSymModal() {
+  if (!$('symModal')) return;
+  $('symModal').classList.add('hidden');
+  symDelArmed = null;
+  clearInterval(symPollTimer);
+  symPollTimer = null;
+}
+
+async function loadSymSuggest(q) {
+  const box = $('symSuggest');
+  const key = (q || '').trim();
+  if (!key) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  try {
+    const list = await api('/api/symbols/candidates?q=' + encodeURIComponent(key));
+    if (!list.length) {
+      box.innerHTML = '<span class="muted">交易所里没匹配到，可以直接点「添加」试一下</span>';
+    } else {
+      box.innerHTML = list.slice(0, 12).map((c) => {
+        const ex = (c.exchanges || []).join(' / ');
+        return `<button class="sym-chip" data-sym-pick="${esc(c.symbol)}">${esc(c.symbol)}${ex ? `<span class="chip-ex">${esc(ex)}</span>` : ''}</button>`;
+      }).join('');
+    }
+    box.classList.remove('hidden');
+  } catch (e) {
+    box.classList.add('hidden');
+  }
+}
+
+async function addSymbolFromModal() {
+  const raw = ($('symInput').value || '').trim();
+  if (!raw) {
+    toast('先填一个品种代码，例如 SOLUSDT', 'err');
+    return;
+  }
+  const btn = $('symAddBtn');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '校验中…';
+  toast(`正在向${symExLabel(symExchange)}校验 ${raw.toUpperCase()} 的永续合约…`, 'ok', { sticky: true });
+  try {
+    const d = await api('/api/symbols/add', 'POST', { symbol: raw, exchange: symExchange });
+    symbolList = d.symbols || symbolList;
+    renderSymList();
+    await loadSymbols();
+    renderSymList();
+    $('symInput').value = '';
+    $('symSuggest').classList.add('hidden');
+    if (!d.added) {
+      toast(`${d.symbol} 已经在列表里了`, 'ok');
+      return;
+    }
+    const note = d.note ? `；${d.note}` : '';
+    toast(
+      `${d.symbol} 已添加到${symExLabel(d.exchange || symExchange)}（${fmtPx(d.price)}）`
+        + `${d.saved ? '' : '，配置只读、重启会丢'}，正在预下载历史…${note}`,
+      note ? 'err' : 'ok'
+    );
+    startSymPoll();
+  } catch (e) {
+    toast(`添加失败：${e.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function toggleSymbolPin(sym, pinned) {
+  try {
+    const d = await api('/api/symbols/pin', 'POST', { symbol: sym, pinned });
+    symbolList = d.symbols || symbolList;
+    await loadSymbols();
+    renderSymList();
+    toast(pinned ? `${sym} 已置顶，下拉框里也排到最前` : `${sym} 已取消置顶`, 'ok');
+  } catch (e) {
+    toast(`${pinned ? '置顶' : '取消置顶'}失败：${e.message}`, 'err');
+  }
+}
+
+async function switchSymbolTo(sym) {
+  try {
+    const d = await api('/api/symbol', 'POST', { symbol: sym });
+    toast(d.changed ? `已切到 ${sym}（${fmt(d.price)}）` : `${sym} 已是当前品种`, 'ok');
+    await loadSymbols();
+    renderSymList();
+    await poll();
+    closeSymModal();
+  } catch (e) {
+    toast(`切换失败：${e.message}`, 'err');
+  }
+}
+
+async function removeSymbolFlow(sym) {
+  // 两次点击确认，避免误删（不用原生 confirm，样式统一）
+  if (symDelArmed !== sym) {
+    symDelArmed = sym;
+    renderSymList();
+    clearTimeout(symDelTimer);
+    symDelTimer = setTimeout(() => {
+      if (symDelArmed === sym) {
+        symDelArmed = null;
+        renderSymList();
+      }
+    }, 4000);
+    return;
+  }
+  symDelArmed = null;
+  clearTimeout(symDelTimer);
+  try {
+    const d = await api('/api/symbols/remove', 'POST', { symbol: sym });
+    symbolList = d.symbols || symbolList;
+    await loadSymbols();
+    renderSymList();
+    toast(`${sym} 已从列表移除${d.saved ? '' : '（配置只读，重启会回来）'}`, 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+    renderSymList();
+  }
+}
+
+if ($('symbolAddBtn')) {
+  $('symbolAddBtn').addEventListener('click', openSymModal);
+  document.querySelectorAll('#symExChoice .seg').forEach((b) => {
+    b.addEventListener('click', () => setSymExchange(b.dataset.symEx));
+  });
+  $('symClose').addEventListener('click', closeSymModal);
+  $('symAddBtn').addEventListener('click', addSymbolFromModal);
+  $('symInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addSymbolFromModal();
+    }
+  });
+  $('symInput').addEventListener('input', () => {
+    clearTimeout(symSearchTimer);
+    const q = $('symInput').value;
+    symSearchTimer = setTimeout(() => loadSymSuggest(q), 260);
+  });
+  $('symSuggest').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-sym-pick]');
+    if (!chip) return;
+    $('symInput').value = chip.dataset.symPick;
+    $('symSuggest').classList.add('hidden');
+    $('symInput').focus();
+  });
+  $('symList').addEventListener('click', (e) => {
+    const pin = e.target.closest('[data-sym-pin]');
+    if (pin) {
+      toggleSymbolPin(pin.dataset.symPin, pin.dataset.pinTo === '1');
+      return;
+    }
+    const sw = e.target.closest('[data-sym-switch]');
+    if (sw) {
+      switchSymbolTo(sw.dataset.symSwitch);
+      return;
+    }
+    const del = e.target.closest('[data-sym-del]');
+    if (del) removeSymbolFlow(del.dataset.symDel);
+  });
+  $('symModal').addEventListener('click', (e) => {
+    if (e.target === $('symModal')) closeSymModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('symModal').classList.contains('hidden')) closeSymModal();
+  });
+}
 
 function factorSigHtml(p) {
   const c = p.factor_composite;

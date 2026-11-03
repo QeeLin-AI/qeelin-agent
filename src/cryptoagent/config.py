@@ -30,6 +30,10 @@ class MarketConfig:
     symbols: list[str] = field(
         default_factory=lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
     )
+    # 用户置顶的品种（按顺序排在最前，只影响展示顺序，不影响扫描与交易）
+    pinned: list[str] = field(default_factory=list)
+    # 每个品种添加时选的交易所（已确认上线，仅用于展示与提示）
+    symbol_exchanges: dict[str, list[str]] = field(default_factory=dict)
     interval: str = "1h"
     bars: int = 6000
     seed: int = 7

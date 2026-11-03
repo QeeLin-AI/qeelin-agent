@@ -38,6 +38,7 @@
   <div class="price-block">
     <div class="price-row">
       <select id="symbolSelect" class="symbol-select" title="切换品种（配置里 market.symbols）"></select>
+      <button id="symbolAddBtn" class="sym-add-btn" title="添加 / 管理交易品种">＋</button>
       <span id="price" class="price">--</span>
       <span id="pct" class="pct">--</span>
     </div>
@@ -426,6 +427,36 @@
     </div>
   </section>
 </main>
+
+<!-- 交易品种管理 -->
+<div id="symModal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>交易品种</h3>
+      <button id="symClose" class="btn ghost sm">关闭</button>
+    </div>
+    <div class="modal-body">
+      <p class="muted" style="margin:0 0 10px">
+        添加 <b>USDT 本位永续合约</b>：可写 <code>SOLUSDT</code>，也可写 <code>SOL/USDT</code>。
+        添加时会先向交易所校验行情，再自动预下载历史 K 线（约几秒）。
+      </p>
+      <div class="ex-choice" id="symExChoice">
+        <span class="ex-label">交易所</span>
+        <button class="seg sel" data-sym-ex="binance">币安</button>
+        <button class="seg" data-sym-ex="okx">OKX</button>
+        <span class="muted" style="font-size:11px">只添加该交易所已上线的 USDT 永续</span>
+      </div>
+      <div class="sym-add-row">
+        <input id="symInput" type="text" placeholder="输入或搜索品种，如 SOLUSDT" autocomplete="off" spellcheck="false" />
+        <button id="symAddBtn" class="btn primary">添加</button>
+      </div>
+      <div id="symSuggest" class="sym-suggest hidden"></div>
+      <p id="symMsg" class="muted sym-msg"></p>
+      <div class="divider"><span>已添加品种</span><span id="symCount" class="muted"></span></div>
+      <div id="symList" class="sym-list"><div class="muted center">加载中…</div></div>
+    </div>
+  </div>
+</div>
 
 <div id="toast" class="toast"></div>
 <script src="/static/app.js"></script>

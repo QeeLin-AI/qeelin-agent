@@ -26,6 +26,33 @@ from ..agents.llm import LLMClient
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+def normalize_symbol(raw: str) -> str:
+    """把用户输入的品种写法归一成 SOLUSDT 这种形式。
+
+    支持 SOLUSDT / solusdt / SOL/USDT / SOL-USDT / SOL-USDT-SWAP / SOLUSDT.P 等写法。
+    """
+    s = str(raw or "").strip().upper().replace(" ", "")
+    for sep in ("/", "-", "_", ":"):
+        s = s.replace(sep, "")
+    for suffix in ("SWAP", "PERP", "P", "UMCBL"):
+        if s.endswith(suffix) and len(s) > len(suffix):
+            s = s[: -len(suffix)]
+            break
+    if not s.endswith("USDT") and s.endswith("USD"):
+        s = s[:-3] + "USDT"
+    if not (3 <= len(s) <= 20) or not s.isalnum():
+        raise ApiError("品种代码不合法，例如 SOLUSDT", 400)
+    return s
+
+
+def normalize_query(raw: str) -> str:
+    """候选搜索用：宽松处理，SEARCH 输入一半也能匹配。"""
+    s = str(raw or "").strip().upper().replace(" ", "")
+    for sep in ("/", "-", "_", ":"):
+        s = s.replace(sep, "")
+    return s
+
+
 class ApiError(Exception):
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
@@ -68,6 +95,12 @@ class WebApp:
             "execute": False,
             "error": "",
         }
+        # 自定义品种：添加后在后台预下载历史（6000 根），这里记录进行中/失败的
+        self._prefetching: set[str] = set()
+        self._prefetch_error: dict[str, str] = {}
+        # 交易所可交易合约清单（给「添加品种」做候选提示，10 分钟缓存）
+        self._sym_catalog: list[dict] = []
+        self._sym_catalog_at = 0.0
         # 自动研究（因子进化）：按 research.auto_interval_sec 定时重跑研究，更新因子库
         self.research_auto_state: dict = {
             "enabled": self.cfg.research.auto_interval_sec > 0,
@@ -840,11 +873,14 @@ class WebApp:
 
     # -- 多品种 ---------------------------------------------------------
     def symbols(self) -> list[dict]:
-        """配置里列出的品种 + 本地缓存情况。"""
+        """配置里列出的品种 + 本地缓存情况（置顶的排最前）。"""
         cache_dir = Path(self.cfg.market.cache_dir)
         stem = f"{self.cfg.market.interval}_{self.cfg.market.bars}"
+        pinned = [x for x in (getattr(self.cfg.market, "pinned", None) or [])
+                  if x in self.cfg.market.symbols]
+        order = pinned + [x for x in self.cfg.market.symbols if x not in pinned]
         out = []
-        for sym in self.cfg.market.symbols:
+        for sym in order:
             real = cache_dir / f"{sym}_{stem}.real.csv"
             synth = cache_dir / f"{sym}_{stem}_s{self.cfg.market.seed}.synthetic.csv"
             entry = {
@@ -862,6 +898,10 @@ class WebApp:
                     entry["last"] = last.split(",")[0][:16]
                 except Exception:  # noqa: BLE001
                     pass
+            entry["pinned"] = sym in pinned
+            entry["exchanges"] = (self.cfg.market.symbol_exchanges or {}).get(sym, [])
+            entry["prefetching"] = sym in self._prefetching
+            entry["error"] = self._prefetch_error.get(sym, "")
             out.append(entry)
         return out
 
@@ -878,9 +918,239 @@ class WebApp:
         # 实时价是上一个品种的，清掉免得顶栏显示错价
         self.live_price = None
         self.live_ts = ""
+        # 切到列表里没有的品种（历史缓存手动加过的）时补进列表并落盘，别让下拉框丢项
+        if symbol not in self.cfg.market.symbols:
+            from ..config import config_path, save_config
+
+            self.cfg.market.symbols.append(symbol)
+            try:
+                save_config(self.cfg, config_path())
+            except OSError:
+                pass
         # 换了品种，交易所视图和权益曲线都得重来
         self.reset_exchange_view()
         return res
+
+    # ---- 自定义交易品种 ---------------------------------------------
+    @staticmethod
+    def _exchange_has_symbol(sym: str, exchange: str) -> tuple[bool, str]:
+        """这家交易所有没有上线该 USDT 本位永续？返回 (是否有, 没有的原因)。"""
+        import urllib.error
+
+        from ..data import FAPI, OKX, _get, okx_inst
+
+        if exchange == "okx":
+            inst = okx_inst(sym)
+            try:
+                data = _get(
+                    f"{OKX}/api/v5/public/instruments",
+                    {"instType": "SWAP", "instId": inst},
+                    timeout=10,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return False, f"查询 OKX 合约列表失败（{type(exc).__name__}），稍后再试"
+            if data.get("data"):
+                return True, ""
+            return False, f"OKX 没有上线 {sym} 的 USDT 永续合约（{inst}）"
+
+        try:
+            _get(f"{FAPI}/fapi/v1/ticker/price", {"symbol": sym}, timeout=10)
+            return True, ""
+        except urllib.error.HTTPError as exc:
+            try:
+                body = json.loads(exc.read().decode("utf-8") or "{}")
+            except Exception:  # noqa: BLE001
+                body = {}
+            if body.get("code") in (-1121, -1100) or "Invalid symbol" in str(body.get("msg", "")):
+                return False, f"币安合约没有上线 {sym}（symbol 不存在）"
+            return False, f"查询币安合约失败：{body.get('msg') or exc.code}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"查询币安合约失败（{type(exc).__name__}），稍后再试"
+
+    def add_symbol(self, payload: dict) -> dict:
+        """添加一个交易品种（USDT 本位永续）。
+
+        先用当前交易所校验行情能不能拿到，再写进 config/default.json，
+        最后后台预下载历史 K 线（6000 根要几秒，不能卡住 HTTP 请求）。
+        """
+        from ..config import config_path, save_config
+        from ..data import fetch_klines
+
+        raw = str(payload.get("symbol", "")).strip()
+        if not raw:
+            raise ApiError("请填写品种代码，例如 SOLUSDT", 400)
+        sym = normalize_symbol(raw)
+
+        # 用户选的交易所（不传就用当前连接的交易所）
+        exchange = str(
+            payload.get("exchange") or self.engine.state.get("exchange", "binance")
+        ).strip().lower()
+        if exchange not in ("binance", "okx"):
+            raise ApiError("exchange 只能是 binance / okx", 400)
+        ex_cn = "OKX" if exchange == "okx" else "币安"
+
+        if sym in self.cfg.market.symbols:
+            return {
+                "symbol": sym,
+                "added": False,
+                "exchange": exchange,
+                "symbols": self.symbols(),
+            }
+
+        # 1) 这家交易所到底有没有上线这个永续合约（没上线的别加进来）
+        listed, why = self._exchange_has_symbol(sym, exchange)
+        if not listed:
+            raise ApiError(why, 400)
+
+        # 2) 行情能不能真的拉到（且必须来自这家交易所，别拿别家的数据充数）
+        try:
+            df, src = fetch_klines(sym, self.cfg.market.interval, 60, prefer=exchange)
+        except Exception as exc:  # noqa: BLE001
+            raise ApiError(f"{ex_cn} 行情拉取失败（{type(exc).__name__}），稍后再试", 502) from exc
+        if df is None or df.empty:
+            raise ApiError(f"{ex_cn} 没有返回任何 K 线，换个代码试试", 400)
+        if exchange == "okx" and not str(src).startswith("okx"):
+            raise ApiError(f"{ex_cn} 行情拉不到（当前只能拿到 {src} 的数据），稍后再试", 502)
+        if exchange == "binance" and not str(src).startswith("binance"):
+            raise ApiError(f"{ex_cn} 行情拉不到（当前只能拿到 {src} 的数据），稍后再试", 502)
+
+        self.cfg.market.symbols.append(sym)
+        ex_map = dict(self.cfg.market.symbol_exchanges or {})
+        ex_map[sym] = [exchange]
+        self.cfg.market.symbol_exchanges = ex_map
+        self._prefetch_error.pop(sym, None)
+        saved = True
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            saved = False          # 只读文件系统：内存里仍生效，重启会丢
+
+        threading.Thread(target=self._prefetch_symbol, args=(sym,), daemon=True).start()
+
+        return {
+            "symbol": sym,
+            "added": True,
+            "saved": saved,
+            "source": src,
+            "price": round(float(df["close"].iloc[-1]), 8),
+            "bars": int(len(df)),
+            "exchange": exchange,
+            "note": "",
+            "symbols": self.symbols(),
+        }
+
+    def remove_symbol(self, payload: dict) -> dict:
+        """从列表里删掉一个品种（当前活跃品种、或有持仓的品种不许删）。"""
+        from ..config import config_path, save_config
+
+        sym = normalize_symbol(str(payload.get("symbol", "")).strip())
+        if sym not in self.cfg.market.symbols:
+            raise ApiError(f"{sym} 不在品种列表里", 404)
+        if sym == self.cfg.market.symbol:
+            raise ApiError("这是当前正在用的品种，先切到别的品种再删", 409)
+        pos = self.engine.state.get("position") or {}
+        if str(pos.get("symbol", "")).upper() == sym:
+            raise ApiError("该品种还有未平仓位，先平仓再删", 409)
+        self.cfg.market.symbols.remove(sym)
+        self.cfg.market.pinned = [x for x in (self.cfg.market.pinned or []) if x != sym]
+        if self.cfg.market.symbol_exchanges:
+            self.cfg.market.symbol_exchanges.pop(sym, None)
+        self._prefetch_error.pop(sym, None)
+        saved = True
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            saved = False
+        return {"symbol": sym, "removed": True, "saved": saved, "symbols": self.symbols()}
+
+    def set_symbol_pin(self, payload: dict) -> dict:
+        """置顶 / 取消置顶某个品种（置顶 = 排到列表最前面，可多个）。"""
+        from ..config import config_path, save_config
+
+        sym = normalize_symbol(str(payload.get("symbol", "")).strip())
+        if sym not in self.cfg.market.symbols:
+            raise ApiError(f"{sym} 不在品种列表里", 404)
+        pinned = [x for x in (self.cfg.market.pinned or []) if x != sym]
+        desire = payload.get("pinned")
+        if desire is None:
+            desire = sym not in (self.cfg.market.pinned or [])   # 没传就切换
+        if bool(desire):
+            pinned.insert(0, sym)          # 新置顶的排在最前
+        self.cfg.market.pinned = pinned
+        saved = True
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            saved = False
+        return {
+            "symbol": sym,
+            "pinned": bool(desire),
+            "saved": saved,
+            "symbols": self.symbols(),
+        }
+
+    def symbol_candidates(self, q: str = "") -> list[dict]:
+        """交易所永续合约清单，给「添加品种」做候选（避免手打错代码）。"""
+        now = time.time()
+        if not self._sym_catalog or (now - self._sym_catalog_at) > 600:
+            catalog = self._load_symbol_catalog()
+            if catalog:                      # 抓不到就保留旧缓存，别把候选清空
+                self._sym_catalog, self._sym_catalog_at = catalog, now
+        cat = self._sym_catalog
+        key = normalize_query(q)
+        if not key:
+            return cat[:40]
+        return [x for x in cat if key in x["symbol"]][:30]
+
+    @staticmethod
+    def _load_symbol_catalog() -> list[dict]:
+        from ..data import FAPI, OKX, _get
+
+        found: dict[str, dict] = {}
+        try:
+            data = _get(f"{FAPI}/fapi/v1/exchangeInfo", {}, timeout=12)
+            for item in data.get("symbols", []):
+                if (
+                    item.get("quoteAsset") == "USDT"
+                    and item.get("contractType") == "PERPETUAL"
+                    and item.get("status") == "TRADING"
+                ):
+                    found[item["symbol"]] = {"symbol": item["symbol"], "exchanges": ["binance"]}
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            data = _get(f"{OKX}/api/v5/public/instruments", {"instType": "SWAP"}, timeout=12)
+            for item in data.get("data", []):
+                inst = str(item.get("instId", ""))
+                if not inst.endswith("-USDT-SWAP"):
+                    continue
+                sym = inst[: -len("-USDT-SWAP")].replace("-", "") + "USDT"
+                row = found.setdefault(sym, {"symbol": sym, "exchanges": []})
+                if "okx" not in row["exchanges"]:
+                    row["exchanges"].append("okx")
+        except Exception:  # noqa: BLE001
+            pass
+        return sorted(found.values(), key=lambda x: x["symbol"])
+
+    def _prefetch_symbol(self, sym: str) -> None:
+        """后台把这个品种的历史 K 线拉全，页面上会显示「缓存中」。"""
+        from dataclasses import replace
+
+        from ..data import load_market
+
+        if sym in self._prefetching:
+            return
+        self._prefetching.add(sym)
+        try:
+            mkt = replace(self.cfg.market, symbol=sym)
+            load_market(
+                mkt, force_download=True, prefer=self.engine.state.get("exchange", "binance")
+            )
+            self._prefetch_error.pop(sym, None)
+        except Exception as exc:  # noqa: BLE001
+            self._prefetch_error[sym] = f"{type(exc).__name__}: {str(exc)[:120]}"
+        finally:
+            self._prefetching.discard(sym)
 
     def invalidate_exchange_cache(self) -> None:
         """只让下一次 status 重新拉数（下单/平仓后调用，曲线保留）。"""
@@ -1355,6 +1625,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.live_status()})
         if path == "/api/symbols":
             return self._json({"ok": True, "data": app.symbols()})
+        if path == "/api/symbols/candidates":
+            return self._json(
+                {"ok": True, "data": app.symbol_candidates(query.get("q", [""])[0])}
+            )
         if path == "/api/settings/llm":
             return self._json({"ok": True, "data": app.llm_settings()})
         if path == "/api/scan":
@@ -1423,6 +1697,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": data})
         if path == "/api/symbol":
             return self._json({"ok": True, "data": app.set_symbol(payload)})
+        if path == "/api/symbols/add":
+            return self._json({"ok": True, "data": app.add_symbol(payload)})
+        if path == "/api/symbols/remove":
+            return self._json({"ok": True, "data": app.remove_symbol(payload)})
+        if path == "/api/symbols/pin":
+            return self._json({"ok": True, "data": app.set_symbol_pin(payload)})
         if path == "/api/scan":
             return self._json({"ok": True, "data": app.scan(payload)})
         if path == "/api/opportunity":
