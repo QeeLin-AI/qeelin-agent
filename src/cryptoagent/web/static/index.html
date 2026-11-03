@@ -375,15 +375,15 @@
     </div>
     </div>
     <div class="card">
-      <div class="card-head"><h2>交易参数</h2><span class="muted">杠杆与四项硬顶</span></div>
+      <div class="card-head"><h2>交易参数</h2><span class="muted">仓位与风控</span></div>
 
       <div class="set-group">
-        <div class="set-group-title">杠杆</div>
-        <div class="set-grid narrow">
+        <div class="set-group-title">仓位设置</div>
+        <div class="set-grid four">
           <label class="set-field">
-            <span class="set-label">模式</span>
+            <span class="set-label">杠杆</span>
             <select id="levSelect">
-              <option value="0">自动（跟随决策，上限取配置与交易所较小值）</option>
+              <option value="0">自动（跟随决策）</option>
               <option value="1">1x 不加杠杆</option>
               <option value="2">2x</option>
               <option value="3">3x</option>
@@ -392,11 +392,36 @@
               <option value="20">20x</option>
               <option value="50">50x</option>
               <option value="100">100x</option>
-              <option value="125">125x（交易所最高）</option>
+              <option value="125">125x（最高）</option>
             </select>
           </label>
+          <label class="set-field">
+            <span class="set-label">仓位大小</span>
+            <select id="riskSizingMode">
+              <option value="llm">听交易员</option>
+              <option value="risk">按风险预算</option>
+              <option value="max">两者取大</option>
+            </select>
+          </label>
+          <label class="set-field">
+            <span class="set-label">单笔风险预算</span>
+            <span class="input-suffix">
+              <input id="riskBudget" type="number" min="0.1" max="5" step="0.1" />
+              <span class="suffix">% 权益</span>
+            </span>
+          </label>
+          <label class="set-field">
+            <span class="set-label">杠杆下限</span>
+            <span class="input-suffix">
+              <input id="riskMinLev" type="number" min="1" max="50" step="1" />
+              <span class="suffix">x</span>
+            </span>
+          </label>
         </div>
-        <p class="set-hint">杠杆只决定占用多少保证金、不放大风险；真正的约束是下面四项硬顶。</p>
+        <p class="set-hint">
+          杠杆只决定占用多少保证金、不放大风险。<br />
+          仓位大小：<b>听交易员</b>＝模型给多少用多少；<b>按风险预算</b>＝仓位由 预算 ÷ 止损幅度 反推；<b>两者取大</b>＝取二者较大值。
+        </p>
       </div>
 
       <div class="set-group">
@@ -433,34 +458,6 @@
         </div>
       </div>
 
-      <div class="set-group">
-        <div class="set-group-title">仓位方式</div>
-        <div class="set-grid">
-          <label class="set-field">
-            <span class="set-label">仓位大小</span>
-            <select id="riskSizingMode">
-              <option value="llm">听交易员（模型给多少用多少）</option>
-              <option value="risk">按风险预算反推</option>
-              <option value="max">两者取大（更激进）</option>
-            </select>
-          </label>
-          <label class="set-field">
-            <span class="set-label">单笔风险预算</span>
-            <span class="input-suffix">
-              <input id="riskBudget" type="number" min="0.1" max="5" step="0.1" />
-              <span class="suffix">% 权益</span>
-            </span>
-          </label>
-          <label class="set-field">
-            <span class="set-label">杠杆下限</span>
-            <span class="input-suffix">
-              <input id="riskMinLev" type="number" min="1" max="50" step="1" />
-              <span class="suffix">x</span>
-            </span>
-          </label>
-        </div>
-        <p class="set-hint">「按风险预算反推」= 仓位由 预算 ÷ 止损幅度 决定，模型只负责方向与止损；「两者取大」会托底到预算，模型给得更大时听模型。</p>
-      </div>
     </div>
     <div class="card">
       <div class="card-head"><h2>LLM 模型设置</h2><span class="muted" id="llmStatus">--</span></div>
