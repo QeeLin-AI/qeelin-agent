@@ -1274,6 +1274,8 @@ class WebApp:
             "sizing_mode": r.sizing_mode,
             "risk_per_trade_pct": r.risk_per_trade_pct,
             "min_leverage": r.min_leverage,
+            "max_portfolio_notional_pct": r.max_portfolio_notional_pct,
+            "correlated_exposure_pct": r.correlated_exposure_pct,
         }
 
     def set_risk(self, payload: dict) -> dict:
@@ -1344,6 +1346,22 @@ class WebApp:
             if not (1.0 <= v <= 50.0):
                 raise ApiError("杠杆下限只能在 1 ~ 50 之间", 400)
             r.min_leverage = v
+        if "max_portfolio_notional_pct" in payload:
+            try:
+                v = float(payload["max_portfolio_notional_pct"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("max_portfolio_notional_pct 必须是数字", 400) from exc
+            if not (0.1 <= v <= 10.0):
+                raise ApiError("组合名义敞口上限只能在 10% ~ 1000% 之间", 400)
+            r.max_portfolio_notional_pct = v
+        if "correlated_exposure_pct" in payload:
+            try:
+                v = float(payload["correlated_exposure_pct"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("correlated_exposure_pct 必须是数字", 400) from exc
+            if not (0.1 <= v <= 10.0):
+                raise ApiError("相关组敞口上限只能在 10% ~ 1000% 之间", 400)
+            r.correlated_exposure_pct = v
         try:
             save_config(self.cfg, config_path())
             saved = True
