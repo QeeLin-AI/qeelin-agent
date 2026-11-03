@@ -68,6 +68,7 @@ class TradingEngine:
             "scanning": False,
             "started_at": None,
             "last_at": None,
+            "last_ts": 0.0,
             "error": "",
         }
         self._rotate_cycle_count = 0
