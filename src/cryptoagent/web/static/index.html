@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QeeLin-Agent 控制台</title>
 <link rel="stylesheet" href="/static/style.css" />
+<script>
+  // 尽早应用主题，避免刷新时先闪一下暗色
+  try {
+    var t = localStorage.getItem('qeelin-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  } catch (e) { /* 隐私模式下忽略 */ }
+</script>
 </head>
 <body>
 <aside class="sidebar">
@@ -22,6 +29,9 @@
     <button class="tab" data-tab="decision">决策</button>
     <button class="tab" data-tab="research">因子研究</button>
   </nav>
+  <div class="side-foot">
+    <button id="themeBtn" class="btn ghost sm">☀ 亮色主题</button>
+  </div>
 </aside>
 
 <header class="topbar">

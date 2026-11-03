@@ -106,13 +106,13 @@ body { padding-left: 224px; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 0 8px rgba(34, 211, 238, .5));
 }
-/* 品牌名与版本号同一行：名字在左，版本右对齐 */
+/* 版本号在品牌名下方，右边缘与品牌名对齐 */
 .side-brand-text {
   flex: 1; min-width: 0;
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
 }
-.side-brand-text .brand-name { font-size: 13px; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
-.side-brand-text .ver { flex: none; font-size: 10px; padding: 0 4px; }
+.side-brand-text .brand-name { font-size: 13.5px; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
+.side-brand-text .ver { align-self: flex-end; font-size: 10px; padding: 0 4px; }
 
 .tabs { display: flex; flex-direction: column; gap: 4px; padding: 0; border: none; }
 .tab {
@@ -677,3 +677,70 @@ body.desktop .topbar input,
 body.desktop .topbar .tag,
 body.desktop .topbar .badge,
 body.desktop .topbar .price-block { -webkit-app-region: no-drag; }
+
+
+/* ================= 亮色主题（可切换） ================= */
+html[data-theme="light"] {
+  --bg: #f2f5fa;
+  --panel: #ffffff;
+  --panel-2: #eef2f8;
+  --line: #d6dee9;
+  --text: #16202e;
+  --muted: #5c6b80;
+  --green: #0e9f6e;
+  --red: #d92d43;
+  --blue: #2563eb;
+  --amber: #b45309;
+  --cyan: #0e7490;
+  --purple: #6d28d9;
+}
+html[data-theme="light"] body {
+  background:
+    radial-gradient(1200px 620px at 18% -12%, rgba(14, 116, 144, .06), transparent 60%),
+    radial-gradient(1000px 520px at 100% -8%, rgba(109, 40, 217, .05), transparent 55%),
+    var(--bg);
+}
+html[data-theme="light"] .topbar {
+  background: rgba(255, 255, 255, .85);
+  box-shadow: 0 1px 0 rgba(16, 32, 56, .05);
+}
+html[data-theme="light"] .sidebar { background: rgba(255, 255, 255, .93); }
+html[data-theme="light"] .card {
+  background: linear-gradient(180deg, #ffffff, #fbfcff);
+  box-shadow: 0 6px 18px rgba(20, 40, 80, .06);
+}
+html[data-theme="light"] .tab:hover { background: rgba(16, 32, 56, .05); }
+html[data-theme="light"] .btn:hover { border-color: #b9c4d6; background: #e9eef6; }
+html[data-theme="light"] input[type="number"],
+html[data-theme="light"] input[type="text"] { border-color: var(--line); }
+html[data-theme="light"] select:hover { border-color: #b9c4d6; }
+html[data-theme="light"] .live-box { border-color: rgba(217, 45, 67, .3); background: rgba(217, 45, 67, .04); }
+html[data-theme="light"] .warn { color: #b42318; }
+html[data-theme="light"] .btn.danger { color: #b42318; background: rgba(217, 45, 67, .08); border-color: rgba(217, 45, 67, .35); }
+html[data-theme="light"] .hint-key code { background: rgba(16, 32, 56, .06); color: #1e3a8a; }
+html[data-theme="light"] .pos-col,
+html[data-theme="light"] .opp-panel { background: rgba(16, 32, 56, .02); }
+html[data-theme="light"] .cal-cell { border-color: rgba(16, 32, 56, .10); background: rgba(16, 32, 56, .02); }
+html[data-theme="light"] .cal-cell.empty { border-color: transparent; background: transparent; }
+html[data-theme="light"] .opp-panel .opp-row { border-bottom-color: rgba(16, 32, 56, .08); }
+html[data-theme="light"] .conn-panel { background: linear-gradient(160deg, #ffffff, #f5f8fc); }
+html[data-theme="light"] .conn-panel::before { background: #cbd5e1; }
+html[data-theme="light"] .conn-panel.on::before { background: linear-gradient(180deg, #0e7490, #0e9f6e); }
+html[data-theme="light"] .conn-dot { background: #94a3b8; }
+html[data-theme="light"] .conn-panel.on { box-shadow: 0 0 0 1px rgba(14, 116, 144, .15), 0 8px 22px rgba(14, 116, 144, .10); }
+html[data-theme="light"] .conn-panel.on::after { background: radial-gradient(circle, rgba(14, 116, 144, .10), transparent 70%); }
+html[data-theme="light"] .conn-panel.on .conn-main {
+  background: linear-gradient(135deg, #0f172a, #0e7490);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+html[data-theme="light"] .table td { border-bottom-color: rgba(16, 32, 56, .08); }
+html[data-theme="light"] ::-webkit-scrollbar-thumb { border-color: #eef2f8; }
+html[data-theme="light"] pre.code { background: #f7f9fc; }
+
+/* 侧栏底部：主题切换 */
+.side-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); }
+.side-foot .btn { width: 100%; justify-content: center; }
+@media (max-width: 860px) {
+  .side-foot { margin: 0; padding: 0 0 0 10px; border: none; border-left: 1px solid var(--line); }
+  .side-foot .btn { width: auto; }
+}

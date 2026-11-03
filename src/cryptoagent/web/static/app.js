@@ -458,7 +458,7 @@ function renderStatus(s) {
   $('dataSource').textContent = `数据源 ${loading ? '加载中…' : shortSource(s.data_source)}`;
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
-  if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">V</span> ${esc(s.server.version)}`;
+  if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">V</span>${esc(s.server.version)}`;
   renderLive(s);
   renderDataWarn(s);
 
@@ -1351,6 +1351,29 @@ $('rotateRefresh').addEventListener('click', async () => {
 window.addEventListener('resize', () => { renderPnl(); });
 $('calPrev').addEventListener('click', () => shiftMonth(-1));
 $('calNext').addEventListener('click', () => shiftMonth(1));
+
+/* ---------------- 主题切换 ---------------- */
+const THEME_KEY = 'qeelin-theme';
+function applyTheme(mode) {
+  const light = mode === 'light';
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  const btn = $('themeBtn');
+  if (btn) btn.textContent = light ? '🌙 暗色主题' : '☀ 亮色主题';
+}
+// 有本地偏好就听本地；没有则尊重 <html data-theme>（默认暗色）
+let savedTheme = null;
+try { savedTheme = localStorage.getItem(THEME_KEY); } catch (e) { /* 隐私模式 */ }
+applyTheme(
+  savedTheme === 'light' || (!savedTheme && document.documentElement.dataset.theme === 'light')
+    ? 'light'
+    : 'dark'
+);
+$('themeBtn').addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 忽略隐私模式 */ }
+  applyTheme(next);
+  toast(next === 'light' ? '已切换到亮色主题' : '已切换到暗色主题', 'ok');
+});
 
 /* ---------------- 启动 ---------------- */
 (async function init() {
