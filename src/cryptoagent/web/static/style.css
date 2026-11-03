@@ -106,13 +106,21 @@ body { padding-left: 224px; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 0 8px rgba(34, 211, 238, .5));
 }
-/* 版本号在品牌名下方，右边缘与品牌名对齐 */
+/* 版本号在品牌名下方：文字块宽度跟着品牌名收缩，版本右边缘严格对齐品牌名最后一个字母 */
 .side-brand-text {
-  flex: 1; min-width: 0;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  flex: 0 1 auto; min-width: 0;
+  display: inline-flex; flex-direction: column;
+  align-items: flex-end;          /* 让两行都以「最宽那行」的右端为基准 */
+  gap: 3px;
 }
-.side-brand-text .brand-name { font-size: 13.5px; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
-.side-brand-text .ver { align-self: flex-end; font-size: 10px; padding: 0 4px; }
+.side-brand-text .brand-name {
+  font-size: 13.5px; font-weight: 700; letter-spacing: .2px; white-space: nowrap;
+  margin-right: -0.2px;           /* 抵消末字符后的 letter-spacing，视觉上真正贴住右边缘 */
+}
+.side-brand-text .ver {
+  align-self: flex-end; font-size: 10px;
+  padding: 0 3px 0 4px;
+}
 
 .tabs { display: flex; flex-direction: column; gap: 4px; padding: 0; border: none; }
 .tab {
@@ -640,7 +648,7 @@ input[type="number"] { min-width: 90px; }
 
 /* 版本号：V 与数字分开着色，更精致 */
 .ver { letter-spacing: .4px; }
-.ver-v { color: var(--muted); font-weight: 400; margin-right: 1px; }
+.ver-v { color: var(--muted); font-weight: 400; margin-right: 0; letter-spacing: 0; }
 
 /* 自动研究开关行 */
 .auto-research-row { display: flex; align-items: center; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
