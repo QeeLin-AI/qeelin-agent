@@ -338,6 +338,9 @@ canvas { width: 100%; height: auto; display: block; }
 .btn.danger { background: rgba(234,57,67,.15); border-color: rgba(234,57,67,.55); color: #ff7a82; }
 .btn.danger:hover { background: rgba(234,57,67,.25); }
 .btn.ghost { background: transparent; }
+/* 一键平仓：描边式危险色，比实心块克制 */
+.btn.ghost.danger { background: transparent; color: #e0697a; border-color: rgba(224, 105, 122, .40); font-weight: 500; }
+.btn.ghost.danger:hover { background: rgba(224, 105, 122, .12); border-color: rgba(224, 105, 122, .65); color: #ff8b98; }
 .btn.selected { border-color: var(--green); color: var(--green); background: rgba(22,199,132,.08); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn.blue:disabled { background: rgba(77,159,255,.45); border-color: rgba(77,159,255,.35); color: #0d1a2c; cursor: not-allowed; }
@@ -750,6 +753,8 @@ html[data-theme="light"] .btn.stop:not(.active):hover { background: #e9eef6; bor
 html[data-theme="light"] .btn.start.active:hover { background: #0e9f6e; border-color: #0e9f6e; color: #eafff6; }
 html[data-theme="light"] .btn.stop.active:hover { background: #d9484f; border-color: #d9484f; color: #fff; }
 html[data-theme="light"] .btn.danger:hover { background: rgba(217, 45, 67, .14); border-color: rgba(217, 45, 67, .5); color: #b42318; }
+html[data-theme="light"] .btn.ghost.danger { background: transparent; color: #b8323f; border-color: rgba(184, 50, 63, .30); }
+html[data-theme="light"] .btn.ghost.danger:hover { background: rgba(184, 50, 63, .08); border-color: rgba(184, 50, 63, .5); color: #a02a36; }
 html[data-theme="light"] .btn.selected:hover { background: rgba(14, 159, 110, .12); border-color: var(--green); color: var(--green); }
 html[data-theme="light"] input[type="number"],
 html[data-theme="light"] input[type="text"] { border-color: var(--line); }
