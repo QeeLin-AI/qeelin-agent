@@ -545,6 +545,9 @@ class TradingEngine:
             try:
                 mkt = replace(self.cfg.market, symbol=sym)
                 df, _ = load_market(mkt, prefer=self.state.get("exchange", "binance"))
+                # 机会榜只需最近一段历史：因子最长回看 336 + 目标窗口 200 ≈ 536 根，
+                # 取 600 根足够；否则在 6000 根上逐因子计算，单品种要 10-30 秒。
+                df = df.tail(600)
                 fsig = compute_factor_signal(self.cfg.research.factor_library, df)
                 composite = float(fsig.get("composite", 0.0) or 0.0)
                 entry["composite"] = round(composite, 4)
