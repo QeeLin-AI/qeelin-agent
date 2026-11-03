@@ -416,12 +416,7 @@ class BinanceFuturesClient:
         （币安 userTrades 省略 symbol 即返回全品种最近成交）。
         """
         self._guard()
-        # 币安 userTrades 默认按时间升序返回：只给 limit 拿到的是「最早」的 N 笔，
-        # 最新成交反而被截掉。这里限定最近 3 天并放大条数，取回后按时间倒序截断。
-        params: dict = {
-            "startTime": int((time.time() - 3 * 86400) * 1000),
-            "limit": max(50, min(limit * 10, 500)),
-        }
+        params: dict = {"limit": max(1, min(limit, 500))}
         if symbol:
             params["symbol"] = symbol
         rows = self._request("GET", "/fapi/v1/userTrades", params, signed=True)
@@ -430,21 +425,18 @@ class BinanceFuturesClient:
             side = "LONG" if str(t.get("side", "")).upper() == "BUY" else "SHORT"
             epoch = int(t.get("time") or 0)
             out.append(
-                (
-                    epoch,
-                    {
-                        "id": str(t.get("id", "")),
-                        "symbol": t.get("symbol") or symbol or "",
-                        "ts": time.strftime("%m-%d %H:%M:%S", time.localtime(epoch / 1000)),
-                        "action": "买入" if side == "LONG" else "卖出",
-                        "side": side,
-                        "qty": float(t.get("qty") or 0.0),
-                        "price": float(t.get("price") or 0.0),
-                        "pnl": float(t.get("realizedPnl") or 0.0),
-                        "fee": float(t.get("commission") or 0.0),
-                        "order_id": str(t.get("orderId", "")),
-                    },
-                )
+                {
+                    "id": str(t.get("id", "")),
+                    "symbol": t.get("symbol") or symbol or "",
+                    "ts": time.strftime("%m-%d %H:%M:%S", time.localtime(int(t.get("time", 0) or 0) / 1000)),
+                    "action": "买入" if side == "LONG" else "卖出",
+                    "side": side,
+                    "qty": float(t.get("qty") or 0.0),
+                    "price": float(t.get("price") or 0.0),
+                    "pnl": float(t.get("realizedPnl") or 0.0),
+                    "fee": float(t.get("commission") or 0.0),
+                    "order_id": str(t.get("orderId", "")),
+                }
             )
         out.sort(key=lambda x: x[0], reverse=True)
         return [r for _, r in out[:limit]]
@@ -838,12 +830,13 @@ class OKXClient:
             side = "LONG" if str(t.get("posSide", "")).lower() == "long" else "SHORT"
             epoch = int(self._f(t.get("ts")))
             try:
-                ts = time.strftime("%m-%d %H:%M:%S", time.localtime(epoch / 1000))
+                ts = time.strftime("%m-%d %H:%M:%S", time.localtime(int(t.get("ts", 0) or 0) / 1000))
             except (TypeError, ValueError, OSError):
                 ts = ""
             out.append(
                 {
                     "id": f"{t.get('tradeId', i)}",
+                    "symbol": from_okx_inst(t.get("instId") or (symbol or "")),
                     "ts": ts,
                     "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
                     "side": side,

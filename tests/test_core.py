@@ -722,6 +722,74 @@ class TestPositionReconcile(unittest.TestCase):
         self.assertEqual(e.saved, 0)
 
 
+class TestLiveEquitySync(unittest.TestCase):
+    """实盘权益与成交回读：风控不能拿内部模拟账本当真实本金。"""
+
+    def _engine(self, mode="live", armed=True, acct=None, trades=None, boom=False):
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        e.state = {
+            "position": None,
+            "exchange": "binance",
+            "testnet": True,
+            "mode": mode,
+            "equity": 10000.0,
+            "peak_equity": 10000.0,
+            "day_start_equity": 10000.0,
+            "consecutive_losses": 0,
+            "day": "2026-11-04",
+        }
+        e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(symbol="SOLUSDT"))
+        e.lock = threading.RLock()
+        e.armed = armed
+        e.saved = 0
+        e._save = lambda: setattr(e, "saved", e.saved + 1)
+
+        class _Client:
+            def account(self):
+                if boom:
+                    raise RuntimeError("api down")
+                return acct or {"balance": 5000.0, "available": 5000.0, "unrealized_pnl": -3.0}
+
+            def trades(self, symbol=None, limit=30):
+                return trades or []
+
+        e.live_client = _Client()
+        return e
+
+    def test_paper_mode_ignores_exchange(self):
+        self.assertIsNone(self._engine(mode="paper")._live_equity())
+
+    def test_account_state_rebases_to_exchange(self):
+        e = self._engine()
+        st = e.account_state(price=100.0)
+        self.assertAlmostEqual(st.equity, 4997.0)           # 5000 + (-3)
+        self.assertAlmostEqual(e.state["equity"], 4997.0)   # 内部账本已对齐
+        self.assertAlmostEqual(e.state["peak_equity"], 4997.0)
+        self.assertEqual(e.saved, 1)
+
+    def test_exchange_failure_keeps_local_ledger(self):
+        e = self._engine(boom=True)
+        st = e.account_state(price=100.0)
+        self.assertAlmostEqual(st.equity, 10000.0)
+        self.assertEqual(e.saved, 0)
+
+    def test_live_fill_aggregates_by_order_id(self):
+        rows = [
+            {"order_id": "A1", "qty": 1.0, "price": 10.0, "fee": 0.01, "pnl": 0.0},
+            {"order_id": "A1", "qty": 3.0, "price": 12.0, "fee": 0.03, "pnl": 0.0},
+            {"order_id": "B2", "qty": 9.0, "price": 99.0, "fee": 9.0, "pnl": 9.0},
+        ]
+        d = self._engine(trades=rows)._live_fill("SOLUSDT", "A1")
+        self.assertAlmostEqual(d["qty"], 4.0)
+        self.assertAlmostEqual(d["price"], 11.5)            # (10*1 + 12*3) / 4
+        self.assertAlmostEqual(d["fee"], 0.04)
+
+
 class TestPeakOffpeak(unittest.TestCase):
     """DeepSeek 官方峰谷规则：工作日 09-12/14-18 峰时，其余（含周末/节假日）谷时。"""
 
