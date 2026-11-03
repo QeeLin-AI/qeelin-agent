@@ -85,10 +85,10 @@ body {
 
 /* ---------- 标签页 ---------- */
 /* ---------- 左侧固定导航 ---------- */
-body { padding-left: 212px; }
+body { padding-left: 224px; }
 
 .sidebar {
-  position: fixed; left: 0; top: 0; bottom: 0; width: 212px;
+  position: fixed; left: 0; top: 0; bottom: 0; width: 224px;
   display: flex; flex-direction: column; gap: 10px;
   padding: 16px 12px; z-index: 30;
   background: rgba(16, 21, 35, .94);
@@ -98,7 +98,7 @@ body { padding-left: 212px; }
 }
 .side-brand {
   display: flex; align-items: center; gap: 10px;
-  padding: 2px 8px 14px; border-bottom: 1px solid var(--line);
+  padding: 2px 4px 14px; border-bottom: 1px solid var(--line);
 }
 .side-brand .logo {
   font-size: 20px;
@@ -106,8 +106,13 @@ body { padding-left: 212px; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 0 8px rgba(34, 211, 238, .5));
 }
-.side-brand-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.side-brand-text .brand-name { font-size: 14px; font-weight: 700; letter-spacing: .2px; }
+/* 品牌名与版本号同一行：名字在左，版本右对齐 */
+.side-brand-text {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.side-brand-text .brand-name { font-size: 13px; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
+.side-brand-text .ver { flex: none; font-size: 10px; padding: 0 4px; }
 
 .tabs { display: flex; flex-direction: column; gap: 4px; padding: 0; border: none; }
 .tab {
