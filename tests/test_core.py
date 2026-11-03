@@ -720,3 +720,35 @@ class TestPositionReconcile(unittest.TestCase):
         e._reconcile_position_with_exchange()
         self.assertEqual(e.state["position"], pos)
         self.assertEqual(e.saved, 0)
+
+
+class TestPeakOffpeak(unittest.TestCase):
+    """DeepSeek 官方峰谷规则：工作日 09-12/14-18 峰时，其余（含周末/节假日）谷时。"""
+
+    def _dt(self, *args):
+        from datetime import datetime
+
+        from cryptoagent.agents.llm import _CN_TZ
+
+        return datetime(*args, tzinfo=_CN_TZ)
+
+    def test_windows(self):
+        from cryptoagent.agents.llm import is_offpeak, seconds_until_offpeak
+        from cryptoagent.config import LLMConfig
+
+        cfg = LLMConfig(peak_holidays=["2026-10-01"])
+        # 2026-11-04 是周三
+        self.assertFalse(is_offpeak(cfg, self._dt(2026, 11, 4, 9, 0)))
+        self.assertFalse(is_offpeak(cfg, self._dt(2026, 11, 4, 11, 59)))
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 4, 12, 0)))
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 4, 13, 59)))
+        self.assertFalse(is_offpeak(cfg, self._dt(2026, 11, 4, 14, 0)))
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 4, 18, 0)))
+        # 周末全天谷时
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 7, 10, 0)))
+        # 配置的节假日按谷时
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 10, 1, 10, 0)))
+        # 距离下一个谷时：09:30→12:00 = 9000s；14:30→18:00 = 12600s
+        self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 9, 30)), 9000)
+        self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 14, 30)), 12600)
+        self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 20, 0)), 0)
