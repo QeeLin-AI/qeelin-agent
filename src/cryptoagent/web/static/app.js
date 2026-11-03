@@ -1,6 +1,19 @@
 /* QeeLin-Agent 控制台前端：零依赖，纯 fetch + canvas */
 const $ = (id) => document.getElementById(id);
 const fmt = (n, d = 2) => (n === null || n === undefined || Number.isNaN(n)) ? '--' : Number(n).toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d });
+// 价格按量级取小数位（DOGE 0.07 这种不能只留两位）
+const fmtPx = (n) => {
+  if (n === null || n === undefined || Number.isNaN(n)) return '--';
+  const v = Math.abs(Number(n));
+  const d = v >= 1000 ? 2 : v >= 100 ? 3 : v >= 1 ? 4 : v >= 0.1 ? 5 : v >= 0.01 ? 6 : 8;
+  return fmt(n, d);
+};
+// 数量：大数保留 2 位，小数最多 6 位
+const fmtQty = (n) => {
+  if (n === null || n === undefined || Number.isNaN(n)) return '--';
+  const v = Math.abs(Number(n));
+  return fmt(n, v >= 1000 ? 2 : v >= 1 ? 4 : 6);
+};
 const pct = (n) => (n === null || n === undefined) ? '--' : `${n >= 0 ? '+' : ''}${Number(n).toFixed(2)}%`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // 持仓方向中文：多 / 空（保留英文便于对照）
@@ -508,7 +521,7 @@ function renderStatus(s) {
     const p = s.position;
     $('position').textContent = `${sideCn(p.side)} ${fmt(p.qty, 4)}`;
     $('position').className = p.side === 'LONG' ? 'up' : 'down';
-    $('posSub').textContent = `开仓 ${fmt(p.entry)} · 浮盈亏 ${fmt(p.unrealized)}`;
+    $('posSub').textContent = `开仓 ${fmtPx(p.entry)} · 浮盈亏 ${fmt(p.unrealized)}`;
   } else {
     $('position').textContent = '空仓';
     $('position').className = '';
@@ -527,8 +540,8 @@ function renderStatus(s) {
       <td class="muted">${esc(f.ts)}</td>
       <td class="${cls}">${esc(actionCn(f.action))}</td>
       <td class="${cls}">${esc(sideCn(f.side))}</td>
-      <td>${fmt(f.qty, 4)}</td>
-      <td>${fmt(f.price)}</td>
+      <td>${fmtQty(f.qty)}</td>
+      <td>${fmtPx(f.price)}</td>
       <td class="${(f.pnl || 0) >= 0 ? 'up' : 'down'}">${f.pnl !== undefined ? fmt(f.pnl) : '--'}${fee}</td>
     </tr>`;
     }).join('');
@@ -543,8 +556,8 @@ function renderStatus(s) {
     pt.innerHTML = `<tr>
       <td class="mono">${esc(p.symbol || s.symbol)}</td>
       <td class="${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</td>
-      <td>${fmt(p.qty, 4)}</td><td>${fmt(p.entry)}</td><td>${fmt(p.mark)}</td>
-      <td>${fmt(p.leverage, 1)}x</td><td>${fmt(p.stop)}</td><td>${fmt(p.tp)}</td>
+      <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
+      <td>${fmt(p.leverage, 1)}x</td><td>${fmtPx(p.stop)}</td><td>${fmtPx(p.tp)}</td>
       <td class="${p.unrealized >= 0 ? 'up' : 'down'}">${fmt(p.unrealized)}</td>
       <td>${esc(p.mode || (exOk ? '交易所' : 'paper'))}</td></tr>`;
   } else {
@@ -630,6 +643,8 @@ function renderStatus(s) {
     $('execBtn').title = s.last_decision.order ? '' : '上次决策没有产生订单';
   }
   renderPnl();
+  renderPosHistory();
+  renderDaily();
   renderOpportunities();
 }
 
@@ -645,6 +660,54 @@ function setupCanvas(cv) {
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, w, h };
+}
+
+function renderPosHistory() {
+  const tb = $('posHistBody');
+  if (!tb) return;
+  const hist = (lastStatus && lastStatus.position_history) || [];
+  if (!hist.length) {
+    tb.innerHTML = '<tr><td colspan="9" class="muted center">暂无平仓记录</td></tr>';
+    return;
+  }
+  const reasonCn = { manual: '手动', stop: '止损', tp: '止盈', auto: '自动', kill: '熔断' };
+  tb.innerHTML = hist.map((h) => {
+    const up = (h.pnl || 0) >= 0;
+    const dir = h.side === 'LONG' ? '多' : '空';
+    return `<tr>
+      <td class="muted">${esc(h.closed_at || '')}</td>
+      <td>${esc(h.symbol || '')}</td>
+      <td class="${h.side === 'LONG' ? 'up' : 'down'}">${dir}</td>
+      <td>${fmtQty(h.qty)}</td>
+      <td>${fmtPx(h.entry)}</td>
+      <td>${fmtPx(h.exit)}</td>
+      <td class="${up ? 'up' : 'down'}">${up ? '+' : ''}${fmt(h.pnl, 2)}</td>
+      <td class="muted">${h.mode === 'live' ? '交易所' : '本地模拟'}</td>
+      <td class="muted">${esc(reasonCn[h.reason] || h.reason || '')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderDaily() {
+  const el = $('dailyPnl');
+  if (!el) return;
+  const days = (lastStatus && lastStatus.daily) || [];
+  if (!days.length) {
+    el.innerHTML = '<div class="muted center">暂无已实现盈亏</div>';
+    return;
+  }
+  const maxAbs = Math.max(...days.map((d) => Math.abs(d.pnl || 0)), 1e-9);
+  el.innerHTML = days.map((d) => {
+    const up = (d.pnl || 0) >= 0;
+    const w = Math.max(3, Math.round((Math.abs(d.pnl || 0) / maxAbs) * 100));
+    const wr = d.trades ? `${d.wins}/${d.trades}` : '--';
+    return `<div class="pnl-row">
+      <span class="pnl-time">${esc(String(d.date || '').slice(5))}</span>
+      <span class="pnl-act muted">${wr} 胜</span>
+      <div class="pnl-bar-track"><div class="pnl-bar ${up ? 'up' : 'down'}" style="width:${w}%"></div></div>
+      <span class="pnl-val ${up ? 'up' : 'down'}">${up ? '+' : ''}${fmt(d.pnl, 2)}</span>
+    </div>`;
+  }).join('');
 }
 
 function renderPnl() {
@@ -993,6 +1056,8 @@ $('tnSwitchBtn').addEventListener('click', async () => {
 
 // 状态条上的「切换交易所」：直接展开当前模式对应的面板
 $('connSwitchBtn').addEventListener('click', () => {
+  // 交易所/API 设置已挪到「设置」页：先切页再展开对应面板
+  showTab('settings');
   const scope = (lastStatus && lastStatus.mode === 'live' && !lastStatus.testnet) ? 'live' : 'testnet';
   const boxId = scope === 'live' ? 'liveBox' : 'testnetBox';
   openPanel(boxId, scope === 'live' ? 'liveBtn' : 'testnetBtn');
@@ -1000,6 +1065,15 @@ $('connSwitchBtn').addEventListener('click', () => {
   renderExchangePanel(scope);
   $(boxId).scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
+
+// 交易页那行「已移到设置页」的链接
+const goSettings = $('goSettings');
+if (goSettings) {
+  goSettings.addEventListener('click', (e) => {
+    e.preventDefault();
+    showTab('settings');
+  });
+}
 
 // 状态条上的「断开」
 $('connDisarmBtn').addEventListener('click', async () => {
@@ -1222,7 +1296,7 @@ window.addEventListener('resize', () => { renderPnl(); });
 (async function init() {
   await loadSymbols();
   const hash = location.hash.replace('#', '');
-  if (['overview', 'decision', 'research', 'trading'].includes(hash)) showTab(hash, false);
+  if (['overview', 'decision', 'research', 'trading', 'settings'].includes(hash)) showTab(hash, false);
   await poll();
   try {
     const r = await api('/api/research/latest');

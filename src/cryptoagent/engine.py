@@ -78,6 +78,7 @@ class TradingEngine:
             "day": _today(),
             "position": None,
             "fills": [],
+            "position_history": [],
             "consecutive_losses": 0,
             "last_decision": None,
             "auto": {"running": False, "interval_sec": 300, "execute": False, "last_run": ""},
@@ -226,6 +227,26 @@ class TradingEngine:
         self.state["fills"] = self.state["fills"][-500:]
         return fill_rec
 
+    def _record_close(self, pos: dict, exit_price: float, pnl: float, reason: str, mode: str) -> None:
+        """把一次平仓写进持仓历史：持仓历史表 + 每日盈亏统计都靠它。"""
+        hist = self.state.setdefault("position_history", [])
+        hist.append(
+            {
+                "symbol": pos.get("symbol") or self.cfg.market.symbol,
+                "side": pos.get("side"),
+                "qty": round(float(pos.get("qty") or 0), 6),
+                "entry": float(pos.get("entry") or 0),
+                "exit": round_price(float(exit_price or 0)),
+                "pnl": round(float(pnl or 0), 4),
+                "leverage": pos.get("leverage"),
+                "opened_at": pos.get("opened_at", ""),
+                "closed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "mode": mode,
+                "reason": reason,
+            }
+        )
+        self.state["position_history"] = hist[-200:]
+
     def _paper_close(self, price: float, reason: str) -> dict | None:
         pos = self.state.get("position")
         if not pos:
@@ -251,6 +272,7 @@ class TradingEngine:
         }
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
+        self._record_close(pos, fill, pnl - fee, reason, "paper")
         self.state["position"] = None
         return rec
 
@@ -592,9 +614,13 @@ class TradingEngine:
                         float(pos["qty"]),
                         reduce_only=True,
                     )
+                    exit_px = res.price or price
+                    direction = 1.0 if pos["side"] == "LONG" else -1.0
+                    pnl = (float(exit_px) - float(pos["entry"])) * float(pos["qty"]) * direction
+                    self._record_close(pos, exit_px, pnl, reason, "live")
                     self.state["position"] = None
                     self._save()
-                    self._log_live("CLOSE", pos["side"], pos["qty"], res.price or price, res.order_id)
+                    self._log_live("CLOSE", pos["side"], pos["qty"], exit_px, res.order_id)
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
                     return {"ok": False, "error": str(exc)}
@@ -736,6 +762,21 @@ class TradingEngine:
     # ------------------------------------------------------------------
     # 状态输出
     # ------------------------------------------------------------------
+    def _daily_pnl(self, days: int = 14) -> list[dict]:
+        """按平仓日期聚合已实现盈亏，返回最近 N 天（有交易的日子）。"""
+        agg: dict[str, dict] = {}
+        for h in self.state.get("position_history", []):
+            day = str(h.get("closed_at") or "")[:10]
+            if len(day) != 10:
+                continue
+            row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
+            pnl = float(h.get("pnl") or 0.0)
+            row["pnl"] = round(row["pnl"] + pnl, 4)
+            row["trades"] += 1
+            if pnl > 0:
+                row["wins"] += 1
+        return [agg[k] for k in sorted(agg)][-days:]
+
     def status(self, price_override: float | None = None) -> dict:
         with self.lock:
             price = None
@@ -784,6 +825,13 @@ class TradingEngine:
                     {**f, "symbol": f.get("symbol") or self.cfg.market.symbol}
                     for f in self.state["fills"][-30:][::-1]
                 ],
+                # 持仓历史（最近 30 笔平仓，最新在前）+ 每日已实现盈亏（最近 14 天）
+                "position_history": sorted(
+                    self.state.get("position_history", [])[-200:],
+                    key=lambda x: str(x.get("closed_at") or ""),
+                    reverse=True,
+                )[:30],
+                "daily": self._daily_pnl(),
                 "consecutive_losses": self.state["consecutive_losses"],
                 "last_decision": self.state.get("last_decision"),
                 "auto": self.state.get("auto", {}),
