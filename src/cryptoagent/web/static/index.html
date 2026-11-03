@@ -170,21 +170,39 @@
     <div>
       <div class="card">
         <div class="card-head"><h2>自动交易</h2><span id="autoState" class="badge">停止</span></div>
-        <p class="muted">交易所连接、API Key、杠杆与风控已移到 <a href="#settings" id="goSettings" class="link">设置</a> 页。</p>
-        <label class="field">轮询间隔（秒）
-          <input id="autoInterval" type="number" min="30" max="3600" value="300" />
-        </label>
-        <label class="inline"><input id="autoExec" type="checkbox" /> 决策通过后自动下单</label>
-        <div class="actions">
-          <button id="autoStart" class="btn start">启动</button>
-          <button id="autoStop" class="btn stop active">停止</button>
+        <div class="trade-split">
+          <div class="trade-main">
+            <p class="muted">交易所连接、API Key、杠杆与风控已移到 <a href="#settings" id="goSettings" class="link">设置</a> 页。</p>
+            <label class="field">轮询间隔（秒）
+              <input id="autoInterval" type="number" min="30" max="3600" value="300" />
+            </label>
+            <label class="inline"><input id="autoExec" type="checkbox" /> 决策通过后自动下单</label>
+            <div class="actions">
+              <button id="autoStart" class="btn start">启动</button>
+              <button id="autoStop" class="btn stop active">停止</button>
+            </div>
+            <p class="muted" id="autoMeta">未运行</p>
+            <div class="divider"><span>手动执行</span></div>
+            <div class="actions">
+              <button id="execBtn" class="btn ghost">执行决策</button>
+            </div>
+            <p class="muted">执行 = 把「上次决策的订单计划」发给交易所或模拟撮合。实盘需先解锁。</p>
+          </div>
+
+          <aside id="connBar" class="conn-panel">
+            <div class="conn-head">
+              <span id="connDot" class="conn-dot"></span>
+              <span id="connStateText" class="conn-state">未连接</span>
+              <span id="connModeTag" class="conn-tag">本地模拟</span>
+            </div>
+            <div class="conn-main" id="connBarText">本地模拟</div>
+            <div class="conn-sub" id="connBarSub">未接交易所，下单只在本地撮合</div>
+            <div class="conn-actions">
+              <button id="connSwitchBtn" class="btn ghost sm">去连接交易所</button>
+              <button id="connDisarmBtn" class="btn ghost sm hidden">断开</button>
+            </div>
+          </aside>
         </div>
-        <p class="muted" id="autoMeta">未运行</p>
-        <hr />
-        <div class="actions">
-          <button id="execBtn" class="btn ghost">执行决策</button>
-        </div>
-        <p class="muted">执行 = 把「上次决策的订单计划」发给交易所或模拟撮合。实盘需先解锁。</p>
       </div>
     </div>
 
@@ -210,11 +228,6 @@
       <button id="paperBtn" class="btn selected">本地模拟</button>
       <button id="testnetBtn" class="btn">模拟盘</button>
       <button id="liveBtn" class="btn">主网实盘</button>
-    </div>
-    <div id="connBar" class="conn-bar hidden">
-      <span id="connBarText" class="conn-text"></span>
-      <button id="connSwitchBtn" class="btn ghost sm">切换交易所</button>
-      <button id="connDisarmBtn" class="btn ghost sm">断开</button>
     </div>
     <p class="muted" style="margin:8px 0 0">
       本地模拟＝自己撮合，不联网下单；模拟盘＝发单到所选交易所的模拟盘账户（币安 / OKX），用的是假钱 Demo 账户；主网实盘＝真钱。

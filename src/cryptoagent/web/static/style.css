@@ -295,10 +295,52 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .seg.sel { border-color: var(--green); color: var(--green); background: rgba(22,199,132,.10); font-weight: 600; }
 #tnPassRow, #livePassRow { display: none; }
 #tnPassRow.show, #livePassRow.show { display: flex; }
-/* 已连接状态条：把「当前连的是谁 + 切换 + 断开」摆到面板外面，不用先点开设置 */
-.conn-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 2px; padding: 8px 12px; border: 1px solid rgba(22,199,132,.35); background: rgba(22,199,132,.08); border-radius: 8px; font-size: 12px; }
-.conn-bar .conn-text { color: var(--text); margin-right: auto; }
 .btn.sm { padding: 4px 10px; font-size: 12px; }
+
+/* ---------- 交易页右侧连接状态卡 ---------- */
+.trade-split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+@media (max-width: 1080px) { .trade-split { grid-template-columns: 1fr; } }
+
+.conn-panel {
+  position: relative; overflow: hidden;
+  padding: 16px 16px 14px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: linear-gradient(160deg, rgba(30, 38, 58, .92), rgba(20, 25, 41, .92));
+}
+.conn-panel::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line);
+}
+.conn-panel.on {
+  border-color: rgba(34, 211, 238, .45);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, .12), 0 10px 30px rgba(34, 211, 238, .10);
+}
+.conn-panel.on::before { background: linear-gradient(180deg, #22d3ee, #00e08f); }
+.conn-panel.on::after {
+  content: ""; position: absolute; right: -50px; top: -50px; width: 150px; height: 150px;
+  background: radial-gradient(circle, rgba(34, 211, 238, .18), transparent 70%);
+  pointer-events: none;
+}
+.conn-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: #55607a; flex: none; }
+.conn-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(0, 224, 143, .15), 0 0 12px rgba(0, 224, 143, .8);
+  animation: connPulse 2s ease-in-out infinite;
+}
+@keyframes connPulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.conn-state { font-weight: 600; letter-spacing: .6px; color: var(--muted); }
+.conn-panel.on .conn-state { color: var(--green); }
+.conn-tag { margin-left: auto; font-size: 11px; padding: 2px 9px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+.conn-panel.on .conn-tag { color: var(--cyan); border-color: rgba(34, 211, 238, .4); background: rgba(34, 211, 238, .08); }
+.conn-main {
+  margin: 10px 0 4px; font-size: 20px; font-weight: 700; letter-spacing: .3px; color: var(--text);
+}
+.conn-panel.on .conn-main {
+  background: linear-gradient(135deg, #e9eef7, #7ee7f7);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.conn-sub { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.conn-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 /* 每个交易所的 Key / 连接状态一览 */
 .ex-status { margin: 8px 0 10px; font-size: 12px; line-height: 1.8; color: var(--muted); }
 .ex-status .sep { color: var(--line); margin: 0 6px; }

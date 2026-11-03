@@ -573,13 +573,20 @@ function renderStatus(s) {
       ? `${exName} · ${s.testnet ? '模拟盘' : '主网实盘'}${s.armed ? '' : '（未连接）'}`
       : '';
   }
-  // 已连接状态条：把「连着谁 / 切换 / 断开」放在面板外面，一眼能看到
+  // 交易页右侧连接状态卡
   if ($('connBar')) {
-    const showBar = s.mode === 'live' && s.armed;
-    $('connBar').classList.toggle('hidden', !showBar);
-    if (showBar) {
-      $('connBarText').textContent = `已连接：${exName} · ${s.testnet ? '模拟盘（Demo 假钱）' : '主网实盘（真钱）'}`;
-    }
+    const on = s.mode === 'live' && s.armed;
+    const tag = on ? (s.testnet ? '模拟盘' : '主网实盘') : '本地模拟';
+    $('connBar').classList.toggle('on', on);
+    $('connDot').classList.toggle('on', on);
+    $('connStateText').textContent = on ? '已连接' : '未连接';
+    $('connModeTag').textContent = tag;
+    $('connBarText').textContent = on ? `${exName} · ${tag}` : '本地模拟';
+    $('connBarSub').textContent = on
+      ? `${s.testnet ? 'Demo 假钱' : '真钱'} · 权益 ${fmt(s.equity)} USDT`
+      : '未接交易所，下单只在本地撮合';
+    $('connDisarmBtn').classList.toggle('hidden', !on);
+    $('connSwitchBtn').textContent = on ? '切换交易所' : '去连接交易所';
   }
   // 三个模式按钮的高亮跟着真实状态走
   const connected = s.mode === 'live' && s.armed;
