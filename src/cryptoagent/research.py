@@ -265,6 +265,11 @@ def build_proposer(cfg: AppConfig, llm, verbose: bool = True) -> Proposer:
     provider = getattr(llm, "provider", cfg.llm.provider).lower()
     if provider == "mock":
         return TemplateProposer()
+    # 峰时省钱：因子研究可延后，峰时不调用 LLM，改用模板提议器；谷时（半价）再跑 LLM
+    if getattr(cfg.llm, "offpeak_research_only", True) and not llm.is_offpeak():
+        if verbose:
+            print("[research] 峰时：改用模板提议器（谷时再调用 LLM，省一半费用）")
+        return TemplateProposer()
     if verbose:
         print(f"[research] 使用 LLM 提议因子：{provider}/{cfg.llm.model}")
     return LLMProposer(llm)

@@ -409,30 +409,45 @@ class BinanceFuturesClient:
     def open_orders(self, symbol: str) -> list[dict]:
         return self._request("GET", "/fapi/v1/openOrders", {"symbol": symbol}, signed=True)
 
-    def trades(self, symbol: str, limit: int = 30) -> list[dict]:
-        """账户在交易所的真实成交（不是本地模拟撮合）。"""
+    def trades(self, symbol: str | None = None, limit: int = 30) -> list[dict]:
+        """账户在交易所的真实成交（不是本地模拟撮合）。
+
+        symbol 传 None 时拉全部品种：用户切了品种后，「最近成交」仍要能看到上一笔交易
+        （币安 userTrades 省略 symbol 即返回全品种最近成交）。
+        """
         self._guard()
-        rows = self._request(
-            "GET", "/fapi/v1/userTrades", {"symbol": symbol, "limit": max(1, min(limit, 500))}, signed=True
-        )
+        # 币安 userTrades 默认按时间升序返回：只给 limit 拿到的是「最早」的 N 笔，
+        # 最新成交反而被截掉。这里限定最近 3 天并放大条数，取回后按时间倒序截断。
+        params: dict = {
+            "startTime": int((time.time() - 3 * 86400) * 1000),
+            "limit": max(50, min(limit * 10, 500)),
+        }
+        if symbol:
+            params["symbol"] = symbol
+        rows = self._request("GET", "/fapi/v1/userTrades", params, signed=True)
         out = []
         for t in rows or []:
             side = "LONG" if str(t.get("side", "")).upper() == "BUY" else "SHORT"
+            epoch = int(t.get("time") or 0)
             out.append(
-                {
-                    "id": str(t.get("id", "")),
-                    "ts": time.strftime("%m-%d %H:%M:%S", time.localtime(int(t.get("time", 0)) / 1000)),
-                    "action": "买入" if side == "LONG" else "卖出",
-                    "side": side,
-                    "qty": float(t.get("qty", 0.0)),
-                    "price": float(t.get("price", 0.0)),
-                    "pnl": float(t.get("realizedPnl", 0.0)),
-                    "fee": float(t.get("commission", 0.0)),
-                    "order_id": str(t.get("orderId", "")),
-                }
+                (
+                    epoch,
+                    {
+                        "id": str(t.get("id", "")),
+                        "symbol": t.get("symbol") or symbol or "",
+                        "ts": time.strftime("%m-%d %H:%M:%S", time.localtime(epoch / 1000)),
+                        "action": "买入" if side == "LONG" else "卖出",
+                        "side": side,
+                        "qty": float(t.get("qty") or 0.0),
+                        "price": float(t.get("price") or 0.0),
+                        "pnl": float(t.get("realizedPnl") or 0.0),
+                        "fee": float(t.get("commission") or 0.0),
+                        "order_id": str(t.get("orderId", "")),
+                    },
+                )
             )
-        out.sort(key=lambda r: r["id"], reverse=True)
-        return out[:limit]
+        out.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in out[:limit]]
 
     def income(self, start_ms: int, limit: int = 1000) -> list[dict]:
         """资金流水：用于算「当日盈亏」（已实现盈亏 + 手续费 + 资金费）。"""
@@ -631,18 +646,28 @@ class OKXClient:
         d = self._data(self._request("GET", "/api/v5/public/mark-price", {"instType": "SWAP", "instId": inst}))
         return float(d[0]["markPx"])
 
+    @staticmethod
+    def _f(v, default: float = 0.0) -> float:
+        """安全转 float：OKX 某些字段（如模拟盘 upl）会返回空串/None。"""
+        if v is None or v == "":
+            return default
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
     def account(self) -> dict:
         d = self._data(self._request("GET", "/api/v5/account/balance", signed=True))
         details = (d[0].get("details") if d else []) or []
         usdt = next((x for x in details if x.get("ccy") == "USDT"), None)
         if usdt:
             return {
-                "balance": float(usdt.get("eq", 0.0)),
-                "available": float(usdt.get("availBal", 0.0)),
-                "unrealized_pnl": float(usdt.get("upl", 0.0)),
+                "balance": self._f(usdt.get("eq")),
+                "available": self._f(usdt.get("availBal")),
+                "unrealized_pnl": self._f(usdt.get("upl")),
             }
         # 没有 USDT 明细时退回总权益
-        total = float(d[0].get("totalEq", 0.0)) if d else 0.0
+        total = self._f(d[0].get("totalEq")) if d else 0.0
         return {"balance": total, "available": total, "unrealized_pnl": 0.0}
 
     def positions(self, symbol: str | None = None) -> list[dict]:
@@ -652,7 +677,7 @@ class OKXClient:
         for p in data:
             if inst and p.get("instId") != inst:
                 continue
-            amt = float(p.get("pos", 0.0))
+            amt = self._f(p.get("pos"))
             if abs(amt) < 1e-8:
                 continue
             out.append(
@@ -660,11 +685,11 @@ class OKXClient:
                     "symbol": from_okx_inst(p.get("instId", symbol or "")),
                     "side": "LONG" if p.get("posSide") == "long" else "SHORT",
                     "qty": abs(amt),
-                    "entry": float(p.get("avgPx", 0.0)),
-                    "mark": float(p.get("markPx", 0.0)),
-                    "unrealized": float(p.get("upl", 0.0)),
-                    "leverage": float(p.get("lever", 1.0)),
-                    "liquidation": float(p.get("liqPx", 0.0) or 0.0),
+                    "entry": self._f(p.get("avgPx")),
+                    "mark": self._f(p.get("markPx")),
+                    "unrealized": self._f(p.get("upl")),
+                    "leverage": self._f(p.get("lever"), 1.0),
+                    "liquidation": self._f(p.get("liqPx")),
                 }
             )
         return out
@@ -801,35 +826,40 @@ class OKXClient:
             "GET", "/api/v5/trade/orders-pending",
             {"instType": "SWAP", "instId": inst}, signed=True))
 
-    def trades(self, symbol: str, limit: int = 30) -> list[dict]:
-        """账户在交易所的真实成交。"""
+    def trades(self, symbol: str | None = None, limit: int = 30) -> list[dict]:
+        """账户在交易所的真实成交。symbol 为空时拉全部品种（切换品种后仍能看到上一笔）。"""
         self._guard()
-        inst = to_okx_inst(symbol)
-        rows = self._data(self._request(
-            "GET", "/api/v5/trade/fills",
-            {"instType": "SWAP", "instId": inst, "limit": max(1, min(limit, 100))}, signed=True))
+        params: dict = {"instType": "SWAP", "limit": max(1, min(limit, 100))}
+        if symbol:
+            params["instId"] = to_okx_inst(symbol)
+        rows = self._data(self._request("GET", "/api/v5/trade/fills", params, signed=True))
         out = []
         for i, t in enumerate(rows or []):
             side = "LONG" if str(t.get("posSide", "")).lower() == "long" else "SHORT"
+            epoch = int(self._f(t.get("ts")))
             try:
-                ts = time.strftime("%m-%d %H:%M:%S", time.localtime(int(t.get("ts", 0)) / 1000))
+                ts = time.strftime("%m-%d %H:%M:%S", time.localtime(epoch / 1000))
             except (TypeError, ValueError, OSError):
                 ts = ""
             out.append(
-                {
-                    "id": f"{t.get('tradeId', i)}",
-                    "ts": ts,
-                    "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
-                    "side": side,
-                    "qty": float(t.get("fillSz", 0.0)),
-                    "price": float(t.get("fillPx", 0.0)),
-                    "pnl": float(t.get("pnl", 0.0)),
-                    "fee": float(t.get("fee", 0.0)),
-                    "order_id": str(t.get("ordId", "")),
-                }
+                (
+                    epoch,
+                    {
+                        "id": f"{t.get('tradeId', i)}",
+                        "symbol": from_okx_inst(t.get("instId") or (symbol or "")),
+                        "ts": ts,
+                        "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
+                        "side": side,
+                        "qty": self._f(t.get("fillSz")),
+                        "price": self._f(t.get("fillPx")),
+                        "pnl": self._f(t.get("pnl")),
+                        "fee": self._f(t.get("fee")),
+                        "order_id": str(t.get("ordId", "")),
+                    },
+                )
             )
-        out.sort(key=lambda r: r["id"], reverse=True)
-        return out[:limit]
+        out.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in out[:limit]]
 
     def income(self, start_ms: int, limit: int = 1000) -> list[dict]:
         """资金流水：用于算「当日盈亏」（已实现盈亏 + 手续费 + 资金费）。
@@ -878,9 +908,9 @@ class OKXClient:
                                          {"instType": "SWAP", "instId": to_okx_inst(symbol)}))
             if d:
                 i = d[0]
-                tick = float(i.get("tickSz", tick))
-                step = float(i.get("lotSz", step))
-                ctval = float(i.get("ctVal", 1.0) or 1.0)
+                tick = self._f(i.get("tickSz"), tick)
+                step = self._f(i.get("lotSz"), step)
+                ctval = self._f(i.get("ctVal"), 1.0)
                 try:
                     min_notional = float(i.get("minSz", 0.0) or 0.0) * ctval * 1.0
                 except (TypeError, ValueError):

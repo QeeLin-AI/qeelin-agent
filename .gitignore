@@ -30,5 +30,19 @@ tools/handoff.py
 迁移说明.md
 HANDOFF.md
 
-# UI 截图
-docs/
+# UI 截图：只把 README 引用的几张入库，其余本地截图忽略
+docs/*
+!docs/ui.png
+!docs/tab-decision.png
+!docs/tab-research.png
+
+# 桌面端构建产物（体积大，不入库）
+desktop/node_modules/
+desktop/backend/
+desktop/release/
+desktop/dist/
+desktop/build/
+desktop/.eb-cache/
+
+# 服务器专用启动脚本（含内部绝对路径）
+deploy/service-run-exe.cmd

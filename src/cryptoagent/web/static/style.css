@@ -351,16 +351,25 @@ canvas { width: 100%; height: auto; display: block; }
 .btn.blue:disabled { background: rgba(77,159,255,.45); border-color: rgba(77,159,255,.35); color: #0d1a2c; cursor: not-allowed; }
 .btn.warn:disabled { background: rgba(255,176,32,.45); border-color: rgba(255,176,32,.35); color: #241700; cursor: not-allowed; }
 
-input[type="number"], input[type="text"] {
+input[type="number"], input[type="text"], input[type="password"] {
   background: var(--panel-2); border: 1px solid #33405a; color: var(--text);
   border-radius: 6px; padding: 6px 9px; font-size: 13px; width: 110px;
 }
-input[type="number"]:focus, input[type="text"]:focus { border-color: var(--cyan); outline: none; }
-input[type="text"] { width: 100%; }
+input[type="number"]:focus, input[type="text"]:focus, input[type="password"]:focus { border-color: var(--cyan); outline: none; }
+input[type="text"], input[type="password"] { width: 100%; }
+/* Chrome 自动填充会强制浅色底，压回主题色 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
 label.inline { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 label.field { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; margin: 12px 0; }
 /* 宽屏下输入框别拉到一千多像素，读起来累 */
 .card label.field > input[type="text"],
+.card label.field > input[type="password"],
 .card label.field > select { max-width: 560px; }
 
 /* ---------- 决策区 ---------- */
@@ -891,7 +900,8 @@ html[data-theme="light"] .btn.ghost.danger { background: transparent; color: #b8
 html[data-theme="light"] .btn.ghost.danger:hover { background: rgba(184, 50, 63, .08); border-color: rgba(184, 50, 63, .5); color: #a02a36; }
 html[data-theme="light"] .btn.selected:hover { background: rgba(14, 159, 110, .12); border-color: var(--green); color: var(--green); }
 html[data-theme="light"] input[type="number"],
-html[data-theme="light"] input[type="text"] { border-color: var(--line); }
+html[data-theme="light"] input[type="text"],
+html[data-theme="light"] input[type="password"] { border-color: var(--line); }
 html[data-theme="light"] select:hover { border-color: #b9c4d6; }
 html[data-theme="light"] .live-box { border-color: rgba(217, 45, 67, .3); background: rgba(217, 45, 67, .04); }
 html[data-theme="light"] .warn { color: #b42318; }

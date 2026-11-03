@@ -21,7 +21,7 @@ from ..engine import TradingEngine
 from .. import __version__
 from ..execution import ExchangeError
 from ..research import ResearchLoop, build_proposer
-from ..agents.llm import LLMClient
+from ..agents.llm import LLMClient, is_offpeak, offpeak_info, seconds_until_offpeak
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -71,10 +71,12 @@ class WebApp:
         self.last_scan: dict | None = None
         self.token = os.getenv("CRYPTOAGENT_WEB_TOKEN", "").strip()
         # 重启后自动解锁（只允许假钱环境）。CRYPTOAGENT_AUTO_ARM = <exchange>:<env>，
-        # 例如 okx:demo / binance:testnet；没有交易所前缀时默认 binance（兼容旧配置）。
+        # 例如 okx:demo / binance:testnet；没有交易所前缀时跟随当前活跃交易所。
         self.auto_arm = os.getenv("CRYPTOAGENT_AUTO_ARM", "").strip().lower()
         _aa = self.auto_arm.split(":", 1)
-        self.auto_arm_exchange = _aa[0] if len(_aa) == 2 else "binance"
+        self.auto_arm_exchange = (
+            _aa[0] if len(_aa) == 2 else self.engine.state.get("exchange", "binance")
+        )
         self.auto_arm_env = _aa[-1]
         self.auto_arm_state: dict = {
             "enabled": self.auto_arm_env in ("demo", "testnet"),
@@ -209,6 +211,18 @@ class WebApp:
         """开机自启时网络往往还没好，所以带退避重试。只对 demo/testnet 生效。"""
         env = self.auto_arm_env
         exchange = self.auto_arm_exchange
+        # Key 都没配就没必要空重试 6 次，直接给出明确原因
+        from ..execution import read_api_keys
+
+        k, s, p = read_api_keys(exchange, True)
+        if not (k and s and (p if exchange == "okx" else True)):
+            self.auto_arm_state.update({
+                "ok": False,
+                "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "error": f"未配置 {exchange} 模拟盘 API Key，已跳过自动解锁",
+            })
+            print(f"[auto-arm] {self.auto_arm_state['error']}")
+            return
         for attempt in range(1, max_attempts + 1):
             self.auto_arm_state["attempts"] = attempt
             try:
@@ -348,6 +362,13 @@ class WebApp:
         items = load_notifications(self.cfg.notify.inapp_path, limit=limit)
         return {"items": items, "channels": self.cfg.notify.channels}
 
+    def clear_notifications(self) -> dict:
+        """清空应用内通知列表（JSONL 是追加日志，这里直接截断）。"""
+        from ..notify import clear_notifications
+
+        clear_notifications(self.cfg.notify.inapp_path)
+        return {"cleared": True, "items": [], "channels": self.cfg.notify.channels}
+
     # -- 交易所账户视图 --------------------------------------------------
     def exchange_snapshot(self, ttl: float = 20.0) -> dict:
         """交易所真实余额/持仓/成交，覆盖总览页的本地账本字段。
@@ -385,13 +406,21 @@ class WebApp:
                 self._ex_banned_until = now + 300.0
             raise
 
-        # 成交：低频缓存 60 秒
-        if self._ex_trades is None or (now - self._ex_trades_at) >= 60:
+        # 成交：跨品种拉取（切了品种也要能看到上一笔），缓存 15 秒让新成交尽快出现
+        if self._ex_trades is None or (now - self._ex_trades_at) >= 15:
+            rows = None
             try:
-                self._ex_trades = [{**t, "symbol": symbol} for t in client.trades(symbol, limit=30)]
+                rows = client.trades(None, limit=30)
+            except Exception:  # noqa: BLE001 - 个别交易所要求指定 symbol，退回当前品种
+                try:
+                    rows = client.trades(symbol, limit=30)
+                except Exception:  # noqa: BLE001 - 成交拿不到不影响余额
+                    rows = None
+            if rows is not None:
+                self._ex_trades = [
+                    self._fill_with_plan({**t, "symbol": t.get("symbol") or symbol}) for t in rows
+                ]
                 self._ex_trades_at = now
-            except Exception:  # noqa: BLE001 - 成交拿不到不影响余额
-                pass
         trades = self._ex_trades or []
 
         # 条件单：只有有持仓才查，60 秒缓存
@@ -704,6 +733,12 @@ class WebApp:
             interval = max(300, int(self.research_auto_state.get("interval_sec", 0) or 0))
             if interval <= 0:
                 break
+            # 峰时省钱：自动研究可延后，峰时不跑；等到下一个谷时窗口再执行
+            if getattr(self.cfg.llm, "offpeak_research_only", True) and not is_offpeak(self.cfg.llm):
+                wait = max(60, min(interval, seconds_until_offpeak(self.cfg.llm) or interval))
+                self.research_auto_state["status"] = f"等待谷时（约 {wait // 60} 分钟）"
+                self._research_auto_stop.wait(wait)
+                continue
             try:
                 if self.research_lock.acquire(blocking=False):
                     try:
@@ -825,15 +860,13 @@ class WebApp:
                     }
                 except Exception as exc:  # noqa: BLE001
                     probe[env] = f"{type(exc).__name__}: {str(exc)[:160]}"
-            return {
-                "ok": False,
-                "stage": "network" if any(probe.values()) else "keys",
-                "exchange": "okx",
-                "probe": probe,
-                "error": "OKX 模拟盘/主网都连不上（多半是网络被墙，需要代理）"
-                if any(probe.values())
-                else "未设置 OKX 模拟盘/主网 API Key（可在本页填，或写进 .env 后重启）",
-            }
+            vals = [v for v in probe.values() if v]
+            if not vals or all(v.startswith("未设置") for v in vals):
+                stage, error = "keys", "未设置 OKX 模拟盘/主网 API Key（可在本页填，或写进 .env 后重启）"
+            else:
+                detail = next((v for v in vals if not v.startswith("未设置")), vals[0])
+                stage, error = "network", f"OKX 连接失败：{detail}"
+            return {"ok": False, "stage": stage, "exchange": "okx", "probe": probe, "error": error}
 
         # 币安路径
         for env in envs:
@@ -868,15 +901,13 @@ class WebApp:
                 }
             except Exception as exc:  # noqa: BLE001
                 probe[env] = f"{type(exc).__name__}: {str(exc)[:160]}"
-        return {
-            "ok": False,
-            "stage": "network" if any(probe.values()) else "keys",
-            "exchange": "binance",
-            "probe": probe,
-            "error": "测试网/Demo 和主网都连不上（多半是网络被墙，需要代理）"
-            if any(probe.values())
-            else "未设置币安模拟盘/主网 API Key（可在本页填，或写进 .env 后重启）",
-        }
+        vals = [v for v in probe.values() if v]
+        if not vals or all(v.startswith("未设置") for v in vals):
+            stage, error = "keys", "未设置币安模拟盘/主网 API Key（可在本页填，或写进 .env 后重启）"
+        else:
+            detail = next((v for v in vals if not v.startswith("未设置")), vals[0])
+            stage, error = "network", f"币安连接失败：{detail}"
+        return {"ok": False, "stage": stage, "exchange": "binance", "probe": probe, "error": error}
 
     # -- 多品种 ---------------------------------------------------------
     def symbols(self) -> list[dict]:
@@ -1061,6 +1092,8 @@ class WebApp:
             raise ApiError(f"{sym} 不在品种列表里", 404)
         if sym == self.cfg.market.symbol:
             raise ApiError("这是当前正在用的品种，先切到别的品种再删", 409)
+        # 先与交易所核对，清理幽灵仓位，避免误拦截删除
+        self.engine._reconcile_position_with_exchange()
         pos = self.engine.state.get("position") or {}
         if str(pos.get("symbol", "")).upper() == sym:
             raise ApiError("该品种还有未平仓位，先平仓再删", 409)
@@ -1196,7 +1229,7 @@ class WebApp:
             sym = str(sym).strip().upper()
             try:
                 mkt = replace(self.cfg.market, symbol=sym)
-                df, src = load_market(mkt)
+                df, src = load_market(mkt, prefer=self.engine.state.get("exchange", "binance"))
                 price = float(df["close"].iloc[-1])
                 sub = replace(self.cfg, market=mkt)
                 decision = TradingPipeline(sub).run(
@@ -1294,12 +1327,20 @@ class WebApp:
         return {"risk": self.risk_config(), "saved": saved}
 
     def opportunities(self, payload: dict) -> dict:
-        """机会信号排行榜：返回最近一次全品种扫描结果；refresh=true 时强制重扫。"""
+        """机会信号排行榜：立即返回缓存结果，扫描放到后台线程（一次扫描约 10 秒）。
+
+        同步扫描会把页面卡在「扫描中」，还会阻塞同进程的其它接口，所以这里只负责
+        「确保有一次扫描在跑」，结果由前端轮询 status 里的 opportunities 拿到。
+        """
+        scan = self.engine.scan_state
         rows = self.engine.opportunities
-        if payload.get("refresh") or not rows:
-            rows = self.engine._scan_opportunities()
+        if (payload.get("refresh") or not rows) and not scan.get("scanning"):
+            scan = self.engine.start_scan_async()
         return {
             "rows": rows,
+            "scanning": bool(scan.get("scanning")),
+            "last_scan_at": scan.get("last_at"),
+            "scan_error": scan.get("error") or "",
             "auto_rotate": bool(self.cfg.market.auto_rotate),
             "min_score": float(self.cfg.market.rotate_min_score),
             "every_cycles": int(self.cfg.market.rotate_every_cycles),
@@ -1397,10 +1438,16 @@ class WebApp:
             "api_key_tail": key[-4:] if key else "",
             "temperature": c.temperature,
             "max_tokens": c.max_tokens,
+            "offpeak_research_only": bool(getattr(c, "offpeak_research_only", True)),
+            "peak_mode": getattr(c, "peak_mode", "full"),
+            "peak_holidays": list(getattr(c, "peak_holidays", None) or []),
+            "offpeak": offpeak_info(c),
         }
 
     def set_llm_settings(self, payload: dict) -> dict:
-        """写 LLM 配置到 .env（provider/model/base_url/api_key），同步内存配置，下次决策即时生效。"""
+        """写 LLM 配置：provider/model/base_url/api_key 进 .env，峰谷策略进 config。"""
+        from ..config import config_path, save_config
+
         updates: dict[str, str] = {}
         provider = str(payload.get("provider", "")).strip()
         model = str(payload.get("model", "")).strip()
@@ -1414,17 +1461,42 @@ class WebApp:
             updates["CRYPTOAGENT_LLM_BASE_URL"] = base_url
         if api_key:
             updates[self.cfg.llm.api_key_env] = api_key
-        if not updates:
+
+        policy_keys = ("offpeak_research_only", "peak_mode", "peak_holidays")
+        want_policy = any(k in payload for k in policy_keys)
+        if not updates and not want_policy:
             raise ApiError("没有需要保存的配置", 400)
-        update_dotenv(updates)
-        # 同步内存配置：TradingPipeline 每次决策时用 self.cfg.llm 新建，改这里即时生效
-        if "CRYPTOAGENT_LLM_PROVIDER" in updates:
-            self.cfg.llm.provider = updates["CRYPTOAGENT_LLM_PROVIDER"]
-        if "CRYPTOAGENT_LLM_MODEL" in updates:
-            self.cfg.llm.model = updates["CRYPTOAGENT_LLM_MODEL"]
-        if "CRYPTOAGENT_LLM_BASE_URL" in updates:
-            self.cfg.llm.base_url = updates["CRYPTOAGENT_LLM_BASE_URL"]
-        return self.llm_settings()
+        if updates:
+            update_dotenv(updates)
+            # 同步内存配置：TradingPipeline 每次决策时用 self.cfg.llm 新建，改这里即时生效
+            if "CRYPTOAGENT_LLM_PROVIDER" in updates:
+                self.cfg.llm.provider = updates["CRYPTOAGENT_LLM_PROVIDER"]
+            if "CRYPTOAGENT_LLM_MODEL" in updates:
+                self.cfg.llm.model = updates["CRYPTOAGENT_LLM_MODEL"]
+            if "CRYPTOAGENT_LLM_BASE_URL" in updates:
+                self.cfg.llm.base_url = updates["CRYPTOAGENT_LLM_BASE_URL"]
+
+        saved = True
+        if want_policy:
+            if "offpeak_research_only" in payload:
+                self.cfg.llm.offpeak_research_only = bool(payload["offpeak_research_only"])
+            if "peak_mode" in payload:
+                pm = str(payload["peak_mode"]).strip().lower()
+                self.cfg.llm.peak_mode = pm if pm in ("full", "thrift") else "full"
+            if "peak_holidays" in payload:
+                raw = payload["peak_holidays"]
+                if isinstance(raw, str):
+                    raw = raw.replace("，", ",").split(",")
+                self.cfg.llm.peak_holidays = [
+                    str(x).strip() for x in (raw or []) if str(x).strip()
+                ][:80]
+            try:
+                save_config(self.cfg, config_path())
+            except OSError:
+                saved = False
+        data = self.llm_settings()
+        data["saved"] = saved
+        return data
 
     def sentiment_settings(self) -> dict:
         """读当前情绪/新闻源配置（A1）。api_key 脱敏，只回显是否已设置 + 尾号。"""
@@ -1549,36 +1621,53 @@ class WebApp:
         except ExchangeError as exc:
             raise ApiError(str(exc), 502) from exc
 
+    def _fill_with_plan(self, row: dict) -> dict:
+        """交易所成交流水没有「计划价 / 滑点」，用本地 fills 按订单号补上。"""
+        oid = str(row.get("order_id") or "")
+        if not oid:
+            return row
+        for f in reversed(self.engine.state.get("fills") or []):
+            if str(f.get("order_id") or "") == oid or str(f.get("reason") or "").endswith(oid):
+                if f.get("plan_price") is not None:
+                    row["plan_price"] = f["plan_price"]
+                if f.get("slippage_bps") is not None:
+                    row["slippage_bps"] = f["slippage_bps"]
+                break
+        return row
+
     def exchange_status(self) -> dict:
         import os
 
+        from ..execution import read_api_keys
+
         e = self.engine
-        keys_binance = bool(os.getenv("BINANCE_API_KEY"))
-        keys_okx = bool(os.getenv("OKX_API_KEY"))
+        exchange = e.state.get("exchange", "binance")
+        testnet = bool(e.state.get("testnet", True))
+        k, s, p = read_api_keys(exchange, testnet)
+        keys_present = bool(k and s and (p if exchange == "okx" else True))
         out = {
-            "exchange": e.state.get("exchange", "binance"),
-            "keys_binance": keys_binance,
-            "keys_okx": keys_okx,
-            "keys_present": keys_binance or keys_okx,
-            "keys_binance_demo": bool(os.getenv("BINANCE_DEMO_API_KEY")) or keys_binance,
-            "keys_okx_demo": bool(os.getenv("OKX_DEMO_API_KEY")) or keys_okx,
-            "keys_binance_live": keys_binance,
-            "keys_okx_live": keys_okx,
+            "exchange": exchange,
+            "keys_binance": bool(os.getenv("BINANCE_API_KEY")),
+            "keys_okx": bool(os.getenv("OKX_API_KEY")),
+            "keys_present": keys_present,
+            "keys_binance_demo": bool(os.getenv("BINANCE_DEMO_API_KEY")) or bool(os.getenv("BINANCE_API_KEY")),
+            "keys_okx_demo": bool(os.getenv("OKX_DEMO_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
+            "keys_binance_live": bool(os.getenv("BINANCE_API_KEY")),
+            "keys_okx_live": bool(os.getenv("OKX_API_KEY")),
             "armed": e.armed,
             "mode": e.state["mode"],
-            "testnet": e.state.get("testnet", True),
+            "testnet": testnet,
             "connected": False,
             "account": None,
             "positions": [],
             "error": "",
         }
-        if not (keys_binance or keys_okx) or not e.armed:
-            out["error"] = "" if (keys_binance or keys_okx) else "未设置 API Key"
+        if not keys_present or not e.armed:
+            if not keys_present:
+                out["error"] = f"未设置 {exchange} {'模拟盘' if testnet else '主网'} API Key"
             return out
         try:
-            client = e.live_client or e.connect(
-                testnet=e.state.get("testnet", True), exchange=e.state.get("exchange", "binance")
-            )
+            client = e.live_client or e.connect(testnet=testnet, exchange=exchange)
             client.armed = True
             client.ping()
             out["connected"] = True
@@ -1704,7 +1793,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-        if not self._auth_ok():
+        # 与 GET 保持一致：POST 也接受 ?token=（脚本/接口调用常用）
+        if not self._auth_ok(urllib.parse.parse_qs(parsed.query)):
             return self._deny()
         try:
             payload = self._read_json()
@@ -1741,7 +1831,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/exchange/status":
             return self._json({"ok": True, "data": app.exchange_status()})
         if path == "/api/exchange/test":
-            return self._json({"ok": True, "data": app.exchange_test()})
+            exchange = query.get("exchange", ["binance"])[0]
+            mode = query.get("mode", [""])[0] or None
+            return self._json({"ok": True, "data": app.exchange_test(exchange, mode)})
         if path == "/api/live":
             return self._json({"ok": True, "data": app.live_status()})
         if path == "/api/symbols":
@@ -1813,6 +1905,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": eng.set_halt(bool(payload.get("on", False)))})
         if path == "/api/notifications":
             return self._json({"ok": True, "data": app.notifications(int(payload.get("limit", 50)))})
+        if path == "/api/notifications/clear":
+            return self._json({"ok": True, "data": app.clear_notifications()})
         if path == "/api/exchange/sync":
             return self._json({"ok": True, "data": app.exchange_status()})
         if path == "/api/exchange/keys":

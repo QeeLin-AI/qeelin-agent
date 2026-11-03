@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from ..backtest import factor_to_target
-from .sandbox import FactorError, run_factor
+from .sandbox import FactorError, run_factors_batch
 
 
 def load_factor_files(lib_dir: str | Path) -> list[dict]:
@@ -64,6 +65,16 @@ def compute_factor_signal(
 
     signals: list[dict] = []
     weights: list[float] = []
+    # 一次子进程跑完全部因子：单开进程的固定开销（解释器 + pandas ≈1.2s）远大于计算本身，
+    # 8 个因子逐个 spawn 要 10 秒/品种，全品种扫描会被拖到 1 分钟。
+    values_map: dict[str, Any] = {}
+    try:
+        values_map, _errors = run_factors_batch(files, df, timeout=max(30, 10 * len(files)))
+    except FactorError:
+        values_map = {}
+    except Exception:  # noqa: BLE001 - 批量失败时退化为「全部因子无信号」，不阻塞决策
+        values_map = {}
+
     for f in files:
         w = max(0.0, f["holdout_sharpe"])          # 留出集为负 → 权重 0（淘汰）
         if w <= 0:
@@ -71,7 +82,9 @@ def compute_factor_signal(
                             "holdout_sharpe": f["holdout_sharpe"]})
             continue
         try:
-            values, _ = run_factor(f["code"], df)
+            values = values_map.get(f["name"])
+            if values is None:
+                raise FactorError("因子未产出结果")
             target = factor_to_target(values, window=window, cap=cap, deadband=deadband)
             t = float(target.iloc[-1])
         except FactorError:

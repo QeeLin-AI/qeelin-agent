@@ -151,6 +151,64 @@ if __name__ == "__main__":
 '''
 
 
+_RUNNER_BATCH = r'''
+import json, sys, traceback
+import numpy as np
+import pandas as pd
+
+SAFE_BUILTINS = {
+    "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
+    "divmod": divmod, "enumerate": enumerate, "filter": filter, "float": float,
+    "int": int, "isinstance": isinstance, "len": len, "list": list, "map": map,
+    "max": max, "min": min, "pow": pow, "range": range, "reversed": reversed,
+    "round": round, "set": set, "slice": slice, "sorted": sorted, "str": str,
+    "sum": sum, "tuple": tuple, "zip": zip, "True": True, "False": False, "None": None,
+}
+
+
+def main():
+    manifest_path, csv_path, out_dir, meta_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    items = json.load(open(manifest_path, encoding="utf-8"))
+    ok, errors = [], {}
+    for item in items:
+        idx, name, src = item["idx"], item["name"], item["src"]
+        try:
+            ns = {"__builtins__": SAFE_BUILTINS, "np": np, "pd": pd}
+            exec(compile(src, "<factor:%s>" % name, "exec"), ns)
+            fn = ns.get("factor")
+            if not callable(fn):
+                raise RuntimeError("没有找到 factor 函数")
+            res = fn(df)
+            if isinstance(res, pd.DataFrame) and res.shape[1] == 1:
+                res = res.iloc[:, 0]
+            if not isinstance(res, pd.Series):
+                res = pd.Series(np.asarray(res, dtype=float), index=df.index)
+            res = res.astype(float)
+            if len(res) != len(df):
+                raise RuntimeError("返回值长度与输入不一致")
+            res.to_csv(out_dir + "/" + str(idx) + ".csv")
+            ok.append(idx)
+        except Exception:
+            errors[str(idx)] = traceback.format_exc()[-500:]
+    json.dump({"ok": ok, "errors": errors}, open(meta_path, "w", encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        err = traceback.format_exc()
+        try:
+            json.dump({"ok": [], "errors": {"_runner": err[-500:]}},
+                      open(sys.argv[4], "w", encoding="utf-8"))
+        except Exception:
+            pass
+        sys.stderr.write(err)
+        sys.exit(1)
+'''
+
+
 def _write_frame(df: pd.DataFrame, path: Path) -> None:
     cols = [c for c in ["open", "high", "low", "close", "volume", "funding_rate"] if c in df.columns]
     df[cols].to_csv(path, index_label="ts")
@@ -199,6 +257,57 @@ def run_factor(
         values = pd.read_csv(out_path, index_col=0, parse_dates=True).iloc[:, 0]
         values.index = df.index[: len(values)]
         return values.astype(float), meta
+
+
+def run_factors_batch(
+    items: list[dict],
+    df: pd.DataFrame,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> tuple[dict[str, pd.Series], dict[str, str]]:
+    """在**同一个子进程**里依次执行多个因子，返回 ({name: 序列}, {name: 错误})。
+
+    单独跑每个因子时，绝大部分耗时是「启动解释器 + import pandas」，实测约 1.25s/因子
+    且与数据量无关。机会扫描要跑 8 个因子 × 6 个品种，逐个 spawn 就是 60 秒；
+    批量执行把这段固定开销摊薄成一次，全品种扫描降到 10 秒以内。
+    """
+    if not items:
+        return {}, {}
+    for it in items:
+        validate_factor_code(it["code"])
+    with tempfile.TemporaryDirectory(prefix="factors_") as tmp:
+        tmpdir = Path(tmp)
+        csv_path = tmpdir / "data.csv"
+        manifest_path = tmpdir / "manifest.json"
+        meta_path = tmpdir / "meta.json"
+        _write_frame(df, csv_path)
+        payload = [{"idx": i, "name": it["name"], "src": it["code"]} for i, it in enumerate(items)]
+        manifest_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        cmd = [
+            sys.executable, "-c", _RUNNER_BATCH,
+            str(manifest_path), str(csv_path), str(tmpdir), str(meta_path),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise FactorError(f"批量因子执行超时（>{timeout}s）") from exc
+
+        if not meta_path.exists():
+            raise FactorError(f"子进程异常退出: {proc.stderr[-800:]}")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        values: dict[str, pd.Series] = {}
+        errors: dict[str, str] = {}
+        errs = meta.get("errors") or {}
+        for i, it in enumerate(items):
+            out = tmpdir / f"{i}.csv"
+            if not out.exists():
+                errors[it["name"]] = errs.get(str(i), "未产出结果")
+                continue
+            s = pd.read_csv(out, index_col=0, parse_dates=True).iloc[:, 0]
+            values[it["name"]] = pd.Series(s.to_numpy(dtype=float), index=df.index[: len(s)])
+        return values, errors
 
 
 def _short_traceback(tb: str) -> str:

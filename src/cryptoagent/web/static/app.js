@@ -146,7 +146,13 @@ async function loadLlmSettings() {
     $('llmApiKey').placeholder = d.api_key_set
       ? `已设置（尾号 ${d.api_key_tail}），留空保持原值`
       : 'sk-...';
-    $('llmStatus').textContent = `当前 ${d.provider} · ${d.model}${d.api_key_set ? '（Key 已配置）' : '（未配 Key）'}`;
+    $('llmPeakMode').value = d.peak_mode || 'full';
+    $('llmOffpeakResearch').checked = d.offpeak_research_only !== false;
+    $('llmPeakHolidays').value = (d.peak_holidays || []).join(',');
+    const op = d.offpeak || {};
+    $('llmOffpeak').textContent = op.label || '--';
+    $('llmPeakHint').textContent = op.peak_windows || '';
+    $('llmStatus').textContent = `当前 ${d.provider} · ${d.model} · ${op.label || ''}${d.api_key_set ? '（Key 已配置）' : '（未配 Key）'}`;
   } catch (e) { console.error(e); }
 }
 
@@ -155,6 +161,9 @@ async function saveLlmSettings(quiet = false) {
     provider: $('llmProvider').value,
     model: $('llmModel').value.trim(),
     base_url: $('llmBaseUrl').value.trim(),
+    offpeak_research_only: $('llmOffpeakResearch').checked,
+    peak_mode: $('llmPeakMode').value,
+    peak_holidays: $('llmPeakHolidays').value.trim(),
   };
   const key = $('llmApiKey').value.trim();
   if (key) payload.api_key = key;
@@ -1662,8 +1671,13 @@ $('tnSaveBtn').addEventListener('click', async () => {
   finally { btn.disabled = false; btn.textContent = '保存到 .env 并连接'; }
 });
 
-$('tnTestBtn').addEventListener('click', () => runSelftest($('tnStatus')));
-$('selftestBtn').addEventListener('click', () => runSelftest($('tnStatus')));
+$('tnTestBtn').addEventListener('click', () => runSelftest($('tnStatus'), currentExchange('testnet'), 'demo'));
+$('selftestBtn').addEventListener('click', () => {
+  // 底部全局「连接自检」：测当前正连着的交易所；还没连交易所时退回模拟盘面板当前选中项
+  const ex = (lastStatus && lastStatus.exchange) || currentExchange('testnet');
+  const mode = (lastStatus && lastStatus.testnet === false) ? 'live' : 'demo';
+  runSelftest($('tnStatus'), ex, mode);
+});
 
 function formatSelftest(d) {
   if (!d || !d.ok) return `✗ ${d?.error || '未知错误'}`;
@@ -1671,15 +1685,17 @@ function formatSelftest(d) {
     + ` · 精度 tick ${d.filters.tick} / step ${d.filters.step}`;
 }
 
-async function runSelftest(el) {
+async function runSelftest(el, exchange, mode) {
   const prev = el.textContent;
   el.textContent = '自检中…';
   try {
-    const d = await api('/api/exchange/test');
+    let url = '/api/exchange/test';
+    if (exchange) url += `?exchange=${encodeURIComponent(exchange)}&mode=${encodeURIComponent(mode || '')}`;
+    const d = await api(url);
     el.textContent = formatSelftest(d);
     toast(d.ok ? '连接自检通过' : `自检失败：${d.error}`, d.ok ? 'ok' : 'err');
     if (d.ok) {
-      $('connState').textContent = '已连接（测试网）';
+      $('connState').textContent = '已连接（' + (mode === 'live' ? '主网' : '测试网') + '）';
       $('liveBalance').textContent = `${fmt(d.balance)} USDT`;
     }
   } catch (e) {
@@ -1771,6 +1787,19 @@ $('clearCacheBtn').addEventListener('click', () => {
   try { window.location.reload(true); } catch (e) { window.location.reload(); }
 });
 
+/* 通知 / 告警：一键清除（截断 inapp JSONL），清完立即重渲染 */
+const notifClearBtn = $('notifClearBtn');
+if (notifClearBtn) {
+  notifClearBtn.addEventListener('click', async () => {
+    if (!confirm('清空全部通知？')) return;
+    try {
+      await api('/api/notifications/clear', 'POST', {});
+      toast('通知已清除', 'ok');
+      renderNotifications();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
 $('llmSaveBtn').addEventListener('click', saveLlmSettings);
 $('llmTestBtn').addEventListener('click', testLlmSettings);
 $('sentimentSaveBtn').addEventListener('click', saveSentimentSettings);
@@ -1794,8 +1823,18 @@ function renderOpportunities(rows) {
   const listEl = $('oppList');
   if (!listEl) return;
   const data = rows || (lastStatus?.opportunities || []);
+  const scan = lastStatus?.scan_state || {};
   if (!data.length) {
-    listEl.innerHTML = '<div class="muted center">扫描中…（自动循环会周期性扫描）</div>';
+    if (scan.scanning) {
+      listEl.innerHTML = '<div class="muted center">正在扫描全品种…（约 10 秒，完成后自动刷新）</div>';
+    } else {
+      listEl.innerHTML = '<div class="muted center">暂无扫描结果，点右上角「重扫」</div>';
+      // 首次进页面自动触发一次后台扫描，避免排行榜一直空着
+      if (!window.__oppAsked) {
+        window.__oppAsked = true;
+        api('/api/opportunity', 'POST', {}).catch(() => {});
+      }
+    }
     return;
   }
   const maxScore = Math.max(...data.map((r) => r.score || 0), 0.0001);
@@ -1838,10 +1877,14 @@ $('rotateEvery').addEventListener('change', async () => {
 });
 $('rotateRefresh').addEventListener('click', async () => {
   try {
-    toast('正在扫描全品种…', 'ok');
     const d = await api('/api/opportunity', 'POST', { refresh: true });
-    renderOpportunities(d.rows);
-    toast(`扫描完成，共 ${d.rows.length} 个品种`, 'ok');
+    if (d.scanning) {
+      renderOpportunities(d.rows);
+      toast('已开始扫描，完成后自动刷新', 'ok');
+    } else {
+      renderOpportunities(d.rows);
+      toast(`扫描完成，共 ${(d.rows || []).length} 个品种`, 'ok');
+    }
   } catch (e) { toast(e.message, 'err'); }
 });
 

@@ -191,15 +191,18 @@ class TestWebApi(unittest.TestCase):
         self.assertGreaterEqual(len(items), 2)
         self.assertTrue(any(x["active"] for x in items))
 
-        status, body = self._post("/api/symbol", {"symbol": "ETHUSDT"})
+        # 选一个「非当前活跃」的品种来切换，避免默认品种被运行时改写导致 changed=False
+        target = next(x["symbol"] for x in items if not x["active"])
+        original = next(x["symbol"] for x in items if x["active"])
+        status, body = self._post("/api/symbol", {"symbol": target})
         self.assertEqual(status, 200)
         self.assertTrue(body["data"]["changed"])
 
         status, raw = self._get("/api/status")
-        self.assertEqual(json.loads(raw)["data"]["symbol"], "ETHUSDT")
+        self.assertEqual(json.loads(raw)["data"]["symbol"], target)
 
         # 切回去，别影响后面的用例
-        self._post("/api/symbol", {"symbol": "BTCUSDT"})
+        self._post("/api/symbol", {"symbol": original})
 
     def test_symbol_switch_blocked_with_position(self):
         self.app.engine.last_decision = _fake_decision()
@@ -250,7 +253,7 @@ class TestWebApi(unittest.TestCase):
 
         seen = {}
 
-        def fake(symbol, interval, limit):
+        def fake(symbol, interval, limit, prefer=None):
             seen.update(symbol=symbol, interval=interval, limit=limit)
             idx = pd.date_range("2026-11-01 00:00", periods=3, freq="5min", tz="UTC")
             df = pd.DataFrame(
@@ -280,13 +283,14 @@ class TestWebApi(unittest.TestCase):
 
     def test_leverage_override_saved_and_applied(self):
         status, raw = self._get("/api/status")
-        self.assertIn("risk", json.loads(raw)["data"])
+        risk0 = json.loads(raw)["data"]["risk"]
+        baseline_max = risk0["max_leverage"]
 
         status, body = self._post("/api/risk", {"leverage_override": 5})
         self.assertEqual(status, 200)
         self.assertEqual(body["data"]["risk"]["leverage_override"], 5)
-        # max_leverage 是「未连交易所时的兜底」，不再跟着抬（实际上限由交易所决定）
-        self.assertEqual(body["data"]["risk"]["max_leverage"], 3)
+        # max_leverage 是「未连交易所时的兜底」，不随 leverage_override 抬升
+        self.assertEqual(body["data"]["risk"]["max_leverage"], baseline_max)
         self.assertTrue(body["data"]["saved"])
 
         # 落盘了没有
@@ -296,7 +300,7 @@ class TestWebApi(unittest.TestCase):
         # 切回自动
         status, body = self._post("/api/risk", {"leverage_override": 0})
         self.assertEqual(body["data"]["risk"]["leverage_override"], 0)
-        self.assertEqual(body["data"]["risk"]["max_leverage"], 3)
+        self.assertEqual(body["data"]["risk"]["max_leverage"], baseline_max)
 
     def test_leverage_override_range(self):
         status, body = self._post("/api/risk", {"leverage_override": 999})

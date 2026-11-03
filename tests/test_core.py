@@ -582,10 +582,12 @@ class TestFactorSignal(unittest.TestCase):
             df = synthetic_ohlcv(800, 7)
             sig = compute_factor_signal(lib, df)
             names = {s["name"]: s for s in sig["signals"]}
-            self.assertEqual(names["bad"]["weight"], 0.0)
+            # 负留出集因子在读取阶段就被剔除（不参与信号，也不进入 signals 列表）
+            self.assertNotIn("bad", names)
             self.assertGreater(names["good"]["weight"], 0.0)
-            # 复合信号只由好因子贡献
-            self.assertAlmostEqual(sig["composite"], names["good"]["target"], places=3)
+            # 复合信号是「内置因子 + 正留出集研究因子」的加权合成，落在 [-1, 1]
+            self.assertGreaterEqual(sig["composite"], -1.0)
+            self.assertLessEqual(sig["composite"], 1.0)
 
     def test_empty_library_falls_back_to_builtin(self):
         """研究没产出好因子时，回退内置参考因子，闭环不能空转。"""
@@ -660,3 +662,161 @@ class TestExchangeLeverageCap(unittest.TestCase):
         cfg = RiskConfig(leverage_override=125)
         d = RiskEngine(cfg).check(self._proposal(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
         self.assertEqual(d.leverage, 20.0)                        # 交易所只支持 20，压到 20
+
+
+class TestPositionReconcile(unittest.TestCase):
+    """幽灵仓位核对：本地记着实盘持仓、但交易所已无持仓时应被清理。"""
+
+    def _engine(self, pos, real=None, boom=False):
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        e.state = {"position": pos, "exchange": "okx", "testnet": True}
+        e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(symbol="DOGEUSDT"))
+        e.lock = threading.RLock()
+        e.live_client = None
+        e.saved = 0
+
+        def _save():
+            e.saved += 1
+
+        e._save = _save
+
+        class _Client:
+            def positions(self, symbol):
+                if boom:
+                    raise RuntimeError("api down")
+                return real or []
+
+        e.connect = lambda **kw: _Client()
+        return e
+
+    def test_live_phantom_cleared(self):
+        e = self._engine({"side": "SHORT", "qty": 1, "mode": "live"}, real=[])
+        e._reconcile_position_with_exchange()
+        self.assertIsNone(e.state["position"])
+        self.assertEqual(e.saved, 1)
+
+    def test_paper_position_kept(self):
+        pos = {"side": "LONG", "qty": 1, "mode": "paper"}
+        e = self._engine(pos)
+        e._reconcile_position_with_exchange()
+        self.assertEqual(e.state["position"], pos)
+        self.assertEqual(e.saved, 0)
+
+    def test_live_real_position_kept(self):
+        pos = {"side": "SHORT", "qty": 1, "mode": "live"}
+        e = self._engine(pos, real=[{"symbol": "DOGEUSDT", "qty": 1}])
+        e._reconcile_position_with_exchange()
+        self.assertEqual(e.state["position"], pos)
+        self.assertEqual(e.saved, 0)
+
+    def test_exchange_error_keeps_position(self):
+        pos = {"side": "SHORT", "qty": 1, "mode": "live"}
+        e = self._engine(pos, boom=True)
+        e._reconcile_position_with_exchange()
+        self.assertEqual(e.state["position"], pos)
+        self.assertEqual(e.saved, 0)
+
+
+class TestLiveEquitySync(unittest.TestCase):
+    """实盘权益与成交回读：风控不能拿内部模拟账本当真实本金。"""
+
+    def _engine(self, mode="live", armed=True, acct=None, trades=None, boom=False):
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        e.state = {
+            "position": None,
+            "exchange": "binance",
+            "testnet": True,
+            "mode": mode,
+            "equity": 10000.0,
+            "peak_equity": 10000.0,
+            "day_start_equity": 10000.0,
+            "consecutive_losses": 0,
+            "day": "2026-11-04",
+        }
+        e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(symbol="SOLUSDT"))
+        e.lock = threading.RLock()
+        e.armed = armed
+        e.saved = 0
+        e._save = lambda: setattr(e, "saved", e.saved + 1)
+
+        class _Client:
+            def account(self):
+                if boom:
+                    raise RuntimeError("api down")
+                return acct or {"balance": 5000.0, "available": 5000.0, "unrealized_pnl": -3.0}
+
+            def trades(self, symbol=None, limit=30):
+                return trades or []
+
+        e.live_client = _Client()
+        return e
+
+    def test_paper_mode_ignores_exchange(self):
+        self.assertIsNone(self._engine(mode="paper")._live_equity())
+
+    def test_account_state_rebases_to_exchange(self):
+        e = self._engine()
+        st = e.account_state(price=100.0)
+        self.assertAlmostEqual(st.equity, 4997.0)           # 5000 + (-3)
+        self.assertAlmostEqual(e.state["equity"], 4997.0)   # 内部账本已对齐
+        self.assertAlmostEqual(e.state["peak_equity"], 4997.0)
+        self.assertEqual(e.saved, 1)
+
+    def test_exchange_failure_keeps_local_ledger(self):
+        e = self._engine(boom=True)
+        st = e.account_state(price=100.0)
+        self.assertAlmostEqual(st.equity, 10000.0)
+        self.assertEqual(e.saved, 0)
+
+    def test_live_fill_aggregates_by_order_id(self):
+        rows = [
+            {"order_id": "A1", "qty": 1.0, "price": 10.0, "fee": 0.01, "pnl": 0.0},
+            {"order_id": "A1", "qty": 3.0, "price": 12.0, "fee": 0.03, "pnl": 0.0},
+            {"order_id": "B2", "qty": 9.0, "price": 99.0, "fee": 9.0, "pnl": 9.0},
+        ]
+        d = self._engine(trades=rows)._live_fill("SOLUSDT", "A1")
+        self.assertAlmostEqual(d["qty"], 4.0)
+        self.assertAlmostEqual(d["price"], 11.5)            # (10*1 + 12*3) / 4
+        self.assertAlmostEqual(d["fee"], 0.04)
+
+
+class TestPeakOffpeak(unittest.TestCase):
+    """DeepSeek 官方峰谷规则：工作日 09-12/14-18 峰时，其余（含周末/节假日）谷时。"""
+
+    def _dt(self, *args):
+        from datetime import datetime
+
+        from cryptoagent.agents.llm import _CN_TZ
+
+        return datetime(*args, tzinfo=_CN_TZ)
+
+    def test_windows(self):
+        from cryptoagent.agents.llm import is_offpeak, seconds_until_offpeak
+        from cryptoagent.config import LLMConfig
+
+        cfg = LLMConfig(peak_holidays=["2026-10-01"])
+        # 2026-11-04 是周三
+        self.assertFalse(is_offpeak(cfg, self._dt(2026, 11, 4, 9, 0)))
+        self.assertFalse(is_offpeak(cfg, self._dt(2026, 11, 4, 11, 59)))
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 4, 12, 0)))
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 4, 13, 59)))
+        self.assertFalse(is_offpeak(cfg, self._dt(2026, 11, 4, 14, 0)))
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 4, 18, 0)))
+        # 周末全天谷时
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 11, 7, 10, 0)))
+        # 配置的节假日按谷时
+        self.assertTrue(is_offpeak(cfg, self._dt(2026, 10, 1, 10, 0)))
+        # 距离下一个谷时：09:30→12:00 = 9000s；14:30→18:00 = 12600s
+        self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 9, 30)), 9000)
+        self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 14, 30)), 12600)
+        self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 20, 0)), 0)

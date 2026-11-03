@@ -64,6 +64,13 @@ class TradingEngine:
         self._cycle_lock = threading.Lock()
         # 机会信号排行榜：最近一次全品种扫描结果（供页面展示，扫描是重操作，避免每次轮询重扫）
         self.opportunities: list[dict] = []
+        self.scan_state: dict = {
+            "scanning": False,
+            "started_at": None,
+            "last_at": None,
+            "last_ts": 0.0,
+            "error": "",
+        }
         self._rotate_cycle_count = 0
 
     # ------------------------------------------------------------------
@@ -198,11 +205,20 @@ class TradingEngine:
 
     def account_state(self, price: float | None = None) -> AccountState:
         price = price if price is not None else self.price()
-        equity = self._equity(price)
+        live = self._live_equity()
+        if live is not None:
+            # 内部账本还停在模拟期量级（如 10000 vs 实盘 4997）时先对齐，
+            # 否则会按幻影本金放大仓位、并算出伪回撤直接触发熔断。
+            peak = float(self.state.get("peak_equity") or 0.0)
+            if peak <= 0 or abs(peak - live) / live > 0.5:
+                self._rebase_ledger(live)
+            equity = live
+        else:
+            equity = self._equity(price)
         return AccountState(
             equity=equity,
             peak_equity=max(self.state["peak_equity"], equity),
-            day_start_equity=self.state["day_start_equity"],
+            day_start_equity=self.state["day_start_equity"] or equity,
             position_notional=self._position_notional(price),
             consecutive_losses=self.state["consecutive_losses"],
         )
@@ -220,6 +236,65 @@ class TradingEngine:
 
     def _equity(self, price: float) -> float:
         return float(self.state["equity"] + self._position_pnl(price))
+
+    # ---- 实盘权益 / 成交回读 ------------------------------------------
+    def _live_equity(self, ttl: float = 20.0) -> float | None:
+        """实盘模式下取交易所真实权益（钱包余额 + 未实现盈亏），带短缓存。
+
+        内部 state["equity"] 从 backtest.initial_equity 起算，和交易所真实余额不是一个
+        口径（实例：本机 10000 vs 币安 demo 4997）。风控若拿内部值算仓位，实盘会按幻影
+        本金放大仓位，回撤/日亏限额也会失真。所以实盘一律以交易所为准。
+        """
+        if self.state.get("mode") != "live" or not self.armed or self.live_client is None:
+            return None
+        now = time.time()
+        cache = getattr(self, "_live_eq_cache", None)
+        if cache and (now - cache[1]) < ttl:
+            return cache[0]
+        try:
+            acct = self.live_client.account()
+        except Exception:  # noqa: BLE001 - 拿不到就退回本地账本，绝不阻塞决策
+            return None
+        equity = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+        if equity <= 0:
+            return None
+        self._live_eq_cache = (equity, now)
+        return equity
+
+    def _rebase_ledger(self, equity: float) -> None:
+        """把内部账本对齐到交易所真实权益（发现量级不符时调用）。"""
+        with self.lock:
+            self.state["equity"] = float(equity)
+            self.state["peak_equity"] = float(equity)
+            self.state["day_start_equity"] = float(equity)
+            self.state["day"] = _today()
+            self.state["live_baseline_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._live_eq_cache = (float(equity), time.time())
+            self._save()
+
+    def _live_fill(self, symbol: str, order_id: str) -> dict | None:
+        """按 orderId 回读交易所成交，拿真实成交均价 / 手续费 / 已实现盈亏。
+
+        市价单返回的 avgPrice 常为 0，手续费也不在订单响应里；不回读就只能把 fee 记成
+        0，已实现盈亏会偏乐观，内部权益与交易所余额越跑越偏。
+        """
+        if not order_id or self.live_client is None:
+            return None
+        try:
+            rows = self.live_client.trades(symbol, limit=50)
+        except Exception:  # noqa: BLE001
+            return None
+        hits = [r for r in rows if str(r.get("order_id")) == str(order_id)]
+        if not hits:
+            return None
+        qty = sum(float(r.get("qty") or 0.0) for r in hits)
+        notional = sum(float(r.get("qty") or 0.0) * float(r.get("price") or 0.0) for r in hits)
+        return {
+            "qty": qty,
+            "price": (notional / qty) if qty > 0 else 0.0,
+            "fee": sum(float(r.get("fee") or 0.0) for r in hits),
+            "pnl": sum(float(r.get("pnl") or 0.0) for r in hits),
+        }
 
     # ------------------------------------------------------------------
     # 模拟撮合
@@ -397,6 +472,30 @@ class TradingEngine:
             self.reload_for_exchange()
         return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
+    def _reconcile_position_with_exchange(self) -> None:
+        """核对本地实盘持仓与交易所真实持仓，清理「幽灵仓位」。
+
+        本地 state["position"] 只是缓存：当仓位在交易所网页端被手动平掉、或下单被拒
+        但本地已记账时，会留下幽灵仓位，导致切换/删除品种、开仓被误拦截。
+        只核对实盘（mode=live）仓位；模拟盘仓位不对应交易所，不能清。
+        拿不到交易所数据时保守不动；确认交易所无持仓才清本地缓存，绝不主动平仓。
+        """
+        pos = self.state.get("position")
+        if not pos or pos.get("mode") != "live":
+            return
+        exchange = self.state.get("exchange", "binance")
+        testnet = bool(self.state.get("testnet", True))
+        symbol = self.cfg.market.symbol
+        try:
+            client = self.live_client or self.connect(testnet=testnet, exchange=exchange)
+            real = client.positions(symbol)
+        except Exception:  # noqa: BLE001 - 拿不到交易所数据就保守不动
+            return
+        if not real:
+            with self.lock:
+                self.state["position"] = None
+                self._save()
+
     def switch_symbol(self, symbol: str) -> dict:
         """切换活跃品种（有持仓时拒绝，避免仓位和行情对不上）。"""
         symbol = symbol.strip().upper()
@@ -404,6 +503,8 @@ class TradingEngine:
             raise ValueError("品种不能为空")
         if symbol == self.cfg.market.symbol:
             return {"symbol": symbol, "changed": False}
+        # 先与交易所核对，清理幽灵仓位（本地记着、但交易所实际已平）
+        self._reconcile_position_with_exchange()
         with self.lock:
             if self.state.get("position"):
                 raise ValueError("还有未平仓位，先平仓再换品种")
@@ -443,7 +544,10 @@ class TradingEngine:
             entry = {"symbol": sym, "composite": 0.0, "score": 0.0, "active": sym == self.cfg.market.symbol}
             try:
                 mkt = replace(self.cfg.market, symbol=sym)
-                df, _ = load_market(mkt)
+                df, _ = load_market(mkt, prefer=self.state.get("exchange", "binance"))
+                # 机会榜只需最近一段历史：因子最长回看 336 + 目标窗口 200 ≈ 536 根，
+                # 取 600 根足够；否则在 6000 根上逐因子计算，单品种要 10-30 秒。
+                df = df.tail(600)
                 fsig = compute_factor_signal(self.cfg.research.factor_library, df)
                 composite = float(fsig.get("composite", 0.0) or 0.0)
                 entry["composite"] = round(composite, 4)
@@ -453,12 +557,45 @@ class TradingEngine:
             rows.append(entry)
         rows.sort(key=lambda r: -(r["score"] or 0))
         self.opportunities = rows
+        self.scan_state["last_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.scan_state["last_ts"] = time.time()
         return rows
+
+    def start_scan_async(self) -> dict:
+        """后台线程扫描全品种，立即返回状态。
+
+        一次扫描要跑 6 个品种的因子计算（约 10 秒）。如果同步跑在 HTTP 处理里，
+        页面会一直卡在「扫描中」，还会把同进程的其它接口一起拖住。
+        """
+        with self.lock:
+            if self.scan_state.get("scanning"):
+                return dict(self.scan_state)
+            self.scan_state["scanning"] = True
+            self.scan_state["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.scan_state["error"] = ""
+
+        def _work() -> None:
+            rows: list[dict] = []
+            err = ""
+            try:
+                rows = self._scan_opportunities()
+            except Exception as exc:  # noqa: BLE001 - 扫描失败不影响交易主链路
+                err = f"{type(exc).__name__}: {exc}"[:200]
+            with self.lock:
+                self.opportunities = rows
+                self.scan_state["scanning"] = False
+                self.scan_state["last_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                self.scan_state["error"] = err
+
+        threading.Thread(target=_work, name="opportunity-scan", daemon=True).start()
+        return dict(self.scan_state)
 
     def _pick_best_symbol(self, min_score: float | None = None) -> str | None:
         """自主选品种：扫全品种，返回机会分最大且超阈值的品种（无则 None）。"""
         threshold = float(min_score if min_score is not None else self.cfg.market.rotate_min_score)
-        rows = self._scan_opportunities()
+        # 5 分钟内的扫描结果直接复用：自动轮动每轮都扫一遍会和页面扫描重复，白烧 CPU
+        fresh = (time.time() - float(self.scan_state.get("last_ts") or 0.0)) < 300.0
+        rows = self.opportunities if (fresh and self.opportunities) else self._scan_opportunities()
         if not rows:
             return None
         top = rows[0]
@@ -527,6 +664,8 @@ class TradingEngine:
         if not decision and not order.get("quantity"):
             return {"ok": False, "error": "当前决策没有订单（风控未通过或策略观望）"}
 
+        # 先与交易所核对，清理幽灵仓位，避免误判「已有持仓」而拒绝开仓
+        self._reconcile_position_with_exchange()
         with self.lock:
             if self.state.get("halt"):
                 return {"ok": False, "error": "熔断开关已打开"}
@@ -595,10 +734,16 @@ class TradingEngine:
                         )
                     except ExchangeError as exc:
                         self.last_error = f"止盈单下失败（持仓与止损已生效）：{exc}"
+                    # 回读交易所成交：市价单的 avgPrice 常为 0，手续费也不在订单响应里
+                    detail = self._live_fill(self.cfg.market.symbol, res.order_id)
+                    fill_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
+                    fee = float(detail["fee"]) if detail else 0.0
+                    plan_px = float(order.get("entry_ref_price") or 0.0) or None
                     self.state["position"] = {
+                        "symbol": self.cfg.market.symbol,
                         "side": side,
                         "qty": qty,
-                        "entry": res.price or price,
+                        "entry": fill_px,
                         "leverage": lev,
                         "stop": stop,
                         "tp": tp,
@@ -613,13 +758,12 @@ class TradingEngine:
                             "side": side,
                             "symbol": self.cfg.market.symbol,
                             "qty": qty,
-                            "price": res.price or price,
-                            "plan_price": round_price(order.get("entry_ref_price")),
+                            "price": round_price(fill_px),
+                            "plan_price": round_price(plan_px),
                             "slippage_bps": round(
-                                ((res.price or price) - float(order.get("entry_ref_price") or price))
-                                / float(order.get("entry_ref_price") or price) * 10_000.0, 2
-                            ) if order.get("entry_ref_price") else None,
-                            "fee": 0.0,
+                                (fill_px - plan_px) / plan_px * 10_000.0, 2
+                            ) if plan_px else None,
+                            "fee": round(fee, 6),
                             "reason": f"live:{res.order_id}",
                         }
                     )
@@ -661,9 +805,30 @@ class TradingEngine:
                         float(pos["qty"]),
                         reduce_only=True,
                     )
-                    exit_px = res.price or price
+                    detail = self._live_fill(self.cfg.market.symbol, res.order_id)
+                    exit_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
                     direction = 1.0 if pos["side"] == "LONG" else -1.0
-                    pnl = (float(exit_px) - float(pos["entry"])) * float(pos["qty"]) * direction
+                    gross = (exit_px - float(pos["entry"])) * float(pos["qty"]) * direction
+                    if detail is not None:
+                        gross = float(detail["pnl"])  # 交易所口径的已实现盈亏（不含手续费）
+                    fee = float(detail["fee"]) if detail else 0.0
+                    pnl = gross - fee
+                    self.state["fills"].append(
+                        {
+                            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "action": "CLOSE",
+                            "side": pos["side"],
+                            "symbol": pos.get("symbol") or self.cfg.market.symbol,
+                            "qty": round(float(pos["qty"]), 6),
+                            "price": round_price(exit_px),
+                            "fee": round(fee, 6),
+                            "pnl": round(pnl, 4),
+                            "reason": reason,
+                            "order_id": res.order_id,
+                        }
+                    )
+                    self.state["fills"] = self.state["fills"][-500:]
+                    self.state["equity"] += pnl
                     self._record_close(pos, exit_px, pnl, reason, "live")
                     self.state["position"] = None
                     self._save()
@@ -869,6 +1034,7 @@ class TradingEngine:
                 "rotate_min_score": float(self.cfg.market.rotate_min_score),
                 "rotate_every_cycles": int(self.cfg.market.rotate_every_cycles),
                 "opportunities": self.opportunities,
+                "scan_state": dict(self.scan_state),
                 "price": price,
                 "equity": round(eq, 2),
                 "cash_equity": round(self.state["equity"], 2),

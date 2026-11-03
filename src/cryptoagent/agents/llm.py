@@ -17,6 +17,7 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, time as dtime, timedelta, timezone
 
 from ..config import LLMConfig
 from ..netutil import ssl_context
@@ -24,6 +25,56 @@ from ..netutil import ssl_context
 
 class LLMError(RuntimeError):
     pass
+
+
+# --------------------------------------------------------------------------
+# DeepSeek 官方峰谷计价（北京时间 = UTC+8，中国无夏令时，用固定偏移避免依赖 tzdata）
+# 峰时：周一至周五 09:00-12:00、14:00-18:00（排除中国法定节假日）
+# 谷时：其余全部时间（含周末与节假日整天），价格为峰时的一半
+# --------------------------------------------------------------------------
+_CN_TZ = timezone(timedelta(hours=8))
+PEAK_WINDOWS = ((dtime(9, 0), dtime(12, 0)), (dtime(14, 0), dtime(18, 0)))
+
+
+def is_offpeak(cfg: "LLMConfig | None" = None, now: datetime | None = None) -> bool:
+    """按 DeepSeek 官方规则判断是否谷时（谷时价格是峰时的一半）。"""
+    now = now or datetime.now(_CN_TZ)
+    if now.weekday() >= 5:  # 周六 / 周日全天谷时
+        return True
+    holidays = set(getattr(cfg, "peak_holidays", None) or [])
+    if now.strftime("%Y-%m-%d") in holidays:  # 额外配置的节假日（如中国法定假日）
+        return True
+    t = now.time()
+    for start, end in PEAK_WINDOWS:
+        if start <= t < end:
+            return False
+    return True
+
+
+def seconds_until_offpeak(cfg: "LLMConfig | None" = None, now: datetime | None = None) -> int:
+    """距离下一个谷时还有多少秒；已在谷时返回 0。"""
+    now = now or datetime.now(_CN_TZ)
+    if is_offpeak(cfg, now):
+        return 0
+    t = now.time()
+    for _, end in PEAK_WINDOWS:
+        if t < end:
+            target = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+            return max(0, int((target - now).total_seconds()))
+    return 0
+
+
+def offpeak_info(cfg: "LLMConfig | None" = None, now: datetime | None = None) -> dict:
+    now = now or datetime.now(_CN_TZ)
+    off = is_offpeak(cfg, now)
+    return {
+        "offpeak": off,
+        "label": "谷时（5 折）" if off else "峰时（原价）",
+        "discount": 0.5 if off else 1.0,
+        "now": now.strftime("%Y-%m-%d %H:%M"),
+        "peak_windows": "周一至周五 09:00-12:00、14:00-18:00（北京时间，节假日除外）",
+        "seconds_until_offpeak": seconds_until_offpeak(cfg, now),
+    }
 
 
 def _extract_json(text: str) -> dict:
@@ -64,9 +115,26 @@ class LLMClient:
             self._degrade_reason = ""
 
     # ------------------------------------------------------------------
+    def is_offpeak(self) -> bool:
+        return is_offpeak(self.cfg)
+
+    def offpeak_info(self) -> dict:
+        return offpeak_info(self.cfg)
+
+    def _peak_thrift(self) -> bool:
+        """峰时省钱模式：峰时直接走规则兜底，等谷时（半价）再调用 LLM。"""
+        return (
+            str(getattr(self.cfg, "peak_mode", "full")).lower() == "thrift"
+            and not self.is_offpeak()
+        )
+
     def text(self, system: str, user: str, mock: str) -> LLMResponse:
         if self.provider == "mock":
             return LLMResponse(mock, "mock", degraded=bool(self._degrade_reason), reason=self._degrade_reason)
+        if self._peak_thrift():
+            return LLMResponse(
+                mock, "peak-thrift", degraded=True, reason="峰时省钱模式：谷时再调用 LLM"
+            )
         try:
             content = self._chat(system, user, json_mode=False)
             return LLMResponse(content.strip(), self.provider)
@@ -78,6 +146,10 @@ class LLMClient:
     def json(self, system: str, user: str, schema_hint: str, mock: dict) -> tuple[dict, LLMResponse]:
         if self.provider == "mock":
             return mock, LLMResponse("", "mock", degraded=bool(self._degrade_reason), reason=self._degrade_reason)
+        if self._peak_thrift():
+            return mock, LLMResponse(
+                "", "peak-thrift", degraded=True, reason="峰时省钱模式：谷时再调用 LLM"
+            )
 
         prompt = f"{user}\n\n只输出 JSON，不要任何解释。字段要求：\n{schema_hint}"
         last_err = ""

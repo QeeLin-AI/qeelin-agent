@@ -15,13 +15,18 @@ from typing import Any, get_args, get_origin, get_type_hints
 @dataclass
 class LLMConfig:
     provider: str = "mock"            # mock | openai（任何 OpenAI 兼容网关）
-    model: str = "deepseek-chat"
+    model: str = "deepseek-flash"
     base_url: str = "https://api.deepseek.com/v1"
     api_key_env: str = "OPENAI_API_KEY"
     temperature: float = 0.3
     max_tokens: int = 1500
     timeout: int = 60
     retries: int = 2
+    # 峰谷计价策略（DeepSeek 官方：峰时 = 工作日 09:00-12:00 / 14:00-18:00 北京时间，
+    # 其余时间及周末、中国法定节假日为谷时，价格为峰时的一半）
+    offpeak_research_only: bool = True   # 因子研究可延后：只在谷时调用 LLM，峰时用模板兜底
+    peak_mode: str = "full"              # full=峰时照常用 LLM；thrift=峰时降级为规则兜底
+    peak_holidays: list[str] = field(default_factory=list)  # 额外节假日 YYYY-MM-DD（这些天按谷时）
 
 
 @dataclass

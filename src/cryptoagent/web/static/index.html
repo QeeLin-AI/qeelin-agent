@@ -79,7 +79,7 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>通知 / 告警</h2><span class="muted" id="notifChannels"></span></div>
+      <div class="card-head"><h2>通知 / 告警</h2><span class="muted" id="notifChannels"></span><div class="actions"><button id="notifClearBtn" class="btn ghost sm" title="清空通知列表">清除</button></div></div>
       <div class="notif-list" id="notifList"><div class="muted center">暂无通知</div></div>
     </div>
 
@@ -426,6 +426,29 @@
       </label>
       <label class="field">API Key
         <input id="llmApiKey" type="password" placeholder="sk-...（留空则不修改）" />
+      </label>
+      <div class="field" style="margin:12px 0">
+        <span style="color:var(--text);font-size:13px;font-weight:600">峰谷计价（DeepSeek 官方）</span>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+          <span id="llmOffpeak" class="tag">--</span>
+          <span class="muted" id="llmPeakHint" style="font-size:11.5px">--</span>
+        </div>
+      </div>
+      <label class="field">峰时决策
+        <select id="llmPeakMode">
+          <option value="full">照常使用 LLM（推荐，质量优先）</option>
+          <option value="thrift">省钱模式（峰时用规则兜底，会标注降级）</option>
+        </select>
+      </label>
+      <label class="switch-row">
+        <span class="switch-label">
+          <span class="t">因子研究仅在谷时调用 LLM</span>
+          <span class="d">研究可延后：峰时改用模板提议器，谷时（半价）再跑 LLM，省一半费用</span>
+        </span>
+        <label class="switch"><input type="checkbox" id="llmOffpeakResearch" /><span class="track"><span class="thumb"></span></span></label>
+      </label>
+      <label class="field">节假日（可选）
+        <input id="llmPeakHolidays" type="text" placeholder="2026-10-01,2026-10-02（这些日期按谷时计价）" />
       </label>
       <div class="actions">
         <button id="llmSaveBtn" class="btn primary">保存</button>
