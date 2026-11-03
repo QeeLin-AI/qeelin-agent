@@ -874,7 +874,7 @@ function renderStatus(s) {
   } else {
     pt.innerHTML = '<tr><td colspan="8" class="muted center">空仓</td></tr>';
   }
-  if ($('posMeta')) $('posMeta').textContent = s.position ? '持仓中' : '空仓';
+  if ($('posMeta')) $('posMeta').textContent = s.position ? '1 个' : '空仓';
 
   // 交易页状态
   $('armState').textContent = modeLabel;
@@ -981,11 +981,36 @@ function setupCanvas(cv) {
   return { ctx, w, h };
 }
 
+/* 持仓 / 持仓历史：标签页，选中项记在浏览器里 */
+function showPosTab(name, persist = true) {
+  const hist = name === 'hist';
+  document.querySelectorAll('[data-pos-tab]').forEach((b) => {
+    b.classList.toggle('sel', (b.dataset.posTab === 'hist') === hist);
+  });
+  if ($('posPaneCur')) $('posPaneCur').classList.toggle('hidden', hist);
+  if ($('posPaneHist')) $('posPaneHist').classList.toggle('hidden', !hist);
+  // 「一键平仓」只在当前持仓页有意义，历史页收起来
+  if ($('posActions')) $('posActions').classList.toggle('hidden', hist);
+  if (persist) {
+    try { localStorage.setItem('qeelin-postab', hist ? 'hist' : 'cur'); } catch (e) { /* 隐私模式 */ }
+  }
+}
+
+if ($('posTabs')) {
+  $('posTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-pos-tab]');
+    if (btn) showPosTab(btn.dataset.posTab);
+  });
+  let savedPosTab = null;
+  try { savedPosTab = localStorage.getItem('qeelin-postab'); } catch (e) { /* 隐私模式 */ }
+  showPosTab(savedPosTab === 'hist' ? 'hist' : 'cur', false);
+}
+
 function renderPosHistory() {
   const tb = $('posHistBody');
   if (!tb) return;
   const hist = (lastStatus && lastStatus.position_history) || [];
-  if ($('histMeta')) $('histMeta').textContent = hist.length ? `共 ${hist.length} 笔` : '最近平仓';
+  if ($('histMeta')) $('histMeta').textContent = hist.length ? `共 ${hist.length} 笔` : '0 笔';
   if (!hist.length) {
     tb.innerHTML = '<tr><td colspan="7" class="muted center">暂无平仓记录</td></tr>';
     return;

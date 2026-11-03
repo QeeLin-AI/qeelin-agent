@@ -230,25 +230,25 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>持仓</h2><div class="actions"><button id="closeBtn" class="btn cyan">一键全平</button></div></div>
-      <div class="pos-grid">
-        <div class="pos-col">
-          <div class="col-head"><span>当前持仓</span><span id="posMeta" class="muted"></span></div>
-          <div class="table-scroll">
-            <table class="table compact" id="posTable">
-              <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损 / 止盈</th><th>浮盈亏</th></tr></thead>
-              <tbody><tr><td colspan="8" class="muted center">空仓</td></tr></tbody>
-            </table>
-          </div>
+      <div class="card-head"><h2>持仓</h2><div class="actions" id="posActions"><button id="closeBtn" class="btn cyan">一键平仓</button></div></div>
+      <div class="pos-tabs" id="posTabs">
+        <button class="seg sel" data-pos-tab="cur">当前持仓<span id="posMeta" class="tab-count"></span></button>
+        <button class="seg" data-pos-tab="hist">持仓历史<span id="histMeta" class="tab-count"></span></button>
+      </div>
+      <div class="pos-pane" id="posPaneCur">
+        <div class="table-scroll">
+          <table class="table compact" id="posTable">
+            <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损 / 止盈</th><th>浮盈亏</th></tr></thead>
+            <tbody><tr><td colspan="8" class="muted center">空仓</td></tr></tbody>
+          </table>
         </div>
-        <div class="pos-col">
-          <div class="col-head"><span>持仓历史</span><span id="histMeta" class="muted">最近平仓</span></div>
-          <div class="table-scroll">
-            <table class="table compact" id="posHistTable">
-              <thead><tr><th>平仓时间</th><th>品种</th><th>方向</th><th>数量</th><th>开仓 → 平仓</th><th>盈亏</th><th>原因</th></tr></thead>
-              <tbody id="posHistBody"><tr><td colspan="7" class="muted center">暂无平仓记录</td></tr></tbody>
-            </table>
-          </div>
+      </div>
+      <div class="pos-pane hidden" id="posPaneHist">
+        <div class="table-scroll">
+          <table class="table compact" id="posHistTable">
+            <thead><tr><th>平仓时间</th><th>品种</th><th>方向</th><th>数量</th><th>开仓 → 平仓</th><th>盈亏</th><th>原因</th></tr></thead>
+            <tbody id="posHistBody"><tr><td colspan="7" class="muted center">暂无平仓记录</td></tr></tbody>
+          </table>
         </div>
       </div>
     </div>
