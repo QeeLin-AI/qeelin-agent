@@ -951,7 +951,13 @@ class WebApp:
                 return False, f"查询 OKX 合约列表失败（{type(exc).__name__}），稍后再试"
             if data.get("data"):
                 return True, ""
-            return False, f"OKX 没有上线 {sym} 的 USDT 永续合约（{inst}）"
+            if sym.endswith("USDC"):
+                return (
+                    False,
+                    f"OKX 只有 USDT 本位和币本位（USD）永续，没有 USDC 本位合约；"
+                    f"{sym} 请切换到「币安」添加",
+                )
+            return False, f"OKX 没有上线 {sym} 的永续合约（{inst}）"
 
         try:
             _get(f"{FAPI}/fapi/v1/ticker/price", {"symbol": sym}, timeout=10)
@@ -1111,7 +1117,7 @@ class WebApp:
             data = _get(f"{FAPI}/fapi/v1/exchangeInfo", {}, timeout=12)
             for item in data.get("symbols", []):
                 if (
-                    item.get("quoteAsset") == "USDT"
+                    item.get("quoteAsset") in ("USDT", "USDC")
                     and item.get("contractType") == "PERPETUAL"
                     and item.get("status") == "TRADING"
                 ):
@@ -1122,9 +1128,10 @@ class WebApp:
             data = _get(f"{OKX}/api/v5/public/instruments", {"instType": "SWAP"}, timeout=12)
             for item in data.get("data", []):
                 inst = str(item.get("instId", ""))
-                if not inst.endswith("-USDT-SWAP"):
+                quote = next((q for q in ("USDT", "USDC") if inst.endswith(f"-{q}-SWAP")), "")
+                if not quote:
                     continue
-                sym = inst[: -len("-USDT-SWAP")].replace("-", "") + "USDT"
+                sym = inst[: -len(f"-{quote}-SWAP")].replace("-", "") + quote
                 row = found.setdefault(sym, {"symbol": sym, "exchanges": []})
                 if "okx" not in row["exchanges"]:
                     row["exchanges"].append("okx")

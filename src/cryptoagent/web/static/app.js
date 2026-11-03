@@ -184,12 +184,21 @@ async function loadSymbols() {
     sel.innerHTML = list.map((x) => {
       const mark = x.cached ? '' : (x.synthetic_only ? '（合成）' : '（未下载）');
       const star = x.pinned ? '★ ' : '';
-      return `<option value="${esc(x.symbol)}">${star}${esc(x.symbol.replace('USDT', '/USDT'))}${mark}</option>`;
+      return `<option value="${esc(x.symbol)}">${star}${esc(prettySymbol(x.symbol))}${mark}</option>`;
     }).join('');
     const active = list.find((x) => x.active);
     if (active) sel.value = active.symbol;
     sel.title = list.map((x) => `${x.symbol}${x.cached ? ' 缓存到 ' + x.last : ' 未下载'}`).join(' ｜ ');
   } catch (e) { console.error(e); }
+}
+
+// BTCUSDT → BTC/USDT，BTCUSDC → BTC/USDC
+function prettySymbol(sym) {
+  const s = String(sym || '');
+  for (const q of ['USDT', 'USDC']) {
+    if (s.endsWith(q) && s.length > q.length) return `${s.slice(0, -q.length)}/${q}`;
+  }
+  return s;
 }
 
 function syncSymbolSelect(symbol) {

@@ -259,8 +259,8 @@ def _fetch_vision(cfg: MarketConfig, need: int) -> pd.DataFrame:
 
 
 def _fetch_gate(cfg: MarketConfig, need: int) -> pd.DataFrame:
-    """Gate.io USDT 永续（备用源）。合约名 BTCUSDT → BTC_USDT。"""
-    contract = cfg.symbol.replace("USDT", "_USDT")
+    """Gate.io 永续（备用源）。合约名 BTCUSDT → BTC_USDT。"""
+    contract = gate_contract(cfg.symbol)
     rows: list[dict] = []
     to_ts = int(time.time())
     interval = cfg.interval if cfg.interval in {"10s", "1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d"} else "1h"
@@ -294,12 +294,40 @@ OKX_BARS = {
 }
 
 
+QUOTE_ASSETS = ("USDT", "USDC", "USD")
+
+
+def split_symbol(symbol: str) -> tuple[str, str]:
+    """BTCUSDT → (BTC, USDT)；BTC-USDC-SWAP → (BTC, USDC)。"""
+    s = str(symbol or "").upper().replace("-", "").replace("_", "").replace("/", "").replace(" ", "")
+    for suffix in ("SWAP", "PERP"):
+        if s.endswith(suffix) and len(s) > len(suffix) + 3:
+            s = s[: -len(suffix)]
+            break
+    for quote in QUOTE_ASSETS:
+        if s.endswith(quote) and len(s) > len(quote):
+            return s[: -len(quote)], quote
+    return s, "USDT"
+
+
 def okx_inst(symbol: str) -> str:
-    """BTCUSDT → BTC-USDT-SWAP（OKX 的 U 本位永续）。"""
-    s = symbol.upper().replace("-", "").replace("_", "")
-    if s.endswith("USDT"):
-        return f"{s[:-4]}-USDT-SWAP"
-    return s
+    """BTCUSDT → BTC-USDT-SWAP，BTCUSDC → BTC-USDC-SWAP（OKX 永续）。"""
+    base, quote = split_symbol(symbol)
+    if quote in ("USDT", "USDC"):
+        return f"{base}-{quote}-SWAP"
+    return str(symbol).upper()
+
+
+def okx_live_inst(symbol: str) -> str:
+    """行情/实时价用的 instId：BTCUSDT → BTC-USDT。"""
+    base, quote = split_symbol(symbol)
+    return f"{base}-{quote}"
+
+
+def gate_contract(symbol: str) -> str:
+    """Gate 合约名：BTCUSDT → BTC_USDT。"""
+    base, quote = split_symbol(symbol)
+    return f"{base}_{quote}"
 
 
 def _okx_rows_to_df(rows: list[list]) -> pd.DataFrame:
@@ -426,13 +454,13 @@ def _live_vision(symbol: str, timeout: int) -> tuple[float, str]:
 
 
 def _live_gate(symbol: str, timeout: int) -> tuple[float, str]:
-    contract = symbol.replace("USDT", "_USDT")
+    contract = gate_contract(symbol)
     data = _get(f"{GATE}/api/v4/futures/usdt/tickers", {"contract": contract}, timeout=timeout)
     return float(data[0]["last"]), "gate-futures"
 
 
 def _live_okx(symbol: str, timeout: int) -> tuple[float, str]:
-    inst = symbol.replace("USDT", "-USDT")
+    inst = okx_live_inst(symbol)
     data = _get(f"{OKX}/api/v5/market/ticker", {"instId": inst}, timeout=timeout)
     return float(data["data"][0]["last"]), "okx"
 
@@ -521,7 +549,7 @@ def fetch_klines(
 
     # 3) Gate 永续
     try:
-        contract = symbol.replace("USDT", "_USDT")
+        contract = gate_contract(symbol)
         rows = _get(
             f"{GATE}/api/v4/futures/usdt/candlesticks",
             {"contract": contract, "interval": interval, "limit": limit},
@@ -620,7 +648,7 @@ def fetch_24h(symbol: str, timeout: int = 6, prefer: str = "binance") -> tuple[f
 
     # 3) Gate 永续
     try:
-        contract = symbol.replace("USDT", "_USDT")
+        contract = gate_contract(symbol)
         data = _get(f"{GATE}/api/v4/futures/usdt/tickers", {"contract": contract}, timeout=timeout)
         item = data[0]
         out = (float(item["last"]), float(item.get("change_percentage", 0.0)))
