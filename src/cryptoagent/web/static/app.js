@@ -693,6 +693,12 @@ function renderRisk(r) {
   if (rd && document.activeElement !== rd) rd.value = (Number(r.daily_loss_limit_pct) * 100).toFixed(1);
   const rdd = $('riskDrawdown');
   if (rdd && document.activeElement !== rdd) rdd.value = (Number(r.max_drawdown_pct) * 100).toFixed(0);
+  const sm = $('riskSizingMode');
+  if (sm && document.activeElement !== sm) sm.value = r.sizing_mode || 'llm';
+  const rb = $('riskBudget');
+  if (rb && document.activeElement !== rb) rb.value = (Number(r.risk_per_trade_pct || 0.01) * 100).toFixed(1);
+  const rml = $('riskMinLev');
+  if (rml && document.activeElement !== rml) rml.value = Number(r.min_leverage || 1).toFixed(0);
 }
 
 $('levSelect').addEventListener('change', async () => {
@@ -711,11 +717,11 @@ $('levSelect').addEventListener('change', async () => {
 
 $('riskTotal').addEventListener('change', async () => {
   const v = Number($('riskTotal').value);
-  if (!v || v < 0.1 || v > 5) { toast('总持仓风险需在 0.1% ~ 5% 之间', 'err'); poll(); return; }
+  if (!v || v < 0.1 || v > 5) { toast('单笔风险上限需在 0.1% ~ 5% 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { max_loss_per_trade_pct: v / 100 });
     renderRisk(d.risk);
-    toast(`总持仓风险已设为 ${v}%`, 'ok');
+    toast(`单笔风险上限已设为 ${v}%`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
@@ -746,6 +752,36 @@ $('riskDrawdown').addEventListener('change', async () => {
     const d = await api('/api/risk', 'POST', { max_drawdown_pct: v / 100 });
     renderRisk(d.risk);
     toast(`最大回撤已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskSizingMode').addEventListener('change', async () => {
+  const v = $('riskSizingMode').value;
+  try {
+    const d = await api('/api/risk', 'POST', { sizing_mode: v });
+    renderRisk(d.risk);
+    const label = { llm: '听交易员', risk: '按风险预算反推', max: '两者取大' }[v] || v;
+    toast(`仓位方式已改为「${label}」`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskBudget').addEventListener('change', async () => {
+  const v = Number($('riskBudget').value);
+  if (!v || v < 0.1 || v > 5) { toast('单笔风险预算需在 0.1% ~ 5% 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { risk_per_trade_pct: v / 100 });
+    renderRisk(d.risk);
+    toast(`单笔风险预算已设为 ${v}%（止损 1.5% 时名义约 ${(v / 1.5).toFixed(1)}x 权益）`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskMinLev').addEventListener('change', async () => {
+  const v = Number($('riskMinLev').value);
+  if (!v || v < 1 || v > 50) { toast('杠杆下限需在 1 ~ 50 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { min_leverage: v });
+    renderRisk(d.risk);
+    toast(`杠杆下限已设为 ${v}x`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
