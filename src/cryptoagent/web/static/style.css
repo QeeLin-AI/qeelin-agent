@@ -171,9 +171,9 @@ main { padding: 18px 20px 60px; max-width: 1440px; margin: 0 auto; }
 .cal-head #calSummary { margin-left: 6px; font-size: 12px; }
 .cal-weekdays {
   display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;
-  max-width: 760px; margin-bottom: 6px; font-size: 11px; color: var(--muted); text-align: center;
+  max-width: none; margin-bottom: 6px; font-size: 11px; color: var(--muted); text-align: center;
 }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; max-width: 760px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; max-width: none; }
 .cal-cell {
   min-height: 54px; padding: 6px 7px; border-radius: 8px;
   border: 1px solid rgba(40, 51, 73, .7); background: rgba(255, 255, 255, .015);
@@ -192,6 +192,31 @@ main { padding: 18px 20px 60px; max-width: 1440px; margin: 0 auto; }
 .cal-key { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .cal-key.up { background: rgba(0, 224, 143, .45); border: 1px solid rgba(0, 224, 143, .5); }
 .cal-key.down { background: rgba(255, 77, 94, .45); border: 1px solid rgba(255, 77, 94, .5); margin-left: 8px; }
+
+/* 日历与机会榜左右并排 */
+.pnl-split { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; align-items: start; }
+@media (max-width: 1180px) { .pnl-split { grid-template-columns: 1fr; } }
+.cal-block { min-width: 0; }
+
+.opp-panel {
+  min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: rgba(255, 255, 255, .015);
+}
+.opp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.opp-title { font-size: 13px; font-weight: 600; }
+.opp-filters { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 10px; font-size: 12px; }
+.opp-panel .opp-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "sym sig score" "bar bar bar";
+  gap: 4px 8px; padding: 7px 0;
+  border-bottom: 1px dashed rgba(40, 51, 73, .55);
+}
+.opp-panel .opp-row:last-child { border-bottom: none; }
+.opp-panel .opp-sym { grid-area: sym; }
+.opp-panel .opp-sig { grid-area: sig; text-align: left; }
+.opp-panel .opp-score { grid-area: score; }
+.opp-panel .opp-bar-track { grid-area: bar; }
 .panel { display: none; }
 .panel.active { display: block; }
 

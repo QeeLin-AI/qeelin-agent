@@ -78,33 +78,38 @@
       </div>
       <div class="pnl-trades" id="pnlTrades"><div class="muted center">暂无平仓成交</div></div>
       <div class="divider"><span>每日盈亏（已实现）</span></div>
-      <div class="cal-head">
-        <button id="calPrev" class="btn ghost sm" title="上个月">‹</button>
-        <span id="calMonth" class="cal-month">--</span>
-        <button id="calNext" class="btn ghost sm" title="下个月">›</button>
-        <span id="calSummary" class="muted"></span>
-      </div>
-      <div class="cal-weekdays">
-        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
-      </div>
-      <div class="cal-grid" id="calGrid"></div>
-      <div class="cal-legend">
-        <span class="cal-key up"></span>盈利
-        <span class="cal-key down"></span>亏损
-        <span class="muted">（颜色深浅＝当天盈亏相对大小，悬停看明细）</span>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head">
-        <h2>机会信号排行榜</h2>
-        <div class="actions">
-          <label class="inline">阈值 <input id="rotateMinScore" type="number" step="0.05" min="0" max="1" style="width:64px" /></label>
-          <label class="inline">每 <input id="rotateEvery" type="number" min="1" max="100" style="width:52px" /> 轮扫</label>
-          <label class="inline"><input id="rotateToggle" type="checkbox" /> 自动选品种</label>
-          <button id="rotateRefresh" class="btn ghost">重扫</button>
+      <div class="pnl-split">
+        <div class="cal-block">
+          <div class="cal-head">
+            <button id="calPrev" class="btn ghost sm" title="上个月">‹</button>
+            <span id="calMonth" class="cal-month">--</span>
+            <button id="calNext" class="btn ghost sm" title="下个月">›</button>
+            <span id="calSummary" class="muted"></span>
+          </div>
+          <div class="cal-weekdays">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+          </div>
+          <div class="cal-grid" id="calGrid"></div>
+          <div class="cal-legend">
+            <span class="cal-key up"></span>盈利
+            <span class="cal-key down"></span>亏损
+            <span class="muted">（颜色深浅＝当天盈亏相对大小，悬停看明细）</span>
+          </div>
         </div>
+
+        <aside class="opp-panel">
+          <div class="opp-head">
+            <span class="opp-title">机会信号排行榜</span>
+            <button id="rotateRefresh" class="btn ghost sm">重扫</button>
+          </div>
+          <div class="opp-filters">
+            <label class="inline">阈值 <input id="rotateMinScore" type="number" step="0.05" min="0" max="1" style="width:60px" /></label>
+            <label class="inline">每 <input id="rotateEvery" type="number" min="1" max="100" style="width:48px" /> 轮扫</label>
+            <label class="inline"><input id="rotateToggle" type="checkbox" /> 自动选品种</label>
+          </div>
+          <div class="opp-list" id="oppList"><div class="muted center">扫描中…（自动循环会周期性扫描）</div></div>
+        </aside>
       </div>
-      <div class="opp-list" id="oppList"><div class="muted center">扫描中…</div></div>
     </div>
     <div class="card">
       <div class="card-head"><h2>最近成交</h2></div>

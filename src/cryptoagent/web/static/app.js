@@ -1304,7 +1304,7 @@ function renderOpportunities(rows) {
   const maxScore = Math.max(...data.map((r) => r.score || 0), 0.0001);
   listEl.innerHTML = data.map((r) => {
     const w = Math.max(2, Math.round(((r.score || 0) / maxScore) * 100));
-    const sig = r.error ? '—' : ((r.composite || 0) >= 0 ? '看多 ' : '看空 ') + fmt(r.composite, 3);
+    const sig = r.error ? '—' : ((r.composite || 0) >= 0 ? '看多 ↑' : '看空 ↓');
     const cls = r.active ? 'opp-row active' : 'opp-row';
     return `<div class="${cls}">
       <span class="opp-sym">${esc(r.symbol)}${r.active ? ' ●' : ''}</span>
