@@ -249,7 +249,7 @@ main { padding: 18px 20px 60px; max-width: 1440px; margin: 0 auto; }
   background: linear-gradient(180deg, rgba(26, 33, 51, .55), rgba(18, 23, 38, .9));
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   margin-bottom: 16px;
   box-shadow: 0 8px 26px rgba(0, 0, 0, .22);
   transition: border-color .2s ease;
@@ -355,6 +355,9 @@ input[type="number"]:focus, input[type="text"]:focus { border-color: var(--cyan)
 input[type="text"] { width: 100%; }
 label.inline { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 label.field { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; margin: 12px 0; }
+/* 宽屏下输入框别拉到一千多像素，读起来累 */
+.card label.field > input[type="text"],
+.card label.field > select { max-width: 560px; }
 
 /* ---------- 决策区 ---------- */
 .decision-body.empty { color: var(--muted); padding: 40px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); }
@@ -398,7 +401,14 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .btn.sm { padding: 4px 10px; font-size: 12px; }
 
 /* ---------- 交易页右侧连接状态卡 ---------- */
-.trade-split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+.trade-split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+/* 自动交易：间隔 / 自动下单 / 启停 排成一行，避免左侧大片留白 */
+.auto-controls { display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; margin: 2px 0 4px; }
+.auto-controls .field { margin: 0; }
+.auto-controls .field input { width: 104px; }
+.auto-controls .auto-exec { padding-bottom: 8px; }
+.auto-controls .auto-actions { margin-left: 0; padding-bottom: 1px; }
+.auto-meta { margin: 10px 0 0; }
 @media (max-width: 1080px) { .trade-split { grid-template-columns: 1fr; } }
 
 .conn-panel {
@@ -633,8 +643,12 @@ select option { background: var(--panel); color: var(--text); }
 
 /* ---------- 美化与防错行加固 ---------- */
 /* 交易参数：可编辑风险输入（保留卡片底色，与原有只读条一致） */
-.kv > .field { background: var(--panel-2); border-radius: 6px; padding: 8px 10px; margin: 0; }
-.input-suffix { display: inline-flex; align-items: center; gap: 6px; }
+.kv > .field {
+  background: var(--panel-2); border-radius: 6px; padding: 8px 10px; margin: 0;
+  /* 与上面的 API Key / 连接状态保持同一读法：标签在左，数值在右 */
+  flex-direction: row; align-items: center; justify-content: space-between; gap: 10px;
+}
+.input-suffix { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; }
 .input-suffix .suffix { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .input-suffix input[type="number"] { width: 72px; }
 /* 表格单元格：数值不换行，长文本可换行，避免撑爆或溢出 */

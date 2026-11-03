@@ -196,15 +196,17 @@
         <div class="trade-split">
           <div class="trade-main">
             <p class="muted">交易所连接、API Key、杠杆与风控已移到 <a href="#settings" id="goSettings" class="link">设置</a> 页。</p>
-            <label class="field">轮询间隔（秒）
-              <input id="autoInterval" type="number" min="30" max="3600" value="300" />
-            </label>
-            <label class="inline"><input id="autoExec" type="checkbox" /> 决策通过后自动下单</label>
-            <div class="actions">
-              <button id="autoStart" class="btn start">启动</button>
-              <button id="autoStop" class="btn stop active">停止</button>
+            <div class="auto-controls">
+              <label class="field field-sm">轮询间隔（秒）
+                <input id="autoInterval" type="number" min="30" max="3600" value="300" />
+              </label>
+              <label class="inline auto-exec"><input id="autoExec" type="checkbox" /> 决策通过后自动下单</label>
+              <div class="actions auto-actions">
+                <button id="autoStart" class="btn start">启动</button>
+                <button id="autoStop" class="btn stop active">停止</button>
+              </div>
             </div>
-            <p class="muted" id="autoMeta">未运行</p>
+            <p class="muted auto-meta" id="autoMeta">未运行</p>
             <div class="divider"><span>手动执行</span></div>
             <div class="actions">
               <button id="execBtn" class="btn ghost">执行决策</button>
