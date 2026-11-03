@@ -729,7 +729,21 @@ html[data-theme="light"] .card {
   box-shadow: 0 6px 18px rgba(20, 40, 80, .06);
 }
 html[data-theme="light"] .tab:hover { background: rgba(16, 32, 56, .05); }
-html[data-theme="light"] .btn:hover { border-color: #b9c4d6; background: #e9eef6; }
+/* 只有「中性」按钮才用浅灰 hover；带底色的变体各自保留本色，
+   否则会出现浅灰底 + 白字的“看不见”情况（原 .btn:hover 优先级更高，会盖掉 .primary/.cyan 等） */
+html[data-theme="light"] .btn:hover:not(.primary):not(.cyan):not(.blue):not(.warn):not(.danger):not(.start):not(.stop):not(.selected) {
+  border-color: #b9c4d6; background: #e9eef6; color: var(--text);
+}
+html[data-theme="light"] .btn.primary { background: #0b8f63; border-color: #0b8f63; color: #fff; }
+html[data-theme="light"] .btn.primary:hover { background: #0a7d57; border-color: #0a7d57; }
+html[data-theme="light"] .btn.cyan { background: #0e7490; border-color: #0e7490; color: #fff; }
+html[data-theme="light"] .btn.cyan:hover { background: #0b6077; border-color: #0b6077; }
+html[data-theme="light"] .btn.start:not(.active):hover,
+html[data-theme="light"] .btn.stop:not(.active):hover { background: #e9eef6; border-color: #b9c4d6; color: var(--text); }
+html[data-theme="light"] .btn.start.active:hover { background: #0e9f6e; border-color: #0e9f6e; color: #eafff6; }
+html[data-theme="light"] .btn.stop.active:hover { background: #d9484f; border-color: #d9484f; color: #fff; }
+html[data-theme="light"] .btn.danger:hover { background: rgba(217, 45, 67, .14); border-color: rgba(217, 45, 67, .5); color: #b42318; }
+html[data-theme="light"] .btn.selected:hover { background: rgba(14, 159, 110, .12); border-color: var(--green); color: var(--green); }
 html[data-theme="light"] input[type="number"],
 html[data-theme="light"] input[type="text"] { border-color: var(--line); }
 html[data-theme="light"] select:hover { border-color: #b9c4d6; }
