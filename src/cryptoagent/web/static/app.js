@@ -1045,7 +1045,6 @@ function renderDaily() {
   const pad = (n) => String(n).padStart(2, '0');
   const monthPrefix = `${y}-${pad(m + 1)}`;
   const monthRows = days.filter((d) => String(d.date || '').startsWith(monthPrefix));
-  const maxAbs = Math.max(...monthRows.map((d) => Math.abs(d.pnl || 0)), 1e-9);
 
   const firstDow = (new Date(y, m, 1).getDay() + 6) % 7;   // 周一为一周起点
   const total = new Date(y, m + 1, 0).getDate();
@@ -1061,7 +1060,6 @@ function renderDaily() {
     const key = `${monthPrefix}-${pad(d)}`;
     const rec = byDay.get(key);
     let cls = 'cal-cell';
-    let style = '';
     let label = '';
     let tip = `${key}`;
     if (rec) {
@@ -1069,15 +1067,13 @@ function renderDaily() {
       monthPnl += pnl;
       if (pnl > 0) wins += 1;
       else if (pnl < 0) losses += 1;
-      // 填充要克制：最高约 0.27，否则同色文字压在亮色块上会发糊
-      const a = 0.07 + 0.20 * Math.min(1, Math.abs(pnl) / maxAbs);
+      // 不再铺底色，只用红绿数字表示盈亏，画面更干净
       cls += pnl >= 0 ? ' up' : ' down';
-      style = `background: rgba(${pnl >= 0 ? '0,224,143' : '255,77,94'},${a.toFixed(3)})`;
       label = `<span class="v">${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)}</span>`;
       tip = `${key} · ${rec.trades} 笔（胜 ${rec.wins}）· ${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)} U`;
     }
     if (key === todayKey) cls += ' today';
-    html += `<div class="${cls}" style="${style}" title="${esc(tip)}"><span class="d">${d}</span>${label}</div>`;
+    html += `<div class="${cls}" title="${esc(tip)}"><span class="d">${d}</span>${label}</div>`;
   }
   grid.innerHTML = html;
 
