@@ -114,13 +114,42 @@ class RiskEngine:
             if abs(lev - cfg.leverage_override) > 1e-9:
                 reasons.append(f"按设置强制使用 {cfg.leverage_override:.1f}x（决策给的 {lev:.1f}x）")
             lev = float(cfg.leverage_override)
-        # 上限：优先用交易所支持的最大杠杆，未连交易所时用配置兜底（默认 3x 保守）
-        cap = float(exchange_max_leverage or 0.0)
-        if cap < cfg.max_leverage:
-            cap = cfg.max_leverage
+        # 真正的上限 = min(交易所支持的最大杠杆, 配置上限)。
+        # 之前取的是 max，导致 max_leverage 形同虚设：交易所给 75x 时它能突破配置。
+        cap = float(cfg.max_leverage or 0.0)
+        if exchange_max_leverage:
+            ex_cap = float(exchange_max_leverage)
+            cap = min(cap, ex_cap) if cap > 0 else ex_cap
+        if cap <= 0:
+            cap = 1.0
         if lev > cap:
             reasons.append(f"杠杆 {lev:.1f}x 超过上限，压到 {cap:.1f}x")
             lev = cap
+        if cfg.min_leverage and cfg.min_leverage > lev:
+            floor = min(float(cfg.min_leverage), cap)
+            if floor > lev:
+                reasons.append(f"按杠杆下限托底到 {floor:.1f}x")
+                lev = floor
+
+        # 仓位：可选用「风险预算反推」，并与交易员给的仓位取大
+        if cfg.sizing_mode in ("risk", "max") and stop > 0 and cfg.risk_per_trade_pct > 0:
+            target_ratio = cfg.risk_per_trade_pct / max(stop, 1e-4)   # 名义敞口 / 权益
+            # 保证金上限会限制仓位：必要时抬高杠杆来容纳同样的风险（风险不变，只省保证金）
+            if cfg.max_position_pct > 0:
+                lev_needed = target_ratio / cfg.max_position_pct
+                if lev_needed > lev:
+                    lev = min(lev_needed, cap)
+                    reasons.append(
+                        f"风险预算 {cfg.risk_per_trade_pct:.1%} 需要 {lev:.2f}x，已上调杠杆"
+                    )
+            risk_size = target_ratio / lev if lev > 0 else 0.0
+            if cfg.sizing_mode == "risk":
+                size = risk_size
+            else:
+                size = max(size, risk_size)
+            reasons.append(
+                f"风险预算制：目标名义 {target_ratio:.2f}x 权益 → 仓位 {size:.1%} @ {lev:.2f}x"
+            )
 
         # 6. 仓位夹紧（占权益比例）
         if size > cfg.max_position_pct:
@@ -129,12 +158,11 @@ class RiskEngine:
         if size <= 0:
             return RiskDecision(False, "flat", 0.0, 0.0, reasons + ["仓位为 0"], checks)
 
-        # 7. 名义敞口上限（跟随实际杠杆上限，杠杆不设死上限后由单笔亏损约束兜底）
+        # 7. 名义敞口上限（= 保证金上限 × 杠杆上限）
         notional = size * lev * state.equity
-        lev_cap = max(cfg.max_leverage, float(exchange_max_leverage or 0.0))
-        cap = cfg.max_position_pct * lev_cap * state.equity
-        if notional > cap and cap > 0:
-            scale = cap / notional
+        notional_cap = cfg.max_position_pct * cap * state.equity
+        if notional > notional_cap and notional_cap > 0:
+            scale = notional_cap / notional
             size *= scale
             reasons.append(f"名义敞口超限，仓位按 {scale:.2f} 缩放")
 

@@ -335,20 +335,33 @@ def run_debate(
 # --------------------------------------------------------------------------
 # 交易员
 # --------------------------------------------------------------------------
-TRADER_SCHEMA = """action: long 或 short 或 flat
-size_pct: 0.0 到 0.30 之间的小数（占账户权益的比例）
-leverage: 1.0 到 3.0
-stop_loss_pct: 0.002 到 0.10
-take_profit_pct: 0.004 到 0.20
-confidence: 0.0 到 1.0
-rationale: 一句话理由"""
+def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30) -> str:
+    """交易员的输出 schema。上下限跟着风控配置走。
+
+    这里以前硬编码 `leverage: 1.0 到 3.0`，模型很听话地永远给 2x——真正的杠杆瓶颈
+    在提示词，不在风控。改成按配置生成，并说明「杠杆只影响保证金占用，不改单笔风险」。
+    """
+    lev_cap = max(1.0, float(max_leverage or 3.0))
+    pos_cap = min(max(float(max_position_pct or 0.30), 0.01), 1.0)
+    return (
+        "action: long 或 short 或 flat\n"
+        f"size_pct: 0.0 到 {pos_cap:.2f} 之间的小数（保证金占账户权益的比例）\n"
+        f"leverage: 1.0 到 {lev_cap:.0f}（止损越近可以给越高；杠杆只改变保证金占用，"
+        "单笔风险由 仓位×杠杆×止损 决定）\n"
+        "stop_loss_pct: 0.002 到 0.10\n"
+        "take_profit_pct: 0.004 到 0.20\n"
+        "confidence: 0.0 到 1.0\n"
+        "rationale: 一句话理由"
+    )
 
 RISK_SCHEMA = """verdict: approve 或 reduce 或 reject
 size_multiplier: 0.0 到 1.0（只允许缩小）
 reasons: 字符串数组"""
 
 
-def _fallback_proposal(snap: MarketSnapshot, debate: Debate) -> dict:
+def _fallback_proposal(snap: MarketSnapshot, debate: Debate, caps: dict | None = None) -> dict:
+    caps = caps or {}
+    lev_cap = max(1.0, float(caps.get("max_leverage") or 3.0))
     score = debate.score
     if abs(score) < 0.15:
         return {
@@ -364,10 +377,12 @@ def _fallback_proposal(snap: MarketSnapshot, debate: Debate) -> dict:
     confidence = float(np.clip(0.5 + abs(score) * 0.55, 0.5, 0.92))
     size = float(np.clip((confidence - 0.45) * 0.6, 0.02, 0.30))
     stop = float(np.clip(1.5 * snap.atr_pct, 0.006, 0.03))
+    # 杠杆不再写死 2x：止损越近给越高（同样风险下，高杠杆只是少占保证金）
+    lev = float(np.clip(0.06 / max(stop, 0.002), 1.0, lev_cap))
     return {
         "action": direction,
         "size_pct": round(size, 4),
-        "leverage": 2.0,
+        "leverage": round(lev, 2),
         "stop_loss_pct": round(stop, 4),
         "take_profit_pct": round(stop * 2.0, 4),
         "confidence": round(confidence, 3),
@@ -379,22 +394,33 @@ def _fallback_proposal(snap: MarketSnapshot, debate: Debate) -> dict:
 
 
 def propose_trade(
-    llm: LLMClient, snap: MarketSnapshot, reports: list[AnalystReport], debate: Debate
+    llm: LLMClient,
+    snap: MarketSnapshot,
+    reports: list[AnalystReport],
+    debate: Debate,
+    caps: dict | None = None,
 ) -> tuple[dict, bool]:
-    mock = _fallback_proposal(snap, debate)
+    caps = caps or {}
+    lev_cap = float(caps.get("max_leverage") or 3.0)
+    pos_cap = float(caps.get("max_position_pct") or 0.30)
+    mock = _fallback_proposal(snap, debate, caps)
     context = "\n".join(f"[{r.role}] {r.summary}" for r in reports)
     user = (
         f"{snap.to_prompt()}\n\n分析师报告：\n{context}\n\n"
         f"研究结论：{debate.thesis}\n多头：{debate.bull_case}\n空头：{debate.bear_case}\n\n"
-        "请给出交易提案。若信号不足请输出 flat。"
+        "请给出交易提案。若信号不足请输出 flat。\n"
+        f"本账户参数：杠杆上限 {lev_cap:.0f}x，单笔保证金上限 {pos_cap:.0%} 权益。"
     )
-    data, resp = llm.json(SYSTEM_TRADER, user, TRADER_SCHEMA, mock)
-    proposal = _sanitize_proposal(data, mock)
+    data, resp = llm.json(SYSTEM_TRADER, user, trader_schema(lev_cap, pos_cap), mock)
+    proposal = _sanitize_proposal(data, mock, caps)
     return proposal, resp.degraded
 
 
-def _sanitize_proposal(data: dict, fallback: dict) -> dict:
+def _sanitize_proposal(data: dict, fallback: dict, caps: dict | None = None) -> dict:
     """模型输出不可全信：类型、范围、枚举全部重新校验。"""
+    caps = caps or {}
+    lev_cap = max(1.0, float(caps.get("max_leverage") or 20.0))
+    pos_cap = min(max(float(caps.get("max_position_pct") or 0.30), 0.01), 1.0)
     out = dict(fallback)
     action = str(data.get("action", fallback["action"])).lower()
     out["action"] = action if action in {"long", "short", "flat"} else "flat"
@@ -406,8 +432,8 @@ def _sanitize_proposal(data: dict, fallback: dict) -> dict:
             v = float(fallback[key])
         return float(np.clip(v, lo, hi))
 
-    out["size_pct"] = _num("size_pct", 0.0, 0.5)
-    out["leverage"] = _num("leverage", 1.0, 20.0)
+    out["size_pct"] = _num("size_pct", 0.0, pos_cap)
+    out["leverage"] = _num("leverage", 1.0, lev_cap)
     out["stop_loss_pct"] = _num("stop_loss_pct", 0.0, 0.5)
     out["take_profit_pct"] = _num("take_profit_pct", 0.0, 1.0)
     out["confidence"] = _num("confidence", 0.0, 1.0)

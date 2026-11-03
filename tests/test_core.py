@@ -634,7 +634,7 @@ class TestFactorOverride(unittest.TestCase):
 
 
 class TestExchangeLeverageCap(unittest.TestCase):
-    """杠杆上限以交易所支持为准，代码里的 max_leverage 只是断网兜底。"""
+    """杠杆上限取「配置上限」与「交易所上限」的较小值。"""
 
     def _state(self):
         from cryptoagent.risk import AccountState
@@ -647,21 +647,84 @@ class TestExchangeLeverageCap(unittest.TestCase):
             "stop_loss_pct": 0.01, "take_profit_pct": 0.02, "confidence": 0.8,
         }
 
-    def test_exchange_max_leverage_allows_high_leverage(self):
+    def test_config_ceiling_wins_over_exchange(self):
         from cryptoagent.config import RiskConfig
         from cryptoagent.risk import RiskEngine
 
-        cfg = RiskConfig(leverage_override=50, max_leverage=3)   # 兜底只有 3x
+        cfg = RiskConfig(leverage_override=50, max_leverage=20)
         d = RiskEngine(cfg).check(self._proposal(), self._state(), 0.01, 0.5, exchange_max_leverage=125)
-        self.assertEqual(d.leverage, 50.0)                        # 交易所允许 125，50 不夹
+        self.assertEqual(d.leverage, 20.0)                        # 交易所允许 125，但配置只给 20
 
     def test_exchange_max_leverage_caps(self):
         from cryptoagent.config import RiskConfig
         from cryptoagent.risk import RiskEngine
 
-        cfg = RiskConfig(leverage_override=125)
+        cfg = RiskConfig(leverage_override=125, max_leverage=50)
         d = RiskEngine(cfg).check(self._proposal(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
         self.assertEqual(d.leverage, 20.0)                        # 交易所只支持 20，压到 20
+
+    def test_without_exchange_uses_config(self):
+        from cryptoagent.config import RiskConfig
+        from cryptoagent.risk import RiskEngine
+
+        cfg = RiskConfig(leverage_override=10, max_leverage=8)
+        d = RiskEngine(cfg).check(self._proposal(), self._state(), 0.01, 0.5)
+        self.assertEqual(d.leverage, 8.0)                         # 没连交易所，配置即上限
+
+
+class TestRiskBudgetSizing(unittest.TestCase):
+    """风险预算制：仓位按 目标风险/止损 反推，而不是听模型随意给。"""
+
+    def _state(self):
+        from cryptoagent.risk import AccountState
+
+        return AccountState(equity=10000, peak_equity=10000, day_start_equity=10000, consecutive_losses=0)
+
+    def _cfg(self, **kw):
+        from cryptoagent.config import RiskConfig
+
+        base = dict(
+            max_leverage=20, max_position_pct=0.5, max_loss_per_trade_pct=0.05,
+            max_portfolio_notional_pct=5.0, correlated_exposure_pct=5.0,
+        )
+        base.update(kw)
+        return RiskConfig(**base)
+
+    def _prop(self, size=0.02, lev=2.0, stop=0.015):
+        return {
+            "action": "long", "size_pct": size, "leverage": lev,
+            "stop_loss_pct": stop, "take_profit_pct": stop * 2, "confidence": 0.8,
+        }
+
+    def test_max_mode_scales_position_up_to_budget(self):
+        from cryptoagent.risk import RiskEngine
+
+        cfg = self._cfg(sizing_mode="max", risk_per_trade_pct=0.05)
+        d = RiskEngine(cfg).check(self._prop(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
+        self.assertTrue(d.approved)
+        self.assertGreater(d.size_pct, 0.02)                       # 比模型给的大
+        self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, 0.05, places=3)
+
+    def test_llm_mode_keeps_model_size(self):
+        from cryptoagent.risk import RiskEngine
+
+        cfg = self._cfg(sizing_mode="llm", risk_per_trade_pct=0.05)
+        d = RiskEngine(cfg).check(self._prop(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
+        self.assertAlmostEqual(d.size_pct, 0.02, places=4)         # 不放大
+
+    def test_risk_mode_ignores_model_size(self):
+        from cryptoagent.risk import RiskEngine
+
+        cfg = self._cfg(sizing_mode="risk", risk_per_trade_pct=0.02)
+        d = RiskEngine(cfg).check(self._prop(size=0.40), self._state(), 0.01, 0.5, exchange_max_leverage=20)
+        self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, 0.02, places=3)
+
+    def test_min_leverage_floor(self):
+        from cryptoagent.risk import RiskEngine
+
+        cfg = self._cfg(sizing_mode="llm", min_leverage=5)
+        d = RiskEngine(cfg).check(self._prop(lev=2.0), self._state(), 0.01, 0.5, exchange_max_leverage=20)
+        self.assertEqual(d.leverage, 5.0)
 
 
 class TestPositionReconcile(unittest.TestCase):

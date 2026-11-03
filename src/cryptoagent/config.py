@@ -79,6 +79,15 @@ class RiskConfig:
     leverage_override: float = 0.0
     max_position_pct: float = 0.30       # 单策略最大保证金占用（占权益）
     max_loss_per_trade_pct: float = 0.01
+    # —— 仓位怎么定 ——
+    # llm  = 用交易员给的 size_pct（旧行为，模型保守时仓位会很小）
+    # risk = 按风险预算反推：名义敞口 = risk_per_trade_pct / 止损幅度
+    # max  = 两者取大（交易员激进时听交易员，保守时托底到风险预算）
+    sizing_mode: str = "llm"
+    # 目标单笔风险（占权益）。注意它会被 max_loss_per_trade_pct 再次封顶。
+    risk_per_trade_pct: float = 0.01
+    # 杠杆下限：模型长期只给 2x 时可托底（1.0 = 不干预）
+    min_leverage: float = 1.0
     daily_loss_limit_pct: float = 0.03
     max_drawdown_pct: float = 0.15
     max_slippage_bps: float = 10.0

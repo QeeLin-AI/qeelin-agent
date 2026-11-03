@@ -170,7 +170,13 @@ class TradingPipeline:
         sentiment = get_sentiment_source(self.cfg.sentiment).fetch(snap.symbol, snap)
         reports: list[AnalystReport] = run_analysts(self.llm, snap, sentiment=sentiment)
         debate: Debate = run_debate(self.llm, snap, reports, rounds=debate_rounds)
-        proposal, deg_trader = propose_trade(self.llm, snap, reports, debate)
+        proposal, deg_trader = propose_trade(
+            self.llm, snap, reports, debate,
+            caps={
+                "max_leverage": self.cfg.risk.max_leverage,
+                "max_position_pct": self.cfg.risk.max_position_pct,
+            },
+        )
         proposal["symbol"] = snap.symbol
 
         # 因子信号注入：研究产出的因子参与决策（方向一致放大，相反缩小/观望）

@@ -1270,6 +1270,10 @@ class WebApp:
             "min_confidence": r.min_confidence,
             "max_drawdown_pct": r.max_drawdown_pct,
             "daily_loss_limit_pct": r.daily_loss_limit_pct,
+            # 仓位怎么定：llm=听交易员 / risk=风险预算反推 / max=两者取大
+            "sizing_mode": r.sizing_mode,
+            "risk_per_trade_pct": r.risk_per_trade_pct,
+            "min_leverage": r.min_leverage,
         }
 
     def set_risk(self, payload: dict) -> dict:
@@ -1319,6 +1323,27 @@ class WebApp:
             if not (0.05 <= v <= 0.50):
                 raise ApiError("最大回撤只能在 5% ~ 50% 之间", 400)
             r.max_drawdown_pct = v
+        if "sizing_mode" in payload:
+            mode = str(payload["sizing_mode"]).strip().lower()
+            if mode not in ("llm", "risk", "max"):
+                raise ApiError("sizing_mode 只能是 llm / risk / max", 400)
+            r.sizing_mode = mode
+        if "risk_per_trade_pct" in payload:
+            try:
+                v = float(payload["risk_per_trade_pct"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("risk_per_trade_pct 必须是数字", 400) from exc
+            if not (0.001 <= v <= 0.05):
+                raise ApiError("单笔风险预算只能在 0.1% ~ 5% 之间", 400)
+            r.risk_per_trade_pct = v
+        if "min_leverage" in payload:
+            try:
+                v = float(payload["min_leverage"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("min_leverage 必须是数字", 400) from exc
+            if not (1.0 <= v <= 50.0):
+                raise ApiError("杠杆下限只能在 1 ~ 50 之间", 400)
+            r.min_leverage = v
         try:
             save_config(self.cfg, config_path())
             saved = True
