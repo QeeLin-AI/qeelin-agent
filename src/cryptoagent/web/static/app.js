@@ -1069,7 +1069,8 @@ function renderDaily() {
       monthPnl += pnl;
       if (pnl > 0) wins += 1;
       else if (pnl < 0) losses += 1;
-      const a = 0.10 + 0.42 * Math.min(1, Math.abs(pnl) / maxAbs);
+      // 填充要克制：最高约 0.27，否则同色文字压在亮色块上会发糊
+      const a = 0.07 + 0.20 * Math.min(1, Math.abs(pnl) / maxAbs);
       cls += pnl >= 0 ? ' up' : ' down';
       style = `background: rgba(${pnl >= 0 ? '0,224,143' : '255,77,94'},${a.toFixed(3)})`;
       label = `<span class="v">${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)}</span>`;
