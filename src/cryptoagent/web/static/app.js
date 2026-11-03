@@ -554,15 +554,16 @@ function renderStatus(s) {
   if (s.position) {
     const p = s.position;
     pt.innerHTML = `<tr>
-      <td class="mono">${esc(p.symbol || s.symbol)}</td>
+      <td class="mono">${esc(p.symbol || s.symbol)}<span class="cell-tag">${esc(p.mode || (exOk ? '交易所' : 'paper'))}</span></td>
       <td class="${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</td>
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
-      <td>${fmt(p.leverage, 1)}x</td><td>${fmtPx(p.stop)}</td><td>${fmtPx(p.tp)}</td>
-      <td class="${p.unrealized >= 0 ? 'up' : 'down'}">${fmt(p.unrealized)}</td>
-      <td>${esc(p.mode || (exOk ? '交易所' : 'paper'))}</td></tr>`;
+      <td>${fmt(p.leverage, 1)}x</td>
+      <td class="col-2line"><span class="up">${fmtPx(p.stop)}</span><span class="down">${fmtPx(p.tp)}</span></td>
+      <td class="${p.unrealized >= 0 ? 'up' : 'down'}">${fmt(p.unrealized)}</td></tr>`;
   } else {
-    pt.innerHTML = '<tr><td colspan="10" class="muted center">空仓</td></tr>';
+    pt.innerHTML = '<tr><td colspan="8" class="muted center">空仓</td></tr>';
   }
+  if ($('posMeta')) $('posMeta').textContent = s.position ? '持仓中' : '空仓';
 
   // 交易页状态
   $('armState').textContent = modeLabel;
@@ -673,8 +674,9 @@ function renderPosHistory() {
   const tb = $('posHistBody');
   if (!tb) return;
   const hist = (lastStatus && lastStatus.position_history) || [];
+  if ($('histMeta')) $('histMeta').textContent = hist.length ? `共 ${hist.length} 笔` : '最近平仓';
   if (!hist.length) {
-    tb.innerHTML = '<tr><td colspan="9" class="muted center">暂无平仓记录</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="muted center">暂无平仓记录</td></tr>';
     return;
   }
   const reasonCn = { manual: '手动', stop: '止损', tp: '止盈', auto: '自动', kill: '熔断' };
@@ -682,39 +684,84 @@ function renderPosHistory() {
     const up = (h.pnl || 0) >= 0;
     const dir = h.side === 'LONG' ? '多' : '空';
     return `<tr>
-      <td class="muted">${esc(h.closed_at || '')}</td>
-      <td>${esc(h.symbol || '')}</td>
+      <td class="muted">${esc(String(h.closed_at || '').slice(5))}</td>
+      <td>${esc(h.symbol || '')}<span class="cell-tag">${h.mode === 'live' ? '交易所' : '本地模拟'}</span></td>
       <td class="${h.side === 'LONG' ? 'up' : 'down'}">${dir}</td>
       <td>${fmtQty(h.qty)}</td>
-      <td>${fmtPx(h.entry)}</td>
-      <td>${fmtPx(h.exit)}</td>
+      <td class="muted">${fmtPx(h.entry)} → ${fmtPx(h.exit)}</td>
       <td class="${up ? 'up' : 'down'}">${up ? '+' : ''}${fmt(h.pnl, 2)}</td>
-      <td class="muted">${h.mode === 'live' ? '交易所' : '本地模拟'}</td>
       <td class="muted">${esc(reasonCn[h.reason] || h.reason || '')}</td>
     </tr>`;
   }).join('');
 }
 
+let calCursor = null;   // {y, m} 当前日历月份
+
 function renderDaily() {
-  const el = $('dailyPnl');
-  if (!el) return;
+  const grid = $('calGrid');
+  if (!grid) return;
   const days = (lastStatus && lastStatus.daily) || [];
-  if (!days.length) {
-    el.innerHTML = '<div class="muted center">暂无已实现盈亏</div>';
-    return;
+  const now = new Date();
+  if (!calCursor) calCursor = { y: now.getFullYear(), m: now.getMonth() };
+
+  const byDay = new Map(days.map((d) => [d.date, d]));
+  const { y, m } = calCursor;
+  const pad = (n) => String(n).padStart(2, '0');
+  const monthPrefix = `${y}-${pad(m + 1)}`;
+  const monthRows = days.filter((d) => String(d.date || '').startsWith(monthPrefix));
+  const maxAbs = Math.max(...monthRows.map((d) => Math.abs(d.pnl || 0)), 1e-9);
+
+  const firstDow = (new Date(y, m, 1).getDay() + 6) % 7;   // 周一为一周起点
+  const total = new Date(y, m + 1, 0).getDate();
+  const todayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  let html = '';
+  for (let i = 0; i < firstDow; i += 1) html += '<div class="cal-cell empty"></div>';
+
+  let monthPnl = 0;
+  let wins = 0;
+  let losses = 0;
+  for (let d = 1; d <= total; d += 1) {
+    const key = `${monthPrefix}-${pad(d)}`;
+    const rec = byDay.get(key);
+    let cls = 'cal-cell';
+    let style = '';
+    let label = '';
+    let tip = `${key}`;
+    if (rec) {
+      const pnl = rec.pnl || 0;
+      monthPnl += pnl;
+      if (pnl > 0) wins += 1;
+      else if (pnl < 0) losses += 1;
+      const a = 0.10 + 0.42 * Math.min(1, Math.abs(pnl) / maxAbs);
+      cls += pnl >= 0 ? ' up' : ' down';
+      style = `background: rgba(${pnl >= 0 ? '0,224,143' : '255,77,94'},${a.toFixed(3)})`;
+      label = `<span class="v">${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)}</span>`;
+      tip = `${key} · ${rec.trades} 笔（胜 ${rec.wins}）· ${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)} U`;
+    }
+    if (key === todayKey) cls += ' today';
+    html += `<div class="${cls}" style="${style}" title="${esc(tip)}"><span class="d">${d}</span>${label}</div>`;
   }
-  const maxAbs = Math.max(...days.map((d) => Math.abs(d.pnl || 0)), 1e-9);
-  el.innerHTML = days.map((d) => {
-    const up = (d.pnl || 0) >= 0;
-    const w = Math.max(3, Math.round((Math.abs(d.pnl || 0) / maxAbs) * 100));
-    const wr = d.trades ? `${d.wins}/${d.trades}` : '--';
-    return `<div class="pnl-row">
-      <span class="pnl-time">${esc(String(d.date || '').slice(5))}</span>
-      <span class="pnl-act muted">${wr} 胜</span>
-      <div class="pnl-bar-track"><div class="pnl-bar ${up ? 'up' : 'down'}" style="width:${w}%"></div></div>
-      <span class="pnl-val ${up ? 'up' : 'down'}">${up ? '+' : ''}${fmt(d.pnl, 2)}</span>
-    </div>`;
-  }).join('');
+  grid.innerHTML = html;
+
+  $('calMonth').textContent = `${y} 年 ${m + 1} 月`;
+  $('calSummary').textContent = monthRows.length
+    ? `本月 ${monthPnl >= 0 ? '+' : ''}${fmt(monthPnl, 2)} U · 盈 ${wins} 天 / 亏 ${losses} 天`
+    : '本月还没有平仓记录';
+
+  // 翻月：最早只能到有数据的那一月，最晚到本月
+  const earliest = days.length ? String(days[0].date || '').slice(0, 7) : monthPrefix;
+  const curMonth = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+  const cursorKey = monthPrefix;
+  $('calPrev').disabled = cursorKey <= earliest;
+  $('calNext').disabled = cursorKey >= curMonth;
+}
+
+function shiftMonth(delta) {
+  if (!calCursor) return;
+  const d = new Date(calCursor.y, calCursor.m + delta, 1);
+  calCursor = { y: d.getFullYear(), m: d.getMonth() };
+  renderDaily();
 }
 
 function renderPnl() {
@@ -723,9 +770,13 @@ function renderPnl() {
   const tradesEl = $('pnlTrades');
   if (!totalEl || !statsEl || !tradesEl) return;
 
-  // 已平仓成交（有已实现盈亏的），按时间正序
-  const fills = (lastStatus?.fills || []).filter((f) => Math.abs(f.pnl || 0) > 1e-9)
-    .slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  // 已平仓记录：优先用「持仓历史」（新数据源），没有才退回成交里的 pnl
+  const hist = (lastStatus?.position_history || []).slice()
+    .sort((a, b) => String(a.closed_at).localeCompare(String(b.closed_at)));
+  const fills = hist.length
+    ? hist.map((h) => ({ ts: h.closed_at, pnl: h.pnl, action: 'CLOSE' }))
+    : (lastStatus?.fills || []).filter((f) => Math.abs(f.pnl || 0) > 1e-9)
+      .slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
 
   const total = fills.reduce((s, f) => s + (f.pnl || 0), 0);
   totalEl.textContent = `${total >= 0 ? '+' : ''}${fmt(total, 2)} U`;
@@ -1298,6 +1349,8 @@ $('rotateRefresh').addEventListener('click', async () => {
 });
 
 window.addEventListener('resize', () => { renderPnl(); });
+$('calPrev').addEventListener('click', () => shiftMonth(-1));
+$('calNext').addEventListener('click', () => shiftMonth(1));
 
 /* ---------------- 启动 ---------------- */
 (async function init() {

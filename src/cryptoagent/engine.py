@@ -762,7 +762,7 @@ class TradingEngine:
     # ------------------------------------------------------------------
     # 状态输出
     # ------------------------------------------------------------------
-    def _daily_pnl(self, days: int = 14) -> list[dict]:
+    def _daily_pnl(self, days: int = 120) -> list[dict]:
         """按平仓日期聚合已实现盈亏，返回最近 N 天（有交易的日子）。"""
         agg: dict[str, dict] = {}
         for h in self.state.get("position_history", []):

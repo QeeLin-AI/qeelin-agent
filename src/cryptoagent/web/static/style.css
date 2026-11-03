@@ -141,6 +141,57 @@ main { padding: 18px 20px 60px; max-width: 1440px; margin: 0 auto; }
 /* 行内跳转链接（如「已移到设置页」） */
 .link { color: var(--cyan); text-decoration: none; border-bottom: 1px dashed rgba(34, 211, 238, .45); }
 .link:hover { color: #7ee7f7; border-bottom-color: #7ee7f7; }
+
+/* ---------- 持仓 / 持仓历史 左右并排 ---------- */
+.pos-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 1280px) { .pos-grid { grid-template-columns: 1fr; } }
+.pos-col {
+  min-width: 0; padding: 10px 12px 6px;
+  background: rgba(255, 255, 255, .015);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.pos-col .table th { white-space: nowrap; }
+.cell-tag {
+  display: inline-block; margin-left: 6px; padding: 0 4px;
+  font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px;
+  vertical-align: middle;
+}
+.col-2line { display: flex; flex-direction: column; line-height: 1.35; font-size: 11px; }
+.col-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin: 0 0 8px; font-size: 12px; color: var(--text); font-weight: 600;
+}
+.col-head .muted { font-weight: 400; }
+.table-scroll { overflow-x: auto; }
+.table-scroll table { min-width: 0; }
+
+/* ---------- 每日盈亏日历 ---------- */
+.cal-head { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; }
+.cal-month { font-weight: 600; font-size: 13px; letter-spacing: .3px; }
+.cal-head #calSummary { margin-left: 6px; font-size: 12px; }
+.cal-weekdays {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;
+  max-width: 760px; margin-bottom: 6px; font-size: 11px; color: var(--muted); text-align: center;
+}
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; max-width: 760px; }
+.cal-cell {
+  min-height: 54px; padding: 6px 7px; border-radius: 8px;
+  border: 1px solid rgba(40, 51, 73, .7); background: rgba(255, 255, 255, .015);
+  display: flex; flex-direction: column; justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+}
+.cal-cell.empty { border-color: transparent; background: transparent; }
+.cal-cell .d { font-size: 11px; color: var(--muted); }
+.cal-cell .v { font-size: 11px; font-weight: 600; }
+.cal-cell.up { border-color: rgba(0, 224, 143, .35); }
+.cal-cell.up .v { color: var(--green); }
+.cal-cell.down { border-color: rgba(255, 77, 94, .35); }
+.cal-cell.down .v { color: var(--red); }
+.cal-cell.today { box-shadow: inset 0 0 0 1px var(--cyan); }
+.cal-legend { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.cal-key { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.cal-key.up { background: rgba(0, 224, 143, .45); border: 1px solid rgba(0, 224, 143, .5); }
+.cal-key.down { background: rgba(255, 77, 94, .45); border: 1px solid rgba(255, 77, 94, .5); margin-left: 8px; }
 .panel { display: none; }
 .panel.active { display: block; }
 

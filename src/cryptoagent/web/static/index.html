@@ -17,10 +17,10 @@
   </div>
   <nav class="tabs">
     <button class="tab active" data-tab="overview">总览</button>
-    <button class="tab" data-tab="decision">决策</button>
-    <button class="tab" data-tab="research">因子研究</button>
     <button class="tab" data-tab="trading">交易</button>
     <button class="tab" data-tab="settings">设置</button>
+    <button class="tab" data-tab="decision">决策</button>
+    <button class="tab" data-tab="research">因子研究</button>
   </nav>
 </aside>
 
@@ -78,7 +78,21 @@
       </div>
       <div class="pnl-trades" id="pnlTrades"><div class="muted center">暂无平仓成交</div></div>
       <div class="divider"><span>每日盈亏（已实现）</span></div>
-      <div class="pnl-trades" id="dailyPnl"><div class="muted center">暂无已实现盈亏</div></div>
+      <div class="cal-head">
+        <button id="calPrev" class="btn ghost sm" title="上个月">‹</button>
+        <span id="calMonth" class="cal-month">--</span>
+        <button id="calNext" class="btn ghost sm" title="下个月">›</button>
+        <span id="calSummary" class="muted"></span>
+      </div>
+      <div class="cal-weekdays">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="cal-legend">
+        <span class="cal-key up"></span>盈利
+        <span class="cal-key down"></span>亏损
+        <span class="muted">（颜色深浅＝当天盈亏相对大小，悬停看明细）</span>
+      </div>
     </div>
     <div class="card">
       <div class="card-head">
@@ -207,16 +221,27 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>当前持仓</h2><div class="actions"><button id="closeBtn" class="btn cyan">一键全平</button></div></div>
-      <table class="table" id="posTable">
-        <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损</th><th>止盈</th><th>浮盈亏</th><th>模式</th></tr></thead>
-        <tbody><tr><td colspan="10" class="muted center">空仓</td></tr></tbody>
-      </table>
-      <div class="divider"><span>持仓历史（最近平仓）</span></div>
-      <table class="table compact" id="posHistTable">
-        <thead><tr><th>平仓时间</th><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>平仓价</th><th>盈亏</th><th>模式</th><th>原因</th></tr></thead>
-        <tbody id="posHistBody"><tr><td colspan="9" class="muted center">暂无平仓记录</td></tr></tbody>
-      </table>
+      <div class="card-head"><h2>持仓</h2><div class="actions"><button id="closeBtn" class="btn cyan">一键全平</button></div></div>
+      <div class="pos-grid">
+        <div class="pos-col">
+          <div class="col-head"><span>当前持仓</span><span id="posMeta" class="muted"></span></div>
+          <div class="table-scroll">
+            <table class="table compact" id="posTable">
+              <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损 / 止盈</th><th>浮盈亏</th></tr></thead>
+              <tbody><tr><td colspan="8" class="muted center">空仓</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="pos-col">
+          <div class="col-head"><span>持仓历史</span><span id="histMeta" class="muted">最近平仓</span></div>
+          <div class="table-scroll">
+            <table class="table compact" id="posHistTable">
+              <thead><tr><th>平仓时间</th><th>品种</th><th>方向</th><th>数量</th><th>开仓 → 平仓</th><th>盈亏</th><th>原因</th></tr></thead>
+              <tbody id="posHistBody"><tr><td colspan="7" class="muted center">暂无平仓记录</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
