@@ -842,21 +842,17 @@ class OKXClient:
             except (TypeError, ValueError, OSError):
                 ts = ""
             out.append(
-                (
-                    epoch,
-                    {
-                        "id": f"{t.get('tradeId', i)}",
-                        "symbol": from_okx_inst(t.get("instId") or (symbol or "")),
-                        "ts": ts,
-                        "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
-                        "side": side,
-                        "qty": self._f(t.get("fillSz")),
-                        "price": self._f(t.get("fillPx")),
-                        "pnl": self._f(t.get("pnl")),
-                        "fee": self._f(t.get("fee")),
-                        "order_id": str(t.get("ordId", "")),
-                    },
-                )
+                {
+                    "id": f"{t.get('tradeId', i)}",
+                    "ts": ts,
+                    "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
+                    "side": side,
+                    "qty": self._f(t.get("fillSz")),
+                    "price": self._f(t.get("fillPx")),
+                    "pnl": self._f(t.get("pnl")),
+                    "fee": self._f(t.get("fee")),
+                    "order_id": str(t.get("ordId", "")),
+                }
             )
         out.sort(key=lambda x: x[0], reverse=True)
         return [r for _, r in out[:limit]]
