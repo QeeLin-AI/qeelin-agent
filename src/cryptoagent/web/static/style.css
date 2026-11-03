@@ -452,6 +452,17 @@ label.field { display: flex; flex-direction: column; gap: 6px; color: var(--mute
 .toast.show { opacity: 1; transform: none; }
 .toast.err { border-left-color: var(--red); }
 .toast.ok { border-left-color: var(--green); }
+/* 常驻提示（长任务，如「正在测试 LLM…」）：带转圈，不自动消失 */
+.toast.sticky { display: flex; align-items: center; gap: 9px; border-left-color: var(--cyan); }
+.toast.sticky .toast-text { min-width: 0; }
+.toast-spinner {
+  flex: none; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(34, 211, 238, .25);
+  border-top-color: var(--cyan);
+  animation: toastSpin .8s linear infinite;
+}
+@keyframes toastSpin { to { transform: rotate(360deg); } }
+html[data-theme="light"] .toast-spinner { border-color: rgba(14, 116, 144, .22); border-top-color: var(--cyan); }
 /* 冠军因子代码块 */
 pre.code {
   margin: 0;

@@ -51,12 +51,28 @@ async function api(path, method = 'GET', body = null) {
 }
 
 let toastTimer = null;
-function toast(msg, type = '') {
+
+// opts.sticky = true：常驻不自动消失，直到下一次 toast() 顶掉它（用于「正在测试…」这类长任务）
+function toast(msg, type = '', opts = {}) {
   const el = $('toast');
-  el.textContent = msg;
-  el.className = `toast show ${type}`;
+  const sticky = !!opts.sticky;
+  // 已经在常驻态又来了新的常驻文案（例如每秒刷新秒数）：只改文字，
+  // 不要重建 spinner，否则转圈动画每秒重置一次，看着像卡住。
+  if (sticky && el.classList.contains('sticky')) {
+    const txt = el.querySelector('.toast-text');
+    if (txt) {
+      txt.textContent = msg;
+      el.className = `toast show ${type} sticky`;
+      return;
+    }
+  }
+  el.innerHTML = sticky
+    ? `<span class="toast-spinner"></span><span class="toast-text">${esc(msg)}</span>`
+    : esc(msg);
+  el.className = `toast show ${type}${sticky ? ' sticky' : ''}`;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 4200);
+  toastTimer = null;
+  if (!sticky) toastTimer = setTimeout(() => { el.className = 'toast'; }, 4200);
 }
 
 /* ---------------- 标签页 ---------------- */
@@ -102,7 +118,7 @@ async function loadLlmSettings() {
   } catch (e) { console.error(e); }
 }
 
-async function saveLlmSettings() {
+async function saveLlmSettings(quiet = false) {
   const payload = {
     provider: $('llmProvider').value,
     model: $('llmModel').value.trim(),
@@ -112,21 +128,49 @@ async function saveLlmSettings() {
   if (key) payload.api_key = key;
   try {
     await api('/api/settings/llm', 'POST', payload);
-    toast('LLM 设置已保存', 'ok');
+    if (!quiet) toast('LLM 设置已保存', 'ok');
     $('llmApiKey').value = '';
     loadLlmSettings();
     poll();
-  } catch (e) { toast(e.message, 'err'); }
+    return true;
+  } catch (e) {
+    toast(e.message, 'err');
+    return false;
+  }
 }
 
 async function testLlmSettings() {
-  await saveLlmSettings();
-  toast('正在跑一次决策验证 LLM…', 'ok');
+  const btn = $('llmTestBtn');
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+
+  // 长任务提示：常驻 + 计时，测试结束（成功或失败）才被结果 toast 顶掉
+  let secs = 0;
+  const showProgress = () => {
+    toast(`正在跑一次决策验证 LLM…${secs ? `（已 ${secs}s）` : ''}`, 'ok', { sticky: true });
+  };
+
   try {
-    const d = await api('/api/decision', 'POST', { rounds: 1 });
-    const degraded = d && d.degraded;
-    toast(degraded ? 'LLM 调用有降级（限流/失败），规则已兜底' : 'LLM 正常生效', degraded ? 'err' : 'ok');
-  } catch (e) { toast('测试失败：' + e.message, 'err'); }
+    // 先保存配置；保存失败就不要拿旧配置去测
+    if (!(await saveLlmSettings(true))) return;
+    showProgress();
+    const timer = setInterval(() => { secs += 1; showProgress(); }, 1000);
+    try {
+      const d = await api('/api/decision', 'POST', { rounds: 1 });
+      const degraded = d && d.degraded;
+      const spent = secs >= 1 ? `（用时 ${secs}s）` : '';
+      toast(
+        degraded ? `LLM 调用有降级（限流/失败），规则已兜底${spent}` : `LLM 正常生效${spent}`,
+        degraded ? 'err' : 'ok'
+      );
+    } finally {
+      clearInterval(timer);
+    }
+  } catch (e) {
+    toast('测试失败：' + e.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
 }
 
 /* ---------------- 多品种 ---------------- */
