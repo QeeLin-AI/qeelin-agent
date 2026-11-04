@@ -213,8 +213,7 @@ python run.py web --host 127.0.0.1 --port 8000
 | `max_leverage` | 20 | 杠杆上限（与交易所支持的最大值取较小值） |
 | `leverage_override` | 0 | 0 = 跟随决策；>0 = 强制使用该杠杆 |
 | `min_leverage` | 1 | 杠杆下限，模型偏保守时的托底（1 = 不干预） |
-| `sizing_mode` | `llm` | 仓位怎么定：`llm` 听交易员 / `risk` 按风险预算反推 / `max` 两者取大 |
-| `risk_per_trade_pct` | 0.01 | 目标单笔风险预算（`risk`/`max` 模式下用它反推仓位） |
+| `sizing_mode` | `llm` | 仓位怎么定：`llm` 听交易员 / `risk` 按单笔风险上限反推 |
 | `max_position_pct` | 0.5 | 单笔最大保证金占用（占权益） |
 | `max_loss_per_trade_pct` | 0.05 | 单笔最大亏损（按仓位 × 杠杆 × 止损计算） |
 | `daily_loss_limit_pct` | 0.05 | 单日亏损上限，触发后停止开仓 |

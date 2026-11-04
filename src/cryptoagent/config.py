@@ -80,12 +80,10 @@ class RiskConfig:
     max_position_pct: float = 0.30       # 单策略最大保证金占用（占权益）
     max_loss_per_trade_pct: float = 0.01
     # —— 仓位怎么定 ——
-    # llm  = 用交易员给的 size_pct（旧行为，模型保守时仓位会很小）
-    # risk = 按风险预算反推：名义敞口 = risk_per_trade_pct / 止损幅度
-    # max  = 两者取大（交易员激进时听交易员，保守时托底到风险预算）
+    # llm  = 用交易员给的 size_pct（模型保守时仓位会很小）
+    # risk = 按单笔风险上限反推：名义敞口 = max_loss_per_trade_pct / 止损幅度
+    #        （原「按风险预算反推」已废弃：预算字段删除，统一用风险上限做输入）
     sizing_mode: str = "llm"
-    # 目标单笔风险（占权益）。注意它会被 max_loss_per_trade_pct 再次封顶。
-    risk_per_trade_pct: float = 0.01
     # 杠杆下限：模型长期只给 2x 时可托底（1.0 = 不干预）
     min_leverage: float = 1.0
     daily_loss_limit_pct: float = 0.03
@@ -160,6 +158,13 @@ class AppConfig:
     runs_dir: str = "runs"
 
 
+# 已删除、但旧配置文件里可能还留着的字段：读取时忽略，避免升级后直接起不来。
+# 只登记「确实删过」的字段名，不要用它掩盖真正的拼写错误。
+_LEGACY_FIELDS: dict[type, set[str]] = {
+    RiskConfig: {"risk_per_trade_pct"},
+}
+
+
 def _build(cls: type, data: dict[str, Any]) -> Any:
     """把嵌套 dict 递归转成 dataclass，未知字段直接报错（防止拼写错误静默生效）。"""
     hints = get_type_hints(cls)
@@ -173,7 +178,7 @@ def _build(cls: type, data: dict[str, Any]) -> Any:
             kwargs[f.name] = _build(hint, value)
         else:
             kwargs[f.name] = value
-    unknown = set(data) - {f.name for f in fields(cls)}
+    unknown = set(data) - {f.name for f in fields(cls)} - _LEGACY_FIELDS.get(cls, set())
     if unknown:
         raise ValueError(f"{cls.__name__} 收到未知配置项: {sorted(unknown)}")
     return cls(**kwargs)

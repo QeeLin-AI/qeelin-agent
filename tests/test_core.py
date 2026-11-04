@@ -673,7 +673,7 @@ class TestExchangeLeverageCap(unittest.TestCase):
 
 
 class TestRiskBudgetSizing(unittest.TestCase):
-    """风险预算制：仓位按 目标风险/止损 反推，而不是听模型随意给。"""
+    """风险上限制：仓位按 单笔风险上限/止损 反推，而不是听模型随意给。"""
 
     def _state(self):
         from cryptoagent.risk import AccountState
@@ -696,26 +696,33 @@ class TestRiskBudgetSizing(unittest.TestCase):
             "stop_loss_pct": stop, "take_profit_pct": stop * 2, "confidence": 0.8,
         }
 
-    def test_max_mode_scales_position_up_to_budget(self):
+    def test_risk_mode_scales_position_up_to_cap(self):
         from cryptoagent.risk import RiskEngine
 
-        cfg = self._cfg(sizing_mode="max", risk_per_trade_pct=0.05)
+        cfg = self._cfg(sizing_mode="risk")
         d = RiskEngine(cfg).check(self._prop(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
         self.assertTrue(d.approved)
         self.assertGreater(d.size_pct, 0.02)                       # 比模型给的大
-        self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, 0.05, places=3)
+        self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, cfg.max_loss_per_trade_pct, places=3)
 
     def test_llm_mode_keeps_model_size(self):
         from cryptoagent.risk import RiskEngine
 
-        cfg = self._cfg(sizing_mode="llm", risk_per_trade_pct=0.05)
+        cfg = self._cfg(sizing_mode="llm")
         d = RiskEngine(cfg).check(self._prop(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
         self.assertAlmostEqual(d.size_pct, 0.02, places=4)         # 不放大
+
+    def test_legacy_max_mode_falls_back_to_llm(self):
+        from cryptoagent.risk import RiskEngine
+
+        cfg = self._cfg(sizing_mode="max")
+        d = RiskEngine(cfg).check(self._prop(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
+        self.assertAlmostEqual(d.size_pct, 0.02, places=4)         # 旧值不再放大仓位
 
     def test_risk_mode_ignores_model_size(self):
         from cryptoagent.risk import RiskEngine
 
-        cfg = self._cfg(sizing_mode="risk", risk_per_trade_pct=0.02)
+        cfg = self._cfg(sizing_mode="risk", max_loss_per_trade_pct=0.02)
         d = RiskEngine(cfg).check(self._prop(size=0.40), self._state(), 0.01, 0.5, exchange_max_leverage=20)
         self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, 0.02, places=3)
 
@@ -783,6 +790,41 @@ class TestPositionReconcile(unittest.TestCase):
         e._reconcile_position_with_exchange()
         self.assertEqual(e.state["position"], pos)
         self.assertEqual(e.saved, 0)
+
+
+class TestHoldingPausesDecisions(unittest.TestCase):
+    """持仓期间不再跑开仓决策：不烧 LLM，也不会每轮刷同一条风控拦截通知。"""
+
+    def _engine(self, pos):
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        e.state = {"position": pos}
+        e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(symbol="DOGEUSDT"))
+        e.lock = threading.RLock()
+        e._reconcile_position_with_exchange = lambda: None
+        return e
+
+    def test_returns_skipped_when_holding(self):
+        from cryptoagent.engine import TradingEngine
+
+        pos = {"side": "LONG", "qty": 1, "mode": "paper"}
+        e = self._engine(pos)
+        out = TradingEngine.run_decision(e)
+        self.assertTrue(out.get("skipped"))
+        self.assertEqual(out.get("position"), pos)
+
+    def test_runs_when_flat(self):
+        from cryptoagent.engine import TradingEngine
+
+        e = self._engine(None)
+        e.df = None
+        e.refresh_data = lambda: (_ for _ in ()).throw(RuntimeError("reached-refresh"))
+        with self.assertRaises(RuntimeError):      # 没被提前跳过，走到了取行情
+            TradingEngine.run_decision(e)
 
 
 class TestLiveEquitySync(unittest.TestCase):

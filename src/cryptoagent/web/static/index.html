@@ -399,8 +399,7 @@
             <span class="set-label">仓位大小</span>
             <select id="riskSizingMode">
               <option value="llm">听交易员</option>
-              <option value="risk">按风险预算</option>
-              <option value="max">两者取大</option>
+              <option value="risk">按风险上限反推</option>
             </select>
           </label>
           <label class="set-field">
@@ -420,7 +419,7 @@
         </div>
         <p class="set-hint">
           杠杆只决定占用多少保证金、不放大风险。<br />
-          仓位大小：<b>听交易员</b>＝模型给多少用多少；<b>按风险预算</b>＝仓位由 预算 ÷ 止损幅度 反推；<b>两者取大</b>＝取二者较大值。
+          仓位大小：<b>听交易员</b>＝模型给多少用多少；<b>按风险上限反推</b>＝用 单笔风险上限 ÷ 止损幅度 反推名义敞口。
         </p>
       </div>
 
@@ -457,8 +456,8 @@
           </label>
         </div>
         <p class="set-hint">
-          这 4 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围，
-          实际仓位仍由「单笔风险预算 ÷ 止损幅度」和交易员给的 size 决定。
+          这 4 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围。
+          实际仓位由上方「仓位大小」决定：听交易员时用模型给的 size，按风险上限反推时才用 上限 ÷ 止损。
         </p>
       </div>
 

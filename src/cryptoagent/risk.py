@@ -131,24 +131,21 @@ class RiskEngine:
                 reasons.append(f"按杠杆下限托底到 {floor:.1f}x")
                 lev = floor
 
-        # 仓位：可选用「风险预算反推」，并与交易员给的仓位取大
-        if cfg.sizing_mode in ("risk", "max") and stop > 0 and cfg.risk_per_trade_pct > 0:
-            target_ratio = cfg.risk_per_trade_pct / max(stop, 1e-4)   # 名义敞口 / 权益
+        # 仓位：可选用「按风险上限反推」（旧配置里的 max 视为 llm，不再放大仓位）
+        mode = cfg.sizing_mode if cfg.sizing_mode in ("llm", "risk") else "llm"
+        if mode == "risk" and stop > 0 and cfg.max_loss_per_trade_pct > 0:
+            target_ratio = cfg.max_loss_per_trade_pct / max(stop, 1e-4)   # 名义敞口 / 权益
             # 保证金上限会限制仓位：必要时抬高杠杆来容纳同样的风险（风险不变，只省保证金）
             if cfg.max_position_pct > 0:
                 lev_needed = target_ratio / cfg.max_position_pct
                 if lev_needed > lev:
                     lev = min(lev_needed, cap)
                     reasons.append(
-                        f"风险预算 {cfg.risk_per_trade_pct:.1%} 需要 {lev:.2f}x，已上调杠杆"
+                        f"按风险上限 {cfg.max_loss_per_trade_pct:.1%} 需要 {lev:.2f}x，已上调杠杆"
                     )
-            risk_size = target_ratio / lev if lev > 0 else 0.0
-            if cfg.sizing_mode == "risk":
-                size = risk_size
-            else:
-                size = max(size, risk_size)
+            size = target_ratio / lev if lev > 0 else 0.0
             reasons.append(
-                f"风险预算制：目标名义 {target_ratio:.2f}x 权益 → 仓位 {size:.1%} @ {lev:.2f}x"
+                f"按风险上限反推：目标名义 {target_ratio:.2f}x 权益 → 仓位 {size:.1%} @ {lev:.2f}x"
             )
 
         # 6. 仓位夹紧（占权益比例）

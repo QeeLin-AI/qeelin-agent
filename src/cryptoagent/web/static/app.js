@@ -767,7 +767,7 @@ $('riskSizingMode').addEventListener('change', async () => {
   try {
     const d = await api('/api/risk', 'POST', { sizing_mode: v });
     renderRisk(d.risk); riskWarn(d);
-    const label = { llm: '听交易员', risk: '按风险预算反推', max: '两者取大' }[v] || v;
+    const label = { llm: '听交易员', risk: '按风险上限反推' }[v] || v;
     toast(`仓位方式已改为「${label}」`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });

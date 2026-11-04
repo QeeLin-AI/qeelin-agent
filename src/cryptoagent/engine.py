@@ -72,6 +72,8 @@ class TradingEngine:
             "error": "",
         }
         self._rotate_cycle_count = 0
+        # 风控拦截通知去重：同品种同原因在冷却期内只报一次，避免每轮刷屏
+        self._reject_alert_at: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     def _default_state(self) -> dict:
@@ -607,6 +609,18 @@ class TradingEngine:
     # 决策与执行
     # ------------------------------------------------------------------
     def run_decision(self, rounds: int = 2) -> dict:
+        # 已有持仓时不再跑开仓决策：既省掉每轮 LLM 调用，也不会每 5 分钟推一条
+        # 「决策被风控拦截」。先与交易所对账（实盘），避免交易所侧止损/止盈已成交、
+        # 本地缓存还挂着，导致一直等不到「平仓后再决策」。
+        self._reconcile_position_with_exchange()
+        held = self.state.get("position")
+        if held:
+            return {
+                "skipped": True,
+                "reason": "已有持仓，等平仓完成后再做开仓决策",
+                "symbol": self.cfg.market.symbol,
+                "position": held,
+            }
         df = self.df if self.df is not None else self.refresh_data()[0]
         price = float(df["close"].iloc[-1])
         pipe = TradingPipeline(self.cfg)
@@ -624,11 +638,22 @@ class TradingEngine:
         self.last_decision = decision
 
         # A2：决策被风控引擎拒绝时告警（approved=False 且 action=flat 才是真拒绝）
+        # 同一品种 + 同一原因 30 分钟内只提醒一次：否则每轮都会刷一条相同的拦截通知。
         if not decision.risk_decision["approved"] and decision.risk_decision["action"] == "flat":
             reasons = decision.risk_decision.get("reasons", [])
-            self._notify("warn", f"{decision.symbol} 决策被风控拦截",
-                         "；".join(reasons[:3]) or "未通过风控检查",
-                         {"symbol": decision.symbol, "checks": decision.risk_decision.get("checks")})
+            sig = f"{decision.symbol}|{(reasons[0] if reasons else '未通过风控检查')[:60]}"
+            now = time.time()
+            alerts = getattr(self, "_reject_alert_at", None)
+            if alerts is None:
+                alerts = self._reject_alert_at = {}
+            if now - float(alerts.get(sig, 0.0)) >= 1800.0:
+                alerts[sig] = now
+                if len(alerts) > 50:      # 防止长期运行无限增长
+                    for k in sorted(alerts, key=alerts.get)[:25]:
+                        alerts.pop(k, None)
+                self._notify("warn", f"{decision.symbol} 决策被风控拦截",
+                             "；".join(reasons[:3]) or "未通过风控检查",
+                             {"symbol": decision.symbol, "checks": decision.risk_decision.get("checks")})
 
         out = Path(self.cfg.runs_dir) / "decisions"
         out.mkdir(parents=True, exist_ok=True)
