@@ -840,8 +840,10 @@ html[data-theme="light"] .set-field .input-suffix input[type="number"] { border-
 }
 .set-stat > span { color: var(--muted); }
 .set-stat > b { font-size: 14px; font-weight: 600; color: var(--text); word-break: break-all; }
-.set-stats.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.set-stats.three { grid-template-columns: repeat(3, minmax(140px, 200px)); justify-content: start; }
 @media (max-width: 720px) { .set-stats.three { grid-template-columns: 1fr; } }
+/* 账户状态：三张窄卡不铺满，按钮与卡片之间留出间距 */
+.set-account .actions { margin-top: 14px; }
 
 /* 设置页右栏：只放连接状态卡（复用交易页 .conn-panel 样式） */
 .set-side { min-width: 0; }

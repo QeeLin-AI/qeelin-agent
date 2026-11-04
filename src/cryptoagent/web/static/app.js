@@ -152,7 +152,7 @@ async function loadLlmSettings() {
     const op = d.offpeak || {};
     $('llmOffpeak').textContent = op.label || '--';
     $('llmPeakHint').textContent = op.peak_windows || '';
-    $('llmStatus').textContent = d.api_key_set ? '（Key 已配置）' : '（未配 Key）';
+    $('llmStatus').textContent = [`当前 ${d.provider}`, d.model, op.label].filter(Boolean).join(' · ');
   } catch (e) { console.error(e); }
 }
 
