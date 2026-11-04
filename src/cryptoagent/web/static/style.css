@@ -129,21 +129,44 @@ canvas { width: 100%; height: auto; display: block; }
   padding: 19px 18px 18px;
   border-bottom: 1px solid var(--border-soft);
 }
-.brand-mark { width: 34px; height: 34px; flex: none; display: grid; place-items: center; }
-.brand-diamond {
-  width: 17px; height: 17px; border-radius: 4px;
-  background: linear-gradient(135deg, #9becff 0%, #38bdf8 50%, #0ea5e9 100%);
-  box-shadow: 0 0 6px 1px rgba(43, 212, 238, .35);
+/* ---- 品牌 LOGO：麒麟徽记（前视面具 + 六边形科技框 + 青色呼吸辉光） ---- */
+.brand-mark {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  position: relative; border-radius: 9px; overflow: hidden;
+  background: linear-gradient(160deg, #161b27, #0f131c);
+  border: 1px solid rgba(43, 212, 238, .22);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.25) inset, 0 4px 12px rgba(0,0,0,.35);
   animation: brandBreathe 2.8s ease-in-out infinite;
 }
-.brand-diamond::after {
-  content: ""; position: absolute; top: 3px; left: 3px; width: 5px; height: 5px;
-  border-radius: 50%; background: rgba(255, 255, 255, .7); filter: blur(.5px);
+.brand-mark svg { width: 30px; height: 30px; display: block; filter: drop-shadow(0 0 3px rgba(43,212,238,.5)); }
+.brand-mark .ql-frame { stroke: var(--brand); stroke-width: 2.6; fill: rgba(43,212,238,.06); opacity: .95; }
+.brand-mark .ql-head  { stroke: var(--brand); stroke-width: 3; fill: rgba(43,212,238,.08); stroke-linejoin: round; }
+.brand-mark .ql-horn  { fill: var(--brand); }
+.brand-mark .ql-eye   { fill: var(--brand); }
+.brand-mark .ql-tuft  { stroke: var(--brand-2); stroke-width: 2.6; fill: none; stroke-linecap: round; }
+.brand-mark .ql-beard { stroke: var(--brand); stroke-width: 2.6; fill: none; stroke-linecap: round; }
+
+html[data-theme="light"] .brand-mark {
+  background: linear-gradient(160deg, #ffffff, #eef3fb);
+  border: 1px solid rgba(10,125,130,.40);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.6) inset, 0 4px 12px rgba(16,24,40,.16);
 }
-.brand-mark { position: relative; }
+html[data-theme="light"] .brand-mark svg { filter: drop-shadow(0 0 4px rgba(10,125,130,.55)); }
+html[data-theme="light"] .brand-mark .ql-frame { stroke: #0a7d82; fill: rgba(10,125,130,.06); }
+html[data-theme="light"] .brand-mark .ql-head  { stroke: #0a7d82; fill: rgba(10,125,130,.08); }
+html[data-theme="light"] .brand-mark .ql-horn  { fill: #0a7d82; }
+html[data-theme="light"] .brand-mark .ql-eye   { fill: #0a7d82; }
+html[data-theme="light"] .brand-mark .ql-tuft  { stroke: #0b6e78; }
+html[data-theme="light"] .brand-mark .ql-beard { stroke: #0a7d82; }
+
 @keyframes brandBreathe {
-  0%, 100% { opacity: .82; transform: rotate(45deg) scale(.93); box-shadow: 0 0 5px 1px rgba(43, 212, 238, .28); }
-  50%      { opacity: 1;  transform: rotate(45deg) scale(1.07); box-shadow: 0 0 17px 5px rgba(43, 212, 238, .62); }
+  0%, 100% { transform: scale(.965); box-shadow: 0 0 0 1px rgba(0,0,0,.25) inset, 0 4px 12px rgba(0,0,0,.35), 0 0 4px rgba(43,212,238,.30); }
+  50%      { transform: scale(1.035); box-shadow: 0 0 0 1px rgba(0,0,0,.25) inset, 0 4px 12px rgba(0,0,0,.35), 0 0 11px rgba(43,212,238,.70); }
+}
+html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
+@keyframes brandBreatheL {
+  0%, 100% { transform: scale(.965); box-shadow: 0 0 0 1px rgba(255,255,255,.6) inset, 0 4px 12px rgba(16,24,40,.16), 0 0 5px rgba(10,125,130,.45); }
+  50%      { transform: scale(1.035); box-shadow: 0 0 0 1px rgba(255,255,255,.6) inset, 0 4px 12px rgba(16,24,40,.16), 0 0 15px rgba(10,125,130,.80); }
 }
 .side-brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.035em; white-space: nowrap; }
