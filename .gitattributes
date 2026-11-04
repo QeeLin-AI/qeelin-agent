@@ -1,0 +1,9 @@
+# 服务器是 Linux：Shell 脚本 / systemd unit 必须是 LF，
+# 否则会报 `$'\r': command not found`（2026-11 迁 Linux 时踩过）。
+*.sh      text eol=lf
+*.service text eol=lf
+
+# Windows 批处理反过来，必须是 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf

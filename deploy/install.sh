@@ -10,7 +10,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/crypto-agent}"
 SERVICE_USER="${SERVICE_USER:-cryptotrader}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="/etc/crypto-agent.env"
+ENV_FILE="${APP_DIR}/.env"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
@@ -18,7 +18,7 @@ log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 log "1/7 安装系统依赖"
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip chrony curl
+apt-get install -y -qq python3 python3-venv python3-pip chrony curl git rsync ca-certificates
 
 log "2/7 时间同步（签名时间戳偏差 >1s 会被币安拒单）"
 systemctl enable --now chrony >/dev/null 2>&1 || true
@@ -59,9 +59,13 @@ CRYPTOAGENT_WEB_TOKEN=${TOKEN}
 # BINANCE_API_KEY=
 # BINANCE_API_SECRET=
 EOF
+  chown "$SERVICE_USER":"$SERVICE_USER" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   echo "  已生成访问令牌，记下来：$(grep CRYPTOAGENT_WEB_TOKEN "$ENV_FILE" | cut -d= -f2)"
 else
+  # 手工放进来的 .env（从旧机搬过来的）：属主/权限也要修，否则服务读不到
+  chown "$SERVICE_USER":"$SERVICE_USER" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
   echo "  $ENV_FILE 已存在，保持不变"
 fi
 

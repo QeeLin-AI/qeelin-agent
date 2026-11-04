@@ -9,7 +9,9 @@ Type=simple
 User=cryptotrader
 Group=cryptotrader
 WorkingDirectory=/opt/crypto-agent
-EnvironmentFile=/etc/crypto-agent.env
+# 与页面「保存 Key」写的是同一个文件（config.update_dotenv 默认写项目根 .env），
+# 否则页面上存进去的 Key 重启后就丢了。文件不存在时用 - 前缀不让服务启动失败。
+EnvironmentFile=-/opt/crypto-agent/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONIOENCODING=utf-8
 # 只监听本机，外部通过 SSH 隧道或 nginx 反代进来
@@ -25,7 +27,10 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/crypto-agent/runs /opt/crypto-agent/data /opt/crypto-agent/factors_library /opt/crypto-agent/.env
+# config 也要可写：设置页保存参数会重写 config/default.json，
+# 漏了它就会「页面报保存失败 / 参数改了不生效」。
+# .env 加 - 前缀：文件还没创建时不能因此启动失败。
+ReadWritePaths=-/opt/crypto-agent/.env /opt/crypto-agent/runs /opt/crypto-agent/data /opt/crypto-agent/factors_library /opt/crypto-agent/config
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
