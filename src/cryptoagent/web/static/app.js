@@ -688,11 +688,11 @@ function renderRisk(r) {
   const rt = $('riskTotal');
   if (rt && document.activeElement !== rt) rt.value = cap;
   const rpc = $('riskPosCapInput');
-  if (rpc && document.activeElement !== rpc) rpc.value = (Number(r.max_position_pct) * 100).toFixed(0);
+  if (rpc && document.activeElement !== rpc) rpc.value = String(Math.round(Number(r.max_position_pct) * 1000) / 10);
   const rd = $('riskDaily');
   if (rd && document.activeElement !== rd) rd.value = (Number(r.daily_loss_limit_pct) * 100).toFixed(1);
   const rdd = $('riskDrawdown');
-  if (rdd && document.activeElement !== rdd) rdd.value = (Number(r.max_drawdown_pct) * 100).toFixed(0);
+  if (rdd && document.activeElement !== rdd) rdd.value = String(Math.round(Number(r.max_drawdown_pct) * 1000) / 10);
   const sm = $('riskSizingMode');
   if (sm && document.activeElement !== sm) sm.value = r.sizing_mode || 'llm';
   const rmlv = $('riskMaxLev');
