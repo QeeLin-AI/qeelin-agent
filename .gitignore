@@ -48,3 +48,6 @@ desktop/.eb-cache/
 
 # 服务器专用启动脚本（含内部绝对路径）
 deploy/service-run-exe.cmd
+
+# 服务器凭据（本机存档，绝不提交）
+.secrets/
