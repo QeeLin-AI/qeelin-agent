@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from dataclasses import asdict
@@ -171,11 +172,57 @@ class TradingEngine:
         if self.state["positions"] and not self.state.get("position"):
             self.state["position"] = next(iter(self.state["positions"].values()))
 
+    def _prune_decisions(self, out: Path) -> None:
+        """清掉过期决策快照，每小时最多跑一次。
+
+        自动循环 5 分钟一轮 = 每天 288 份、每个约 26KB。不清就是一年十万个
+        文件、两三个 G：磁盘不会立刻满，但 ls、打包备份、迁移会越来越难受。
+        只动 `*.json`，`latest.md` 和目录本身保留。
+        """
+        now = time.time()
+        if now - getattr(self, "_prune_at", 0.0) < 3600:
+            return
+        self._prune_at = now
+        keep_days = int(getattr(self.cfg, "decision_keep_days", 7) or 7)
+        cutoff = now - keep_days * 86400
+        try:
+            for f in out.glob("*.json"):
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink()
+                except OSError:  # 单个文件删不掉就跳过，别中断决策
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+
     def _save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.state, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(self.state_path)
+        self._backup_state()
+
+    def _backup_state(self) -> None:
+        """每天留一份账本快照。
+
+        state 里是持仓、权益、成交历史，写坏或被误删**没有第二份可回退**
+        （当初从 Windows 迁过来时，这个文件是唯一必须手工搬运的账本）。
+        按天留 14 份，整个目录不到 1MB。
+        """
+        try:
+            day = time.strftime("%Y%m%d")
+            if getattr(self, "_backup_day", None) == day:
+                return
+            self._backup_day = day
+            if not self.state_path.exists():
+                return
+            dst = self.state_path.parent / "backup"
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(self.state_path, dst / f"engine_state-{day}.json")
+            for old in sorted(dst.glob("engine_state-*.json"))[:-14]:
+                old.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001 - 备份失败绝不能影响正常记账
+            pass
 
     # ------------------------------------------------------------------
     def refresh_data(self, force: bool = False) -> tuple[pd.DataFrame, str]:
@@ -1525,6 +1572,7 @@ class TradingEngine:
             json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8"
         )
         (out / "latest.md").write_text(payload["markdown"], encoding="utf-8")
+        self._prune_decisions(out)
 
         with self.lock:
             self.pending_order = decision.order

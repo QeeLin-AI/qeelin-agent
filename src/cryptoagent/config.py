@@ -220,6 +220,8 @@ class AppConfig:
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     position: PositionConfig = field(default_factory=PositionConfig)
     runs_dir: str = "runs"
+    # 决策快照 runs/decisions 保留天数（自动循环 5 分钟一轮 ≈ 288 份/天）
+    decision_keep_days: int = 7
 
 
 # 已删除、但旧配置文件里可能还留着的字段：读取时忽略，避免升级后直接起不来。
@@ -324,10 +326,13 @@ def update_dotenv(updates: dict[str, str], path: str | Path | None = None) -> Pa
 
 
 def save_config(cfg: AppConfig, path: str | Path) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(
-        json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # 先写临时文件再原子替换：设置页保存时若中途失败（磁盘满、进程被 kill），
+    # 直接 write_text 会留下半截 JSON，下次启动整站直接起不来。
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(p)
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.json"
