@@ -1,0 +1,182 @@
+{
+  "validated": [],
+  "results": [
+    {
+      "name": "turnover_volatility",
+      "family": "liquidity",
+      "train": 0.357,
+      "oos": -5.703,
+      "test": 0.106,
+      "passed": false,
+      "reason": "OOS 夏普 -5.70 < 门槛 0.3",
+      "n_trades": 19
+    },
+    {
+      "name": "amihud_illiquidity",
+      "family": "liquidity",
+      "train": 0.416,
+      "oos": -0.418,
+      "test": -3.224,
+      "passed": false,
+      "reason": "OOS 夏普 -0.42 < 门槛 0.3",
+      "n_trades": 43
+    },
+    {
+      "name": "variance_ratio",
+      "family": "structure",
+      "train": -1.946,
+      "oos": -1.321,
+      "test": -2.065,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 75
+    },
+    {
+      "name": "kaufman_efficiency",
+      "family": "trend",
+      "train": -4.473,
+      "oos": 3.088,
+      "test": -2.159,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 41
+    },
+    {
+      "name": "downside_upside_vol",
+      "family": "volatility",
+      "train": -1.859,
+      "oos": 3.147,
+      "test": -2.823,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 22
+    },
+    {
+      "name": "return_skew",
+      "family": "structure",
+      "train": 1.582,
+      "oos": -7.352,
+      "test": -1.855,
+      "passed": false,
+      "reason": "OOS 夏普 -7.35 < 门槛 0.3",
+      "n_trades": 9
+    },
+    {
+      "name": "return_kurtosis",
+      "family": "structure",
+      "train": -1.411,
+      "oos": -8.11,
+      "test": -2.071,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 18
+    },
+    {
+      "name": "parkinson_vol",
+      "family": "volatility",
+      "train": -0.454,
+      "oos": -5.625,
+      "test": 0.666,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 15
+    },
+    {
+      "name": "garman_klass_vol",
+      "family": "volatility",
+      "train": -0.466,
+      "oos": -5.201,
+      "test": 0.125,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 15
+    },
+    {
+      "name": "vwap_deviation",
+      "family": "reversal",
+      "train": -1.27,
+      "oos": -4.985,
+      "test": -1.288,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 49
+    },
+    {
+      "name": "price_volume_corr",
+      "family": "volume",
+      "train": -0.951,
+      "oos": 4.4,
+      "test": -2.19,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 18
+    },
+    {
+      "name": "close_location_value",
+      "family": "structure",
+      "train": -4.932,
+      "oos": -3.83,
+      "test": -2.948,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 121
+    },
+    {
+      "name": "momentum_consistency",
+      "family": "momentum",
+      "train": -0.862,
+      "oos": -3.072,
+      "test": -0.904,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 64
+    },
+    {
+      "name": "taker_buy_ratio",
+      "family": "orderflow",
+      "train": -2.809,
+      "oos": -5.424,
+      "test": 2.484,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 40
+    },
+    {
+      "name": "order_flow_imbalance",
+      "family": "orderflow",
+      "train": -3.781,
+      "oos": -7.533,
+      "test": -2.767,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 71
+    },
+    {
+      "name": "avg_trade_size",
+      "family": "orderflow",
+      "train": -9.987,
+      "oos": -13.284,
+      "test": -8.771,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 313
+    },
+    {
+      "name": "turnover_zscore",
+      "family": "liquidity",
+      "train": -6.817,
+      "oos": -0.098,
+      "test": -5.284,
+      "passed": false,
+      "reason": "IS 夏普为负",
+      "n_trades": 166
+    }
+  ],
+  "meta": {
+    "symbol": "BTCUSDT",
+    "interval": "1h",
+    "bars": 6000,
+    "source": "data-api.binance.vision",
+    "generated_at": "2026-11-04 18:28:39"
+  }
+}

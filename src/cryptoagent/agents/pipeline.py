@@ -36,6 +36,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..config import AppConfig
+from ..costs import evaluate_execution_cost
 from ..risk import AccountState, RiskDecision, RiskEngine
 from ..factors.signal import compute_factor_signal
 from ..factors.shortterm import compute_breakout_signal
@@ -161,6 +162,8 @@ class TradingPipeline:
         persist: bool = True,
         exchange_max_leverage: float | None = None,
         positions: list[dict] | None = None,
+        analyst_weights: list[float] | None = None,
+        analyst_calibrated: bool = False,
     ) -> Decision:
         state = state or AccountState(equity=self.cfg.backtest.initial_equity,
                                       peak_equity=self.cfg.backtest.initial_equity,
@@ -169,7 +172,10 @@ class TradingPipeline:
         # A1：情绪/新闻源（默认价格行为代理，配了 CryptoPanic 才用真实舆情）
         sentiment = get_sentiment_source(self.cfg.sentiment).fetch(snap.symbol, snap)
         reports: list[AnalystReport] = run_analysts(self.llm, snap, sentiment=sentiment)
-        debate: Debate = run_debate(self.llm, snap, reports, rounds=debate_rounds)
+        debate: Debate = run_debate(
+            self.llm, snap, reports, rounds=debate_rounds,
+            weights=analyst_weights, calibrated=analyst_calibrated,
+        )
         proposal, deg_trader = propose_trade(
             self.llm, snap, reports, debate,
             caps={
@@ -212,6 +218,21 @@ class TradingPipeline:
             })
         proposal["factor_contributions"] = contributions
         _apply_factor_signal(proposal, fsig["composite"])
+
+        # 执行成本闸（纯代码）：先看这笔单的预期收益能否覆盖手续费/滑点/资金费/冲击成本，
+        # 再决定放行、缩仓还是拒绝。放在风控官之前，让它看到的是已修正的提案。
+        gate = evaluate_execution_cost(
+            proposal, df, self.cfg, price=snap.price,
+            equity=state.equity, atr_pct=snap.atr_pct,
+        )
+        proposal["cost_gate"] = gate.to_dict()
+        if not gate.approved:
+            proposal["action"] = "flat"
+            proposal["size_pct"] = 0.0
+        elif gate.size_multiplier < 1.0:
+            proposal["size_pct"] = round(
+                float(proposal.get("size_pct", 0.0)) * gate.size_multiplier, 6
+            )
 
         officer, deg_risk = risk_review(self.llm, snap, proposal, state, self.cfg.risk, positions=positions)
 
@@ -306,6 +327,11 @@ def render_markdown(d: Decision) -> str:
         f"- 理由：{d.proposal['rationale']}",
         "",
         "## 4. 风控",
+        "",
+        f"- 执行成本闸：{'通过' if d.proposal.get('cost_gate', {}).get('approved', True) else '拒绝'}"
+        f"（成本 {d.proposal.get('cost_gate', {}).get('cost_pct', 0):.3%}"
+        f" / 止盈 {d.proposal.get('cost_gate', {}).get('expected_pct', 0):.2%}，"
+        f"净边际 {d.proposal.get('cost_gate', {}).get('net_edge_pct', 0):+.2%}）",
         "",
         f"风控官结论：**{d.risk_officer['verdict']}**（仓位乘数 {d.risk_officer['size_multiplier']:.2f}）",
         "",

@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from cryptoagent.agents.llm import LLMClient  # noqa: E402
@@ -1031,3 +1032,381 @@ class TestPeakOffpeak(unittest.TestCase):
         self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 9, 30)), 9000)
         self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 14, 30)), 12600)
         self.assertEqual(seconds_until_offpeak(cfg, self._dt(2026, 11, 4, 20, 0)), 0)
+
+
+class TestPositionManager(unittest.TestCase):
+    """持仓管理员：移动止损 / 时间止损 / 趋势反转，且异常时一律保守 hold。"""
+
+    def _df(self, closes):
+        import numpy as np
+
+        import time as _t
+
+        c = np.asarray(closes, dtype=float)
+        idx = pd.date_range("2026-01-01", periods=len(c), freq="1h", tz="UTC")
+        return pd.DataFrame(
+            {
+                "open": c,
+                "high": c * 1.001,
+                "low": c * 0.999,
+                "close": c,
+                "volume": np.ones(len(c)) * 1000,
+            },
+            index=idx,
+        )
+
+    def _pos(self, entry=100.0, stop=99.0, side="LONG", bars=20):
+        import time as _t
+
+        return {
+            "side": side,
+            "entry": entry,
+            "stop": stop,
+            "tp": 104.0 if side == "LONG" else 96.0,
+            "qty": 1.0,
+            "symbol": "BTCUSDT",
+            "opened_epoch": _t.time() - bars * 3600,
+            "initial_r_pct": abs(entry - stop) / entry,
+        }
+
+    def _flat(self, n=300, last=None):
+        import numpy as np
+
+        c = np.ones(n) * 100.0
+        if last is not None:
+            c[-len(last):] = last
+        return c
+
+    def test_trailing_stop_tightens_only_upward(self):
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        df = self._df(self._flat(last=list(np.linspace(100, 103, 30))))
+        d = manage_position(self._pos(bars=30), df, 103.0, PositionConfig())
+        self.assertEqual(d.action, "tighten")
+        self.assertGreater(d.new_stop, 99.0)
+        self.assertLess(d.new_stop, 103.0)          # 不能贴到/穿过现价
+        self.assertGreaterEqual(d.new_stop, 100.0)  # 至少保本
+
+    def test_trailing_stop_never_widens(self):
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        # 止损已经比 ATR 跟踪价更有利，浮盈又只有 1R → 不该往下改
+        df = self._df(self._flat(last=list(np.linspace(100, 101, 30))))
+        pos = self._pos(entry=100.0, stop=102.0, bars=30)
+        d = manage_position(pos, df, 101.0, PositionConfig(reversal_enabled=False))
+        self.assertEqual(d.action, "hold")
+
+    def test_time_stop_closes_stale_position(self):
+        import numpy as np
+
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        df = self._df(self._flat())
+        d = manage_position(self._pos(bars=60), df, 100.0,
+                            PositionConfig(reversal_enabled=False))
+        self.assertEqual(d.action, "close")
+        self.assertIn("时间止损", d.reason)
+
+    def test_reversal_closes_before_static_stop(self):
+        import numpy as np
+
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        df = self._df(self._flat(last=list(np.linspace(100, 96, 10))))
+        d = manage_position(self._pos(bars=10), df, 96.0, PositionConfig())
+        self.assertEqual(d.action, "close")
+        self.assertIn("趋势反转", d.reason)
+
+    def test_factor_composite_can_force_exit(self):
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        df = self._df(self._flat())
+        d = manage_position(self._pos(bars=10), df, 100.0,
+                            PositionConfig(reversal_composite=0.7), composite=-0.9)
+        self.assertEqual(d.action, "close")
+        self.assertIn("因子信号", d.reason)
+
+    def test_short_side_trailing_moves_stop_down(self):
+        import numpy as np
+
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        df = self._df(self._flat(last=list(np.linspace(100, 97, 30))))
+        pos = self._pos(entry=100.0, stop=101.0, side="SHORT", bars=30)
+        d = manage_position(pos, df, 97.0, PositionConfig(reversal_enabled=False))
+        self.assertEqual(d.action, "tighten")
+        self.assertLess(d.new_stop, 101.0)
+        self.assertGreater(d.new_stop, 97.0)
+
+    def test_no_signal_and_bad_data_are_safe(self):
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        d = manage_position(self._pos(bars=10), self._df(self._flat()), 100.0,
+                            PositionConfig(reversal_enabled=False))
+        self.assertEqual(d.action, "hold")
+        d2 = manage_position(self._pos(bars=10), self._df([100.0] * 5), 100.0, PositionConfig())
+        self.assertEqual(d2.action, "hold")
+        d3 = manage_position({}, self._df(self._flat()), 100.0, PositionConfig())
+        self.assertEqual(d3.action, "hold")
+
+    def test_disabled_never_acts(self):
+        import numpy as np
+
+        from cryptoagent.agents.position_manager import manage_position
+        from cryptoagent.config import PositionConfig
+
+        df = self._df(self._flat(last=list(np.linspace(100, 103, 30))))
+        d = manage_position(self._pos(bars=30), df, 103.0, PositionConfig(enabled=False))
+        self.assertEqual(d.action, "hold")
+
+
+class TestExecutionCostGate(unittest.TestCase):
+    """执行成本闸：净边际为负 / 参与率过高要拒绝，正常单放行。"""
+
+    def _cfg(self, **kw):
+        from cryptoagent.config import AppConfig
+
+        cfg = AppConfig()
+        cfg.market.interval = "1h"
+        for k, v in kw.items():
+            setattr(cfg.backtest.costs, k, v)
+        return cfg
+
+    def _df(self, bar_quote_volume=None):
+        from cryptoagent.data import synthetic_ohlcv
+
+        df = synthetic_ohlcv(300, 7)
+        if bar_quote_volume is not None:
+            df["quote_volume"] = float(bar_quote_volume)
+        return df
+
+    def _proposal(self, **kw):
+        p = {"action": "long", "size_pct": 0.10, "leverage": 5.0,
+             "take_profit_pct": 0.04, "stop_loss_pct": 0.02}
+        p.update(kw)
+        return p
+
+    def test_normal_order_passes(self):
+        from cryptoagent.costs import evaluate_execution_cost
+
+        r = evaluate_execution_cost(self._proposal(), self._df(), self._cfg(),
+                                    price=100.0, equity=10000.0, atr_pct=0.01)
+        self.assertTrue(r.approved)
+        self.assertEqual(r.size_multiplier, 1.0)
+        self.assertGreater(r.net_edge_pct, 0)
+        self.assertLess(r.cost_pct, 0.01)
+
+    def test_negative_edge_is_rejected(self):
+        from cryptoagent.costs import evaluate_execution_cost
+
+        r = evaluate_execution_cost(self._proposal(take_profit_pct=0.0001),
+                                    self._df(), self._cfg(), price=100.0,
+                                    equity=10000.0, atr_pct=0.01)
+        self.assertFalse(r.approved)
+        self.assertEqual(r.size_multiplier, 0.0)
+        self.assertIn("净边际", " ".join(r.reasons))
+
+    def test_high_participation_scales_down(self):
+        from cryptoagent.costs import evaluate_execution_cost
+
+        # notional = 0.1 × 5 × 10000 = 5000，单根成交额 25000 → 参与率 0.2
+        r = evaluate_execution_cost(self._proposal(), self._df(25000), self._cfg(),
+                                    price=100.0, equity=10000.0, atr_pct=0.01)
+        self.assertTrue(r.approved)
+        self.assertLess(r.size_multiplier, 1.0)
+        self.assertAlmostEqual(r.participation, 0.2, places=3)
+
+    def test_extreme_participation_is_rejected(self):
+        from cryptoagent.costs import evaluate_execution_cost
+
+        r = evaluate_execution_cost(self._proposal(), self._df(1000), self._cfg(),
+                                    price=100.0, equity=10000.0, atr_pct=0.01)
+        self.assertFalse(r.approved)
+
+    def test_flat_and_disabled_are_noops(self):
+        from cryptoagent.costs import evaluate_execution_cost
+
+        r = evaluate_execution_cost(self._proposal(action="flat"), self._df(),
+                                    self._cfg(), price=100.0, equity=10000.0)
+        self.assertTrue(r.approved)
+        r2 = evaluate_execution_cost(self._proposal(take_profit_pct=0.0001), self._df(),
+                                     self._cfg(cost_gate_enabled=False), price=100.0,
+                                     equity=10000.0)
+        self.assertTrue(r2.approved)
+
+    def test_pipeline_attaches_cost_gate(self):
+        from cryptoagent.agents.pipeline import TradingPipeline
+        from cryptoagent.data import synthetic_ohlcv
+
+        cfg = AppConfig()
+        cfg.llm.provider = "mock"
+        cfg.market.source = "synthetic"
+        d = TradingPipeline(cfg).run(synthetic_ohlcv(600, 7), persist=False)
+        self.assertIn("cost_gate", d.proposal)
+        self.assertIn("approved", d.proposal["cost_gate"])
+
+
+class TestDerivativesFactors(unittest.TestCase):
+    """C 档：衍生品列对齐 + 基差/OI/多空比因子能参与复合信号。"""
+
+    def _fake_payload(self, df):
+        import numpy as np
+
+        from cryptoagent.derivatives import clear_cache
+
+        clear_cache()
+        ts = [int(t.timestamp() * 1000) for t in df.index]
+        n = len(ts)
+        basis = [[ts[i], 0, 0, 0, 0.0002 * np.sin(i / 9.0), 0, 0, 0, 0, 0, 0, 0]
+                 for i in range(n)]
+        oi = [{"timestamp": ts[i], "sumOpenInterest": str(100000.0 * (1 + i / n))}
+              for i in range(n)]
+        taker = [{"timestamp": ts[i], "buySellRatio": str(0.9 + 0.2 * np.sin(i / 7.0))}
+                 for i in range(n)]
+        ls = [{"timestamp": ts[i], "longShortRatio": str(1.1 + 0.3 * np.cos(i / 8.0))}
+              for i in range(n)]
+        return {
+            "basis": (basis, lambda r: r[0], lambda r: r[4]),
+            "open_interest": (oi, lambda r: r["timestamp"], lambda r: r["sumOpenInterest"]),
+            "taker_ratio": (taker, lambda r: r["timestamp"], lambda r: r["buySellRatio"]),
+            "ls_ratio": (ls, lambda r: r["timestamp"], lambda r: r["longShortRatio"]),
+        }
+
+    def test_enrich_adds_four_columns_and_factors_participate(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from cryptoagent.data import synthetic_ohlcv
+        from cryptoagent.derivatives import enrich_derivatives
+        from cryptoagent.factors.signal import compute_factor_signal
+
+        df = synthetic_ohlcv(800, 7)
+        payload = self._fake_payload(df)
+        with patch("cryptoagent.derivatives._fetch_all", return_value=payload):
+            enriched = enrich_derivatives(df, "BTCUSDT", "1h")
+        for col in ("basis", "open_interest", "taker_ratio", "ls_ratio"):
+            self.assertIn(col, enriched.columns)
+            self.assertGreater(enriched[col].notna().sum(), 700)
+        # 原 df 不被改动（返回的是副本）
+        self.assertNotIn("basis", df.columns)
+
+        with tempfile.TemporaryDirectory() as lib:
+            sig = compute_factor_signal(lib, enriched)
+        names = {s["name"] for s in sig["signals"]}
+        for expected in ("basis_carry", "oi_momentum", "oi_price_divergence",
+                         "taker_long_short", "account_long_short"):
+            self.assertIn(expected, names)
+
+    def test_missing_derivatives_degrades_safely(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from cryptoagent.data import synthetic_ohlcv
+        from cryptoagent.derivatives import clear_cache, enrich_derivatives
+        from cryptoagent.factors.signal import compute_factor_signal
+
+        df = synthetic_ohlcv(800, 7)
+        clear_cache()
+        with patch("cryptoagent.derivatives._fetch_all", return_value={}):
+            out = enrich_derivatives(df, "BTCUSDT", "1h")
+        self.assertNotIn("basis", out.columns)
+        with tempfile.TemporaryDirectory() as lib:
+            sig = compute_factor_signal(lib, out)
+        names = {s["name"] for s in sig["signals"]}
+        self.assertNotIn("basis_carry", names)   # 缺列直接不加载，不稀释信号
+
+    def test_fetch_failure_never_raises(self):
+        from unittest.mock import patch
+
+        from cryptoagent.data import synthetic_ohlcv
+        from cryptoagent.derivatives import clear_cache, enrich_derivatives
+
+        df = synthetic_ohlcv(300, 7)
+        clear_cache()
+        with patch("cryptoagent.derivatives._fetch_all", side_effect=OSError("network down")):
+            out = enrich_derivatives(df, "BTCUSDT", "1h")
+        self.assertEqual(list(out.columns), list(df.columns))
+
+
+class TestAnalystCalibration(unittest.TestCase):
+    """分析师权重事后校准：样本不足不启用，命中率改变权重且有上下限。"""
+
+    def test_insufficient_samples_keeps_defaults(self):
+        from cryptoagent.agents.calibration import DEFAULT_WEIGHTS, weights_from_accuracy
+
+        stats = {"0": {"hit": 2, "total": 3}, "1": {"hit": 1, "total": 2}}
+        w, on = weights_from_accuracy(stats, min_samples=10)
+        self.assertFalse(on)
+        self.assertEqual(w, list(DEFAULT_WEIGHTS))
+
+    def test_accuracy_changes_weights_within_bounds(self):
+        from cryptoagent.agents.calibration import record_accuracy, weights_from_accuracy
+
+        stats = {}
+        # 技术分析师 10 次全对，资金费率/情绪 10 次全错
+        for _ in range(10):
+            record_accuracy(stats, [0.8, -0.8, -0.8], 1.0)
+        w, on = weights_from_accuracy(stats, min_samples=10)
+        self.assertTrue(on)
+        self.assertAlmostEqual(sum(w), 1.0, places=6)
+        self.assertTrue(all(0.1 <= x <= 0.7 for x in w))
+        self.assertGreater(w[0], 0.5)       # 全对的角色权重上升
+        self.assertLess(w[1], 0.3)
+        self.assertEqual(stats["0"]["hit"], 10)
+        self.assertEqual(stats["1"]["hit"], 0)
+
+    def test_neutral_stance_not_counted(self):
+        from cryptoagent.agents.calibration import record_accuracy
+
+        stats = {}
+        record_accuracy(stats, [0.0, 0.7, -0.7], -1.0)
+        self.assertNotIn("0", stats)
+        self.assertEqual(stats["2"]["hit"], 1)
+
+    def test_engine_records_on_close(self):
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        e.state = {"position": None, "position_history": []}
+        e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(symbol="BTCUSDT"))
+        e.lock = threading.RLock()
+        pos = {"side": "LONG", "qty": 1.0, "entry": 100.0,
+               "analyst_stances": [0.8, 0.1, -0.7]}
+        e._record_close(pos, 103.0, 3.0, "test", "paper")
+        stats = e.state.get("analyst_accuracy") or {}
+        self.assertEqual(stats["0"]["hit"], 1)     # 看多，市场上行 → 对
+        self.assertEqual(stats["2"]["hit"], 0)     # 看空，市场上行 → 错
+        w, on = e.analyst_weights()
+        self.assertEqual(len(w), 3)
+        self.assertAlmostEqual(sum(w), 1.0, places=6)
+
+    def test_debate_uses_supplied_weights(self):
+        import types
+
+        from cryptoagent.agents.llm import LLMClient
+        from cryptoagent.agents.roles import MarketSnapshot, run_debate
+        from cryptoagent.config import LLMConfig
+        from cryptoagent.data import synthetic_ohlcv
+
+        snap = MarketSnapshot.from_df(synthetic_ohlcv(400, 7), "BTCUSDT", "1h")
+        reports = [
+            types.SimpleNamespace(role="技术", stance=1.0, summary="多", data_flags=[]),
+            types.SimpleNamespace(role="资金费率", stance=-1.0, summary="空", data_flags=[]),
+            types.SimpleNamespace(role="情绪", stance=0.0, summary="中", data_flags=[]),
+        ]
+        llm = LLMClient(LLMConfig(provider="mock"))
+        d1 = run_debate(llm, snap, reports, rounds=1)
+        d2 = run_debate(llm, snap, reports, rounds=1,
+                        weights=[0.1, 0.8, 0.1], calibrated=True)
+        self.assertGreater(d1.score, d2.score)     # 把权重从技术挪向资金费率
+        self.assertIn("校准", d2.thesis)

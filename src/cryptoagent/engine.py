@@ -16,9 +16,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from .agents.calibration import record_accuracy, summary as calibration_summary, weights_from_accuracy
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
+from .agents.position_manager import explain_management, manage_position
 from .config import AppConfig
 from .data import load_market
+from .derivatives import enrich_derivatives
 from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
 from .notify import get_notifier
 from .risk import AccountState
@@ -126,6 +129,14 @@ class TradingEngine:
         # 行情源跟着「当前选的交易所」走：选 OKX 就用 OKX 永续的 K 线
         df, src = load_market(
             self.cfg.market, force_download=force, prefer=self.state.get("exchange", "binance")
+        )
+        # C 档衍生品因子的数据：基差 / OI / taker 多空比 / 账户多空比。
+        # 拿不到就原样返回（signal 层会自动跳过依赖这些列的因子），绝不阻断行情加载。
+        mkt = self.cfg.market
+        df = enrich_derivatives(
+            df, mkt.symbol, mkt.interval,
+            enabled=bool(getattr(mkt, "derivatives_enabled", True)),
+            ttl=float(getattr(mkt, "derivatives_ttl_sec", 300) or 300),
         )
         with self.lock:
             self.df = df
@@ -313,7 +324,8 @@ class TradingEngine:
     # 模拟撮合
     # ------------------------------------------------------------------
     def _paper_open(self, side: str, qty: float, price: float, lev: float,
-                    stop: float, tp: float, reason: str, plan_price: float | None = None) -> dict:
+                    stop: float, tp: float, reason: str, plan_price: float | None = None,
+                    stances: list[float] | None = None) -> dict:
         slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
         fill = price * (1 + slip) if side == "LONG" else price * (1 - slip)
         fee = qty * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
@@ -326,6 +338,12 @@ class TradingEngine:
             "stop": stop,
             "tp": tp,
             "opened_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            # 持仓管理员用：R 必须在开仓时固化（止损后来会被移动），
+            # epoch 用来算持有了多少根 K 线，避免本地时区歧义。
+            "opened_epoch": time.time(),
+            "initial_r_pct": abs(fill - stop) / fill if fill > 0 else 0.0,
+            "symbol": self.cfg.market.symbol,
+            "analyst_stances": list(stances or []),
             "mode": "paper",
         }
         # A4：记录计划价与滑点，便于事后审计「计划 vs 成交」偏差
@@ -350,6 +368,15 @@ class TradingEngine:
 
     def _record_close(self, pos: dict, exit_price: float, pnl: float, reason: str, mode: str) -> None:
         """把一次平仓写进持仓历史：持仓历史表 + 每日盈亏统计都靠它。"""
+        # 分析师权重校准：用「市场实际方向」而非这笔仓的盈亏评判立场
+        # （开仓方向由交易员定，不该算到分析师头上）。
+        stances = pos.get("analyst_stances") or []
+        entry = float(pos.get("entry") or 0.0)
+        if stances and entry > 0 and exit_price > 0 and abs(float(exit_price) - entry) > 1e-12:
+            market_dir = 1.0 if float(exit_price) > entry else -1.0
+            stats = self.state.setdefault("analyst_accuracy", {})
+            record_accuracy(stats, stances, market_dir)
+
         hist = self.state.setdefault("position_history", [])
         hist.append(
             {
@@ -733,7 +760,115 @@ class TradingEngine:
     # ------------------------------------------------------------------
     # 决策与执行
     # ------------------------------------------------------------------
-    def run_decision(self, rounds: int = 2) -> dict:
+    # ------------------------------------------------------------------
+    # 分析师权重事后校准
+    # ------------------------------------------------------------------
+    def analyst_weights(self) -> tuple[list[float], bool]:
+        """从历史平仓的方向命中率生成辩论权重；样本不足则沿用默认 0.5/0.3/0.2。"""
+        try:
+            return weights_from_accuracy(self.state.get("analyst_accuracy"))
+        except Exception:  # noqa: BLE001 - 校准失败不影响决策
+            return [0.5, 0.3, 0.2], False
+
+    # ------------------------------------------------------------------
+    # 持仓管理员：开仓之后的退出决策（移动止损 / 时间止损 / 趋势反转）
+    # ------------------------------------------------------------------
+    def _opportunity_composite(self, symbol: str) -> float | None:
+        """复用机会扫描缓存里的因子信号，不额外跑一次因子子进程。"""
+        for r in (getattr(self, "opportunities", None) or []):
+            if r.get("symbol") == symbol and not r.get("error"):
+                try:
+                    return float(r.get("composite") or 0.0)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _sync_live_stops(self, pos: dict, new_stop: float) -> bool:
+        """实盘按新止损重挂条件单。
+
+        同方向 closePosition 条件单只能有一张，所以必须「先撤后挂」。
+        万一新止损挂不上，立刻回退挂回旧止损并发 critical 告警 —— 绝不能留下裸仓。
+        """
+        sym = pos.get("symbol") or self.cfg.market.symbol
+        client = self.live_client
+        if client is None or not self.armed:
+            return False
+        close_side = "SELL" if pos["side"] == "LONG" else "BUY"
+        try:
+            client.cancel_all(sym)
+            try:
+                client.place_stop_market(sym, close_side, float(new_stop), order_type="STOP_MARKET")
+            except Exception as exc:  # noqa: BLE001
+                # 旧单已撤、新单没挂上：恢复旧止损，本次调整作废
+                restored = False
+                try:
+                    client.place_stop_market(sym, close_side, float(pos["stop"]),
+                                             order_type="STOP_MARKET")
+                    restored = True
+                except Exception:  # noqa: BLE001
+                    pass
+                self.last_error = f"移动止损挂单失败，已回退旧止损：{exc}"
+                self._notify("critical", f"{sym} 移动止损挂单失败",
+                             f"旧止损恢复={restored}；错误：{str(exc)[:120]}",
+                             {"symbol": sym, "restored": restored})
+                return False
+            try:
+                client.place_stop_market(sym, close_side, float(pos["tp"]),
+                                         order_type="TAKE_PROFIT_MARKET")
+            except Exception as exc:  # noqa: BLE001 - 止盈挂不上不影响止损
+                self.last_error = f"移动止损后止盈单重挂失败：{exc}"
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"移动止损撤单失败：{exc}"
+            return False
+
+    def _manage_open_position(self, pos: dict, price: float | None = None) -> dict:
+        """在「已有持仓、跳过开仓决策」的这一轮里做退出管理。"""
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None or not cfg.enabled:
+            return {"action": "hold", "reason": "持仓管理员未启用", "details": {}}
+        try:
+            df = self.df if self.df is not None else self.refresh_data()[0]
+            px = float(price) if price and price > 0 else self.price()
+            sym = pos.get("symbol") or self.cfg.market.symbol
+            dec = manage_position(pos, df, px, cfg,
+                                  composite=self._opportunity_composite(sym))
+
+            if dec.action == "close":
+                res = self.close(px, reason=f"持仓管理员：{dec.reason}")
+                dec.details["close_result"] = res
+                self._notify("info", f"{sym} 持仓管理员提前退出", dec.reason,
+                             {"symbol": sym, "action": "close", "details": dec.details})
+
+            elif dec.action == "tighten" and dec.new_stop is not None:
+                now = time.time()
+                if now - float(getattr(self, "_stop_adjust_at", 0.0)) < cfg.min_adjust_interval_sec:
+                    dec.details["throttled"] = True
+                    return dec.to_dict()
+                live = pos.get("mode") == "live" and self.state.get("mode") == "live"
+                if live and cfg.live_stop_adjust and not self._sync_live_stops(pos, dec.new_stop):
+                    return {"action": "hold", "reason": "交易所条件单未更新，本地止损保持不变",
+                            "details": dec.details}
+                with self.lock:
+                    if self.state.get("position") is pos:
+                        pos["stop"] = float(dec.new_stop)
+                        self._save()
+                self._stop_adjust_at = now
+                self._notify("info", f"{sym} 移动止损已更新", dec.reason,
+                             {"symbol": sym, "new_stop": dec.new_stop})
+
+            if cfg.llm_explain and dec.action != "hold":
+                try:
+                    from .agents.llm import LLMClient
+                    dec.explanation = explain_management(LLMClient(self.cfg.llm), dec, pos)
+                except Exception:  # noqa: BLE001 - 解释是旁路
+                    pass
+            return dec.to_dict()
+        except Exception as exc:  # noqa: BLE001 - 持仓管理绝不阻断主流程
+            return {"action": "hold", "reason": f"持仓管理异常，保守不动：{type(exc).__name__}",
+                    "details": {"error": str(exc)[:160]}}
+
+    def run_decision(self, rounds: int = 2, price: float | None = None) -> dict:
         # 已有持仓时不再跑开仓决策：既省掉每轮 LLM 调用，也不会每 5 分钟推一条
         # 「决策被风控拦截」。先与交易所对账（实盘），避免交易所侧止损/止盈已成交、
         # 本地缓存还挂着，导致一直等不到「平仓后再决策」。
@@ -745,9 +880,13 @@ class TradingEngine:
                 "reason": "已有持仓，等平仓完成后再做开仓决策",
                 "symbol": self.cfg.market.symbol,
                 "position": held,
+                # 持仓期间不是完全放手：由持仓管理员做移动止损 / 时间止损 / 趋势反转退出
+                "management": self._manage_open_position(held, price),
             }
         df = self.df if self.df is not None else self.refresh_data()[0]
-        price = float(df["close"].iloc[-1])
+        # 开仓链仍以 K 线收盘价为基准（与改造前一致）；传入的 price 只供持仓管理员
+        # 用实时价判断，避免顺带改变 account_state / 组合敞口的计算口径。
+        ref_price = float(df["close"].iloc[-1])
         pipe = TradingPipeline(self.cfg)
         # 杠杆上限以交易所支持的最大杠杆为准；未连交易所用配置兜底（默认 3x 保守）
         ex_max = None
@@ -756,9 +895,11 @@ class TradingEngine:
                 ex_max = float(self.live_client.max_leverage(self.cfg.market.symbol))
             except Exception:  # noqa: BLE001 - 拿不到就退回配置兜底
                 ex_max = None
+        aw, calibrated = self.analyst_weights()
         decision = pipe.run(
-            df, state=self.account_state(price), debate_rounds=rounds, persist=False,
-            exchange_max_leverage=ex_max, positions=self._positions_for_risk(price),
+            df, state=self.account_state(ref_price), debate_rounds=rounds, persist=False,
+            exchange_max_leverage=ex_max, positions=self._positions_for_risk(ref_price),
+            analyst_weights=aw, analyst_calibrated=calibrated,
         )
         self.last_decision = decision
 
@@ -800,6 +941,10 @@ class TradingEngine:
                 "order": decision.order,
                 "file": str(out / f"{stamp}_{decision.symbol}.json"),
             }
+            # 供下一笔开仓带上：平仓时据此评判每个分析师看对方向没有
+            self.state["pending_stances"] = [
+                float(a.get("stance") or 0.0) for a in decision.analysts[:3]
+            ]
             self._save()
         return payload
 
@@ -822,6 +967,8 @@ class TradingEngine:
             if self.state.get("position"):
                 return {"ok": False, "error": "已有持仓，拒绝重复开仓（请先平仓）"}
 
+            # 把这次决策时三位分析师的立场带进仓位，平仓时用于方向命中率校准
+            stances = list(self.state.get("pending_stances") or [])
             side = "LONG" if order["side"] == "BUY" else "SHORT"
             qty = float(order["quantity"])
             lev = float(order["leverage"])
@@ -898,6 +1045,9 @@ class TradingEngine:
                         "stop": stop,
                         "tp": tp,
                         "opened_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "opened_epoch": time.time(),
+                        "initial_r_pct": abs(fill_px - stop) / fill_px if fill_px > 0 else 0.0,
+                        "analyst_stances": stances,
                         "mode": "live",
                         "order_id": res.order_id,
                     }
@@ -926,7 +1076,8 @@ class TradingEngine:
                     return {"ok": False, "error": str(exc)}
             else:
                 rec = self._paper_open(side, qty, price, lev, stop, tp, reason,
-                                       plan_price=order.get("entry_ref_price"))
+                                       plan_price=order.get("entry_ref_price"),
+                                       stances=stances)
                 self._consume_plan()
                 self._save()
                 return {"ok": True, "mode": "paper", "fill": rec}
@@ -934,6 +1085,8 @@ class TradingEngine:
     def _consume_plan(self) -> None:
         """订单计划一旦执行就作废，避免重复下单。"""
         self.pending_order = None
+        # 立场已经写进仓位，清掉待办避免下一笔误用旧立场
+        self.state["pending_stances"] = []
         ld = self.state.get("last_decision")
         if isinstance(ld, dict) and isinstance(ld.get("order"), dict):
             ld["order"]["status"] = "FILLED"
@@ -944,18 +1097,21 @@ class TradingEngine:
             pos = self.state.get("position")
             if not pos:
                 return {"ok": False, "error": "当前没有持仓"}
+            # 用仓位自己的品种：auto_rotate 切过品种后，cfg.market.symbol 已经变了，
+            # 拿当前品种去撤单/平仓会平错对象（与「幽灵仓位」同源的坑）。
+            sym = pos.get("symbol") or self.cfg.market.symbol
             if pos.get("mode") == "live" and self.state["mode"] == "live":
                 if not self.armed or self.live_client is None:
                     return {"ok": False, "error": "实盘未解锁"}
                 try:
-                    self.live_client.cancel_all(self.cfg.market.symbol)
+                    self.live_client.cancel_all(sym)
                     res = self.live_client.place_market(
-                        self.cfg.market.symbol,
+                        sym,
                         "SELL" if pos["side"] == "LONG" else "BUY",
                         float(pos["qty"]),
                         reduce_only=True,
                     )
-                    detail = self._live_fill(self.cfg.market.symbol, res.order_id)
+                    detail = self._live_fill(sym, res.order_id)
                     exit_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
                     direction = 1.0 if pos["side"] == "LONG" else -1.0
                     gross = (exit_px - float(pos["entry"])) * float(pos["qty"]) * direction
@@ -987,7 +1143,7 @@ class TradingEngine:
                     self._notify("info" if pnl >= 0 else "critical",
                                  f"{pos['side']} 平仓（实盘）",
                                  f"已实现盈亏 {pnl:+,.2f} U（{reason}）",
-                                 {"symbol": self.cfg.market.symbol, "pnl": round(pnl, 2), "reason": reason})
+                                 {"symbol": sym, "pnl": round(pnl, 2), "reason": reason})
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
                     return {"ok": False, "error": str(exc)}
@@ -997,7 +1153,7 @@ class TradingEngine:
             self._notify("info" if rec["pnl"] >= 0 else "critical",
                          f"{pos['side']} 平仓（模拟）",
                          f"已实现盈亏 {rec['pnl']:+,.2f} U（{reason}）",
-                         {"symbol": self.cfg.market.symbol, "pnl": rec["pnl"], "reason": reason})
+                         {"symbol": sym, "pnl": rec["pnl"], "reason": reason})
             return {"ok": True, "mode": "paper", "fill": rec}
 
     def check_stops(self, price: float | None = None) -> dict | None:
@@ -1117,7 +1273,8 @@ class TradingEngine:
                 except Exception:  # noqa: BLE001
                     pass
             stopped = self.check_stops(price)
-            payload = self.run_decision()
+            # 持仓管理员要用同一份实时价判断（模拟盘 check_stops 也用它）
+            payload = self.run_decision(price=price)
             executed = None
             if self.auto_execute and payload.get("order"):
                 executed = self.execute(price, reason="auto")
@@ -1212,6 +1369,8 @@ class TradingEngine:
                 "data_source": self.data_source,
                 "data_loading": bool(self.data_loading),
                 "llm": {"provider": self.cfg.llm.provider, "model": self.cfg.llm.model},
+                # 分析师权重校准状态（样本不足时 calibrated=False，权重仍是默认值）
+                "analyst_calibration": calibration_summary(self.state.get("analyst_accuracy")),
                 "history": hist,
                 "last_error": self.last_error,
                 "exchange": self.state.get("exchange", "binance"),

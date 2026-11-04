@@ -53,6 +53,10 @@ class MarketConfig:
     rotate_min_score: float = 0.2
     # 扫描频率：每 N 个自动循环扫一次（1 = 每轮都扫）
     rotate_every_cycles: int = 1
+    # 衍生品数据（基差 / OI / taker 多空比 / 账户多空比）对齐到行情，供 C 档因子使用。
+    # 只在主行情刷新时拉，机会扫描不拉；拿不到就静默降级，不影响决策。
+    derivatives_enabled: bool = True
+    derivatives_ttl_sec: int = 300
 
 
 @dataclass
@@ -60,6 +64,15 @@ class CostConfig:
     fee_bps: float = 5.0              # taker 单边 0.05%
     slippage_bps: float = 2.0
     funding_interval_hours: int = 8
+    # —— 执行成本闸（决策前纯代码检查，不占 LLM）——
+    cost_gate_enabled: bool = True
+    # 成本 / 预期止盈收益 超过这个比例就发警告（不强行缩仓：按名义比例计的
+    # 手续费和滑点不随仓位变小，缩仓并不能改善这个比值）
+    max_cost_ratio: float = 0.35
+    # 单笔名义 / 最近一根 K 线成交额 的参与率上限；超出就按反比缩仓
+    max_participation: float = 0.10
+    # 参与率硬顶：超过直接拒绝（这种单子必然砸盘）
+    max_participation_hard: float = 0.50
 
 
 @dataclass
@@ -147,6 +160,36 @@ class ResearchConfig:
 
 
 @dataclass
+class PositionConfig:
+    """持仓管理员：开仓之后的退出决策（移动止损 / 时间止损 / 趋势反转退出）。
+
+    设计原则与全项目一致：**动作由确定性规则决定，LLM 只负责解释**。
+    规则算不出结论时一律 hold，绝不会因为模型幻觉去平仓。
+    所有阈值都以「R」（开仓时的初始风险 = |entry - stop| / entry）为单位，
+    这样不同杠杆、不同止损宽度的仓位可以用同一套参数。
+    """
+    enabled: bool = True
+    # 移动止损：浮盈达到 trail_activate_r × R 后启动，跟踪距离 = trail_atr_mult × ATR%
+    trail_activate_r: float = 1.0
+    trail_atr_mult: float = 2.0
+    # 新止损相对旧止损至少改善这么多才撤挂条件单，避免每轮反复改单
+    trail_min_gap_pct: float = 0.003
+    # 时间止损：持有超过 max_hold_bars 根且浮盈不足 min_progress_r × R
+    max_hold_bars: int = 48
+    min_progress_r: float = 0.3
+    # 趋势反转退出：至少持有 3 根后，均线转向 + 连续反向 K 线
+    reversal_enabled: bool = True
+    reversal_min_hold_bars: int = 3
+    # 因子复合信号与持仓方向强烈相反时也允许退出（|composite| ≥ 该值）
+    reversal_composite: float = 0.7
+    # 实盘是否在交易所撤掉旧条件单、按新止损重挂（模拟盘改本地缓存即可）
+    live_stop_adjust: bool = True
+    min_adjust_interval_sec: int = 300
+    # 是否让 LLM 生成一段「为什么这样管理」的解释（默认关，不增加调用成本）
+    llm_explain: bool = False
+
+
+@dataclass
 class AppConfig:
     market: MarketConfig = field(default_factory=MarketConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
@@ -155,6 +198,7 @@ class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     sentiment: SentimentConfig = field(default_factory=SentimentConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    position: PositionConfig = field(default_factory=PositionConfig)
     runs_dir: str = "runs"
 
 

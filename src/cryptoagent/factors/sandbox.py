@@ -210,7 +210,19 @@ if __name__ == "__main__":
 
 
 def _write_frame(df: pd.DataFrame, path: Path) -> None:
-    cols = [c for c in ["open", "high", "low", "close", "volume", "funding_rate"] if c in df.columns]
+    """写入沙箱可见的列白名单。
+
+    因子代码只能看到这里写进 CSV 的列。新增数据维度时必须同步登记，
+    否则因子里 `df["taker_base"]` 会直接 KeyError。
+    """
+    allowed = [
+        "open", "high", "low", "close", "volume", "funding_rate",
+        # 成交明细（K 线 API 原生返回，之前被丢弃）
+        "quote_volume", "trades", "taker_base", "taker_quote",
+        # 衍生品维度（可选，由 derivatives 模块对齐后附加；缺失时因子自行降级）
+        "basis", "open_interest", "taker_ratio", "ls_ratio",
+    ]
+    cols = [c for c in allowed if c in df.columns]
     df[cols].to_csv(path, index_label="ts")
 
 

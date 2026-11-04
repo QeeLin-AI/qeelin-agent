@@ -106,6 +106,14 @@ def synthetic_ohlcv(
         momentum = float(np.sum(ret[max(0, i - 24) : i + 1]))
         funding[i] = float(np.tanh(momentum * 8.0)) * 0.00015
 
+    # --- 成交明细代理：让基于主动买占比/平均单笔规模的因子在合成数据上也能验证 ---
+    # 主动买占比与当根收益同向（涨的时候主动买更多），这是真实市场里最稳定的一阶特征。
+    buy_share = np.clip(0.5 + np.tanh(ret / np.maximum(vol, 1e-6)) * 0.18, 0.05, 0.95)
+    taker_base = volume * buy_share
+    quote_volume = volume * close
+    taker_quote = taker_base * close
+    trades = np.maximum(1.0, volume / np.exp(rng.normal(0.0, 0.15, n)) / 0.5)
+
     idx = pd.date_range(start=start, periods=n, freq=_pandas_freq(interval), tz="UTC")
     df = pd.DataFrame(
         {
@@ -115,6 +123,10 @@ def synthetic_ohlcv(
             "close": close,
             "volume": volume,
             "funding_rate": funding,
+            "quote_volume": quote_volume,
+            "trades": trades,
+            "taker_base": taker_base,
+            "taker_quote": taker_quote,
         },
         index=idx,
     )
@@ -169,6 +181,12 @@ def _get(url: str, params: dict, timeout: int = 6):
 
 
 def _klines_frame(rows: list) -> pd.DataFrame:
+    """币安 K 线 → DataFrame。
+
+    除了 OHLCV，还要保留 quote_volume / trades / taker_base / taker_quote：
+    这四列是「主动买占比、订单流不平衡、平均单笔规模、换手率」等衍生因子的
+    唯一原料，之前在这里被直接丢弃，导致后续因子无数据可用。
+    """
     df = pd.DataFrame(
         rows,
         columns=[
@@ -178,7 +196,21 @@ def _klines_frame(rows: list) -> pd.DataFrame:
     )
     df.index = pd.to_datetime(df["open_time"], unit="ms", utc=True)
     df.index.name = "ts"
-    df = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df = df[[
+        "open", "high", "low", "close", "volume",
+        "quote_volume", "trades", "taker_base", "taker_quote",
+    ]].astype(float)
+    return df
+
+
+# 没有成交明细的数据源统一补齐这些列，保证下游因子代码永远拿得到（值为 NaN）。
+EXTRA_FIELDS = ("quote_volume", "trades", "taker_base", "taker_quote")
+
+
+def _fill_extra_fields(df: pd.DataFrame) -> pd.DataFrame:
+    for col in EXTRA_FIELDS:
+        if col not in df.columns:
+            df[col] = float("nan")
     return df
 
 
@@ -285,7 +317,7 @@ def _fetch_gate(cfg: MarketConfig, need: int) -> pd.DataFrame:
     df.columns = ["open", "high", "low", "close", "volume"]
     df = df[~df.index.duplicated()].sort_index()
     df["funding_rate"] = 0.0
-    return df
+    return _fill_extra_fields(df)
 
 
 OKX_BARS = {
@@ -340,7 +372,7 @@ def _okx_rows_to_df(rows: list[list]) -> pd.DataFrame:
     df.columns = ["open", "high", "low", "close", "volume"]
     df = df[~df.index.duplicated(keep="last")].sort_index()
     df["funding_rate"] = 0.0
-    return df
+    return _fill_extra_fields(df)
 
 
 def _fetch_okx(cfg: MarketConfig, need: int) -> pd.DataFrame:
@@ -562,6 +594,7 @@ def fetch_klines(
             df = df[["o", "h", "l", "c", "v"]].astype(float)
             df.columns = ["open", "high", "low", "close", "volume"]
             df = df.sort_index()
+            _fill_extra_fields(df)
             _KL_CACHE[key] = (now, df, "gate-futures")
             return df, "gate-futures"
         errors.append("gate: 空数据")

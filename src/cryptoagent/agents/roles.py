@@ -251,11 +251,16 @@ class Debate:
 
 
 def run_debate(
-    llm: LLMClient, snap: MarketSnapshot, reports: list[AnalystReport], rounds: int = 2
+    llm: LLMClient,
+    snap: MarketSnapshot,
+    reports: list[AnalystReport],
+    rounds: int = 2,
+    weights: list[float] | None = None,
+    calibrated: bool = False,
 ) -> Debate:
-    score = (
-        0.50 * reports[0].stance + 0.30 * reports[1].stance + 0.20 * reports[2].stance
-    )
+    # 权重默认仍是经验值；接入事后校准后由 engine 传入校准过的权重
+    w = list(weights) if weights and len(weights) == 3 else [0.50, 0.30, 0.20]
+    score = sum(w[i] * reports[i].stance for i in range(min(3, len(reports))))
     positives = [r for r in reports if r.stance > 0.1]
     negatives = [r for r in reports if r.stance < -0.1]
 
@@ -325,7 +330,8 @@ def run_debate(
     else:
         stance = "中性"
     thesis = (
-        f"综合评分 {score:+.2f}（技术 0.5 / 资金费率 0.3 / 情绪 0.2 加权），结论{stance}。"
+        f"综合评分 {score:+.2f}（技术 {w[0]:.2f} / 资金费率 {w[1]:.2f} / 情绪 {w[2]:.2f} 加权"
+        f"{'，权重已按历史命中率校准' if calibrated else ''}），结论{stance}。"
         f"多头核心：{positives[0].role if positives else '无'}；"
         f"空头核心：{negatives[0].role if negatives else '无'}。"
     )
