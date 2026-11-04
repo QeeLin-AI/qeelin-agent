@@ -47,6 +47,12 @@ class MarketConfig:
     # 中频叠加信号：决策时实时拉这个短周期 K 线，算波动突破信号（1m/5m/15m）
     short_interval: str = "5m"
     short_bars: int = 200
+    # 短周期 K 线落盘缓存：页面图表和中频突破信号读本地 CSV，不再每次都打交易所。
+    # 有效期是「距上次落盘」的时长 = 半个 bar 周期，最长封顶 3 分钟，到期整段重拉。
+    klines_cache: bool = True
+    # 主行情刷新后后台预热 short_interval 的 K 线，让上面的缓存始终是热的。
+    # 只在主行情刷新时触发，机会扫描的 6 品种扫描不会预热（避免 6 倍请求）。
+    klines_prewarm: bool = True
     # 自主选品种：自动循环里按因子信号扫描全部品种，切到最有「机会」的品种（有持仓时不切）
     auto_rotate: bool = False
     # 选品种信号阈值：|因子复合信号| 超过它才算「有机会」，否则留在当前品种

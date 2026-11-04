@@ -1047,8 +1047,9 @@ class WebApp:
             raise ApiError(why, 400)
 
         # 2) 行情能不能真的拉到（且必须来自这家交易所，别拿别家的数据充数）
+        #    use_disk=False：这是连通性校验，必须真的打一次交易所，不能读盘缓存
         try:
-            df, src = fetch_klines(sym, self.cfg.market.interval, 60, prefer=exchange)
+            df, src = fetch_klines(sym, self.cfg.market.interval, 60, prefer=exchange, use_disk=False)
         except Exception as exc:  # noqa: BLE001
             raise ApiError(f"{ex_cn} 行情拉取失败（{type(exc).__name__}），稍后再试", 502) from exc
         if df is None or df.empty:

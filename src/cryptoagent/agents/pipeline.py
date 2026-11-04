@@ -140,7 +140,7 @@ class TradingPipeline:
         self.llm = llm or LLMClient(cfg.llm)
         self.risk = RiskEngine(cfg.risk)
 
-    def _short_breakout_signal(self, symbol: str) -> float:
+    def _short_breakout_signal(self, symbol: str, exchange: str = "binance") -> float:
         """中频波动突破信号：实时拉短周期 K 线，算唐奇安突破，失败返回 0（不干扰）。"""
         if self.cfg.market.source == "synthetic":
             return 0.0   # 合成/离线数据不做中频叠加，避免无谓联网
@@ -149,7 +149,9 @@ class TradingPipeline:
         try:
             from ..data import fetch_klines
 
-            df_short, _ = fetch_klines(symbol, interval, max(20, min(bars, 500)))
+            # prefer 必须跟当前下单的交易所一致，否则在 OKX 上跑却用币安的价格
+            # 算突破；engine 的预热也是按同一家交易所落的盘，两边才对得上。
+            df_short, _ = fetch_klines(symbol, interval, max(20, min(bars, 500)), prefer=exchange)
             return compute_breakout_signal(df_short)
         except Exception:  # noqa: BLE001 - 短周期拉不到/算不出时静默降级，不阻断决策
             return 0.0
@@ -164,6 +166,7 @@ class TradingPipeline:
         positions: list[dict] | None = None,
         analyst_weights: list[float] | None = None,
         analyst_calibrated: bool = False,
+        exchange: str = "binance",
     ) -> Decision:
         state = state or AccountState(equity=self.cfg.backtest.initial_equity,
                                       peak_equity=self.cfg.backtest.initial_equity,
@@ -191,7 +194,7 @@ class TradingPipeline:
         # 因子信号注入：研究产出的因子参与决策（方向一致放大，相反缩小/观望）
         fsig = compute_factor_signal(self.cfg.research.factor_library, df)
         # 中频叠加：实时拉短周期 K 线算波动突破信号，有突破时并入复合信号
-        short_sig = self._short_breakout_signal(snap.symbol)
+        short_sig = self._short_breakout_signal(snap.symbol, exchange)
         if short_sig != 0.0:
             fsig["signals"].append(
                 {

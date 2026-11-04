@@ -347,6 +347,239 @@ class TestDataSourceSeparation(unittest.TestCase):
             data_mod._get = orig
 
 
+class TestKlineDiskCache(unittest.TestCase):
+    """短周期 K 线落盘缓存：同一根 bar 内读盘不打网络，跨 bar 后自动重拉。"""
+
+    def setUp(self):
+        import cryptoagent.data as data_mod
+
+        self.data = data_mod
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_dir = data_mod.KL_CACHE_DIR
+        data_mod.set_kl_cache_dir(Path(self._tmp.name) / "cache")
+        data_mod._KL_CACHE.clear()
+        self._orig_get = data_mod._get
+
+    def tearDown(self):
+        self.data._get = self._orig_get
+        self.data.KL_CACHE_DIR = self._orig_dir
+        self.data._KL_CACHE.clear()
+        self.data._DEAD_UNTIL.clear()
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _rows(n: int, last_ms: int, step_ms: int = 15 * 60 * 1000) -> list[list]:
+        """币安 K 线原始格式（12 列），最后一根结束于 last_ms。"""
+        out = []
+        for i in range(n):
+            t = last_ms - (n - 1 - i) * step_ms
+            p = 30000.0 + i
+            out.append([t, str(p), str(p + 10), str(p - 10), str(p + 5), "100",
+                        t + step_ms - 1, "3000000", "500", "50", "1500000", "0"])
+        return out
+
+    def _boom(self, *_a, **_k):
+        raise OSError("network down")
+
+    def test_cycle_table_covers_minute_intervals(self):
+        # 缺项会 fallback 成 1 小时，把 5m 的翻页步长和缓存时效都算错
+        for iv, hours in (("1m", 1 / 60), ("3m", 3 / 60), ("5m", 5 / 60), ("15m", 0.25)):
+            self.assertAlmostEqual(self.data.INTERVAL_HOURS[iv], hours, places=6)
+            self.assertTrue(self.data.bars_per_year(iv) > 0)
+
+    def test_disk_ttl_is_half_bar_capped_at_3min(self):
+        self.assertEqual(self.data.kl_disk_ttl("1m"), 60.0)      # 半个 bar 太短，保底 60s
+        self.assertEqual(self.data.kl_disk_ttl("5m"), 150.0)
+        self.assertEqual(self.data.kl_disk_ttl("15m"), 180.0)    # 半个 bar=450s，封顶 180s
+        self.assertEqual(self.data.kl_disk_ttl("1h"), 180.0)
+
+    def test_cache_path_separates_exchange(self):
+        bn = self.data.kl_cache_path("ETHUSDT", "15m", 200, "binance")
+        ok = self.data.kl_cache_path("ETHUSDT", "15m", 200, "okx")
+        self.assertNotEqual(bn, ok)
+        self.assertIn(".binance", bn.name)
+        self.assertIn(".okx", ok.name)
+
+    def test_network_result_is_written_to_disk(self):
+        import time as _t
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        self.data._get = lambda *_a, **_k: self._rows(200, last)
+
+        df, src = self.data.fetch_klines("BTCUSDT", "15m", 200)
+        self.assertEqual(src, "binance-fapi")
+        path = self.data.kl_cache_path("BTCUSDT", "15m", 200, "binance")
+        self.assertTrue(path.exists())
+        fresh = self.data._read_kl_disk(path)
+        self.assertEqual(len(fresh), 200)
+        self.assertAlmostEqual(float(fresh["close"].iloc[-1]), float(df["close"].iloc[-1]))
+
+    def test_fresh_disk_hit_skips_network(self):
+        import time as _t
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        self.data._get = lambda *_a, **_k: self._rows(200, last)
+        self.data.fetch_klines("BTCUSDT", "15m", 200)   # 先写盘
+
+        self.data._KL_CACHE.clear()
+        self.data._get = self._boom                # 之后完全断网
+        df, src = self.data.fetch_klines("BTCUSDT", "15m", 200)
+        self.assertEqual(src, "disk-cache/binance")
+        self.assertEqual(len(df), 200)
+
+    def test_stale_disk_falls_back_to_network(self):
+        import os
+        import time as _t
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        self.data._get = lambda *_a, **_k: self._rows(200, last)
+        self.data.fetch_klines("BTCUSDT", "15m", 200)
+
+        # 把落盘时间推到 2 小时前：超过 180s 有效期，必须重拉
+        path = self.data.kl_cache_path("BTCUSDT", "15m", 200, "binance")
+        old = _t.time() - 2 * 3600
+        os.utime(path, (old, old))
+
+        self.data._KL_CACHE.clear()
+        self.data._get = self._boom
+        with self.assertRaises(self.data.DataError):
+            self.data.fetch_klines("BTCUSDT", "15m", 200)
+
+    def test_use_disk_false_always_hits_network(self):
+        import time as _t
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        self.data._get = lambda *_a, **_k: self._rows(200, last)
+        self.data.fetch_klines("BTCUSDT", "15m", 200)   # 盘里已经是新鲜的
+
+        self.data._KL_CACHE.clear()
+        self.data._get = self._boom
+        with self.assertRaises(self.data.DataError):
+            self.data.fetch_klines("BTCUSDT", "15m", 200, use_disk=False)
+
+    def test_truncated_disk_file_is_ignored(self):
+        import time as _t
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        path = self.data.kl_cache_path("BTCUSDT", "15m", 200, "binance")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.data._write_kl_disk(path, self.data._klines_frame(self._rows(20, last)))
+
+        self.data._get = self._boom   # 条数不足 limit-5，不会拿来充数
+        with self.assertRaises(self.data.DataError):
+            self.data.fetch_klines("BTCUSDT", "15m", 200)
+
+    def test_large_limit_is_not_persisted(self):
+        import time as _t
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        self.data._get = lambda *_a, **_k: self._rows(600, last)
+        df, _src = self.data.fetch_klines("BTCUSDT", "15m", 600)
+        self.assertEqual(len(df), 600)
+        self.assertFalse(self.data.kl_cache_path("BTCUSDT", "15m", 600, "binance").exists())
+
+    def test_corrupt_disk_file_is_ignored(self):
+        import time as _t
+
+        path = self.data.kl_cache_path("BTCUSDT", "15m", 200, "binance")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("not,a,valid\ncsv", encoding="utf-8")
+
+        last = int(_t.time() * 1000) // 900000 * 900000
+        self.data._get = lambda *_a, **_k: self._rows(200, last)
+        df, src = self.data.fetch_klines("BTCUSDT", "15m", 200)
+        self.assertEqual(src, "binance-fapi")   # 坏文件当没有，正常重拉
+        self.assertEqual(len(df), 200)
+
+
+class TestKlinePrewarm(unittest.TestCase):
+    """预热：主行情刷新后把 short_interval 的 K 线焐热，且必须节流、可关闭。"""
+
+    def _engine(self, **market):
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        opts = dict(
+            symbol="ETHUSDT", source="binance", short_interval="15m", short_bars=200,
+            klines_cache=True, klines_prewarm=True, cache_dir="data/cache",
+        )
+        opts.update(market)
+        e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(**opts))
+        e.state = {"exchange": "okx"}
+        e.lock = threading.RLock()
+        e._kl_prewarm_at = 0.0
+        e._kl_prewarm_busy = False
+        return e
+
+    def _patch(self, calls: list, done):
+        import cryptoagent.engine as engine_mod
+
+        orig = engine_mod.fetch_klines
+
+        def fake(symbol, interval, limit, prefer="binance", **kw):
+            calls.append({"symbol": symbol, "interval": interval, "limit": limit, "prefer": prefer})
+            done.set()
+            return None, "fake"
+
+        engine_mod.fetch_klines = fake
+        self.addCleanup(setattr, engine_mod, "fetch_klines", orig)
+
+    def test_prewarms_short_interval_on_current_exchange(self):
+        import threading
+
+        e = self._engine()
+        calls: list = []
+        done = threading.Event()
+        self._patch(calls, done)
+
+        e._prewarm_klines()
+        self.assertTrue(done.wait(2.0), "预热线程没跑起来")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["interval"], "15m")   # 跟 short_interval 走
+        self.assertEqual(calls[0]["limit"], 200)       # 跟 short_bars 走
+        self.assertEqual(calls[0]["prefer"], "okx")     # 跟当前交易所走，别预热币安
+
+    def test_throttled_within_ttl(self):
+        import threading
+
+        e = self._engine()
+        calls: list = []
+        done = threading.Event()
+        self._patch(calls, done)
+
+        e._prewarm_klines()
+        done.wait(2.0)
+        e._prewarm_klines()          # 立刻再来一次：应被节流挡住
+        self.assertEqual(len(calls), 1)
+
+    def test_disabled_by_config(self):
+        import threading
+
+        e = self._engine(klines_prewarm=False)
+        calls: list = []
+        done = threading.Event()
+        self._patch(calls, done)
+
+        e._prewarm_klines()
+        self.assertFalse(done.wait(0.3))
+        self.assertEqual(calls, [])
+
+    def test_skipped_for_synthetic_source(self):
+        import threading
+
+        e = self._engine(source="synthetic")
+        calls: list = []
+        done = threading.Event()
+        self._patch(calls, done)
+
+        e._prewarm_klines()
+        self.assertFalse(done.wait(0.3))
+        self.assertEqual(calls, [])
+
+
 class TestBinancePrecision(unittest.TestCase):
     """下单精度：优先用 exchangeInfo 的 tickSize/stepSize，拿不到时退回默认值。"""
 

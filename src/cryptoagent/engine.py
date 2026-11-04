@@ -20,7 +20,7 @@ from .agents.calibration import record_accuracy, summary as calibration_summary,
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
 from .agents.position_manager import explain_management, manage_position
 from .config import AppConfig
-from .data import load_market
+from .data import KL_INTERVALS, fetch_klines, kl_disk_ttl, load_market, set_kl_cache_dir
 from .derivatives import enrich_derivatives
 from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
 from .notify import get_notifier
@@ -73,6 +73,9 @@ class TradingEngine:
 
         self._auto_thread: threading.Thread | None = None
         self._auto_stop = threading.Event()
+        # 短周期 K 线预热节流：预热只是为了把盘缓存焐热，失败不影响任何决策
+        self._kl_prewarm_at = 0.0
+        self._kl_prewarm_busy = False
         self.auto_interval = int(self.state.get("auto", {}).get("interval_sec", 300))
         self.auto_execute = bool(self.state.get("auto", {}).get("execute", False))
         self._cycle_lock = threading.Lock()
@@ -140,6 +143,7 @@ class TradingEngine:
     # ------------------------------------------------------------------
     def refresh_data(self, force: bool = False) -> tuple[pd.DataFrame, str]:
         # 行情源跟着「当前选的交易所」走：选 OKX 就用 OKX 永续的 K 线
+        set_kl_cache_dir(getattr(self.cfg.market, "cache_dir", "data/cache"))
         df, src = load_market(
             self.cfg.market, force_download=force, prefer=self.state.get("exchange", "binance")
         )
@@ -154,7 +158,52 @@ class TradingEngine:
         with self.lock:
             self.df = df
             self.data_source = src
+        self._prewarm_klines()
         return df, src
+
+    def _prewarm_klines(self) -> None:
+        """后台预热短周期 K 线盘缓存（方案 A）。
+
+        决策里的中频突破信号、页面切 15m 图，走的都是 fetch_klines。没有预热时
+        它们只能现场打交易所：慢几百毫秒，而且哪次拉失败就静默退化成「无信号」。
+        这里在主行情刷新后顺手把 short_interval 的 K 线拉到盘里，之后两边都读本地。
+
+        三条纪律：
+        - 只在主行情刷新时触发，机会扫描（6 品种 × 4 请求）不预热；
+        - 按盘缓存有效期节流，不跟页面轮询抢带宽；
+        - 任何异常静默，预热失败不能影响决策。
+        """
+        mkt = self.cfg.market
+        if str(getattr(mkt, "source", "synthetic")) != "binance":
+            return
+        if not getattr(mkt, "klines_cache", True) or not getattr(mkt, "klines_prewarm", True):
+            return
+        interval = str(getattr(mkt, "short_interval", "5m") or "5m")
+        if interval not in KL_INTERVALS:
+            return
+        every = kl_disk_ttl(interval)
+        now = time.time()
+        with self.lock:
+            if self._kl_prewarm_busy or (now - self._kl_prewarm_at) < every:
+                return
+            self._kl_prewarm_busy = True
+            self._kl_prewarm_at = now
+
+        symbol = str(mkt.symbol)
+        bars = max(20, min(int(getattr(mkt, "short_bars", 200) or 200), 500))
+        exchange = self.state.get("exchange", "binance")
+
+        def _worker() -> None:
+            try:
+                # force 不设为 True：盘里还新鲜就直接跳过，不跟页面/决策抢同一份数据。
+                # 盘过期时它自己会走网络并覆盖，这就是「预热」的本意。
+                fetch_klines(symbol, interval, bars, prefer=exchange)
+            except Exception:  # noqa: BLE001 - 预热是旁路，失败只跳过本轮
+                pass
+            finally:
+                self._kl_prewarm_busy = False
+
+        threading.Thread(target=_worker, daemon=True, name="kl-prewarm").start()
 
     def reload_for_exchange(self) -> None:
         """切换交易所后把行情源也切过去：后台重拉，不卡住 HTTP 请求。"""
@@ -1070,6 +1119,7 @@ class TradingEngine:
             df, state=self.account_state(ref_price), debate_rounds=rounds, persist=False,
             exchange_max_leverage=ex_max, positions=self._positions_for_risk(ref_price),
             analyst_weights=aw, analyst_calibrated=calibrated,
+            exchange=self.state.get("exchange", "binance"),
         )
         self.last_decision = decision
 

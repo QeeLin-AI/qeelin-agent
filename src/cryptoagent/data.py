@@ -31,6 +31,11 @@ VISION = "https://data-api.binance.vision"   # 现货镜像（已弃用于决策
 GATE = "https://api.gateio.ws"
 
 INTERVAL_HOURS = {
+    # 分钟级周期必须写全：缺项会 fallback 成 1 小时，导致 Gate 翻页步长
+    # 和缓存时效都算错（5m 被当成 1h，一次跳掉 11 根 K 线）。
+    "1m": 1.0 / 60.0,
+    "3m": 3.0 / 60.0,
+    "5m": 5.0 / 60.0,
     "15m": 0.25,
     "30m": 0.5,
     "1h": 1.0,
@@ -512,19 +517,90 @@ LIVE_SOURCES = (
 )
 
 
-# 实时 K 线：页面切换 5m/15m/1h 时直接问交易所，不走本地 CSV（本地只有一种周期）
-_KL_CACHE: dict[tuple[str, str, int], tuple[float, pd.DataFrame, str]] = {}
+# 实时 K 线：页面切 5m/15m/1h、决策算中频突破都走这里。
+# 进程内缓存 → 落盘缓存 → 交易所三级取数（见下面的 KL_CACHE_DIR）。
+_KL_CACHE: dict[tuple[str, str, int, str], tuple[float, pd.DataFrame, str]] = {}
 KL_TTL = 15.0
 
 KL_INTERVALS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 
 
+# --------------------------------------------------------------------------
+# 短周期 K 线落盘缓存
+# --------------------------------------------------------------------------
+# 页面图表每 3 秒轮询一次、每轮决策都要算一次中频突破信号，两个场景都走
+# fetch_klines。进程内缓存只有 15 秒，跨 bar 后照样打交易所，进程重启更是
+# 一次不剩。这里把最近 N 根落成 CSV：
+#   · 同一根 bar 内直接读盘 → 零网络往返、毫秒级返回；
+#   · 跨 bar 后整段重拉一次并原子覆盖（一次请求，代价很小）；
+#   · 交易所分开存，切了交易所绝不会读到另一家的行情。
+# 有效期 = 半个 bar 周期，最长封顶 KL_DISK_TTL_MAX，保证最后一根不至于太旧。
+KL_CACHE_DIR = Path("data/cache/klines")
+KL_DISK_TTL_MAX = 180.0
+# 只有常规请求量才落盘：外部调用方传个 1000 根的一次性请求没必要占一个文件
+KL_DISK_MAX_LIMIT = 500
+
+
+def set_kl_cache_dir(cache_dir: str | Path) -> None:
+    """跟随 market.cache_dir，别把 K 线缓存散落在项目根。"""
+    global KL_CACHE_DIR
+    KL_CACHE_DIR = Path(cache_dir) / "klines"
+
+
+def kl_disk_ttl(interval: str) -> float:
+    """盘缓存有效期（秒）：距上一次写入的时长，半个 bar 周期、封顶 3 分钟、最少 60 秒。
+
+    注意不能用「最后一根 bar 的开盘时刻」来判新旧——15m 周期的当前那根可能
+    已经开盘 14 分钟，但它是 30 秒前才拉下来的，完全新鲜。
+    """
+    span = INTERVAL_HOURS.get(interval, 1.0) * 3600.0
+    return max(60.0, min(span * 0.5, KL_DISK_TTL_MAX))
+
+
+def kl_cache_path(symbol: str, interval: str, limit: int, prefer: str = "binance") -> Path:
+    """不同交易所的 K 线分开存，否则切交易所会读到另一家的旧价。"""
+    tag = "okx" if (prefer or "").lower() == "okx" else "binance"
+    return KL_CACHE_DIR / f"{symbol}_{interval}_{int(limit)}.{tag}.csv"
+
+
+def _read_kl_disk(path: Path) -> pd.DataFrame | None:
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
+        df.index = pd.to_datetime(df.index, utc=True)
+        df.index.name = "ts"
+        return df if not df.empty else None
+    except Exception:  # noqa: BLE001 - 缓存文件损坏/写了一半，当作没有缓存
+        return None
+
+
+def _write_kl_disk(path: Path, df: pd.DataFrame) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        df.to_csv(tmp)
+        tmp.replace(path)   # 原子替换：并发读到半截文件会解析失败，宁可不换
+    except Exception:  # noqa: BLE001 - 缓存写不进去不影响行情主流程
+        pass
+
+
 def fetch_klines(
-    symbol: str, interval: str = "5m", limit: int = 240, ttl: float = KL_TTL, prefer: str = "binance"
+    symbol: str,
+    interval: str = "5m",
+    limit: int = 240,
+    ttl: float = KL_TTL,
+    prefer: str = "binance",
+    use_disk: bool = True,
+    force: bool = False,
 ) -> tuple[pd.DataFrame, str]:
     """拉最近 N 根实时 K 线（含当前未收盘的那根）。返回 (df, 来源)。
 
-    缓存在进程内，TTL 默认 15 秒 —— 页面每 3 秒轮询一次，但不该每次都打交易所。
+    三级取数：进程内缓存（ttl，默认 15 秒）→ 落盘 CSV（半个 bar）→ 交易所。
+
+    - use_disk=False：跳过盘缓存，只走内存 + 网络。给「必须确认这家交易所
+      真的在线」的场景用（例如添加品种时的连通性校验）。
+    - force=True：两级缓存全跳过，强制刷新。给后台预热用。
     """
     interval = (interval or "5m").strip()
     if interval not in KL_INTERVALS:
@@ -533,17 +609,44 @@ def fetch_klines(
     prefer = (prefer or "binance").lower()
     key = (symbol, interval, limit, prefer)
     now = time.time()
-    hit = _KL_CACHE.get(key)
-    if hit and (now - hit[0]) < ttl:
-        return hit[1], hit[2]
+    disk_path = (
+        kl_cache_path(symbol, interval, limit, prefer)
+        if (use_disk and limit <= KL_DISK_MAX_LIMIT)
+        else None
+    )
+    tag = "okx" if prefer == "okx" else "binance"
+
+    def _ok(df: pd.DataFrame, src: str) -> tuple[pd.DataFrame, str]:
+        _KL_CACHE[key] = (now, df, src)
+        if disk_path is not None:
+            _write_kl_disk(disk_path, df)
+        return df, src
+
+    if not force:
+        hit = _KL_CACHE.get(key)
+        if hit and (now - hit[0]) < ttl:
+            return hit[1], hit[2]
+
+        if disk_path is not None:
+            cached = _read_kl_disk(disk_path)
+            # 条数对不上说明换了 limit 或上次只拉到一半，别拿去充数
+            if cached is not None and len(cached) >= max(20, limit - 5):
+                # 新鲜度看「文件写入时刻」（mtime 就是我们上次落盘的时间），
+                # 不是最后一根 bar 的开盘时刻，理由见 kl_disk_ttl 的说明。
+                try:
+                    fetched_at = disk_path.stat().st_mtime
+                except OSError:
+                    fetched_at = 0.0
+                if (now - fetched_at) < kl_disk_ttl(interval):
+                    _KL_CACHE[key] = (now, cached, f"disk-cache/{tag}")
+                    return cached, f"disk-cache/{tag}"
 
     errors: list[str] = []
     # 0) 选了 OKX → 先用 OKX 永续行情，和下单的交易所保持一致
     if prefer == "okx":
         try:
             df = _fetch_okx_recent(symbol, interval, limit)
-            _KL_CACHE[key] = (now, df, "okx-swap")
-            return df, "okx-swap"
+            return _ok(df, "okx-swap")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"okx: {type(exc).__name__} {str(exc)[:60]}")
 
@@ -557,8 +660,7 @@ def fetch_klines(
             )
             if rows:
                 df = _klines_frame(rows)
-                _KL_CACHE[key] = (now, df, "binance-fapi")
-                return df, "binance-fapi"
+                return _ok(df, "binance-fapi")
             errors.append("fapi: 空数据")
         except Exception as exc:  # noqa: BLE001
             _mark_dead(FAPI)
@@ -573,8 +675,7 @@ def fetch_klines(
         )
         if rows:
             df = _klines_frame(rows)
-            _KL_CACHE[key] = (now, df, "binance-fapi-demo")
-            return df, "binance-fapi-demo"
+            return _ok(df, "binance-fapi-demo")
         errors.append("demo-fapi: 空数据")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"demo-fapi: {type(exc).__name__} {str(exc)[:60]}")
@@ -595,8 +696,7 @@ def fetch_klines(
             df.columns = ["open", "high", "low", "close", "volume"]
             df = df.sort_index()
             _fill_extra_fields(df)
-            _KL_CACHE[key] = (now, df, "gate-futures")
-            return df, "gate-futures"
+            return _ok(df, "gate-futures")
         errors.append("gate: 空数据")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"gate: {type(exc).__name__} {str(exc)[:60]}")
