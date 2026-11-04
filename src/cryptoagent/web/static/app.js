@@ -1853,10 +1853,11 @@ $('armBtn').addEventListener('click', async () => {
       const d = await api('/api/exchange/keys', 'POST', { exchange: ex, mode: 'live', key, secret, passphrase: pass });
       if (!d.ok) { toast(`Key 校验失败：${d.error || '未知错误'}`, 'err'); return; }
     }
+    // 这个面板只负责真钱：testnet 显式传 false（服务端默认是 true，不传会静默进模拟盘）
     await api('/api/trading/arm', 'POST', {
       mode: 'live', exchange: ex,
       confirm: $('confirmText').value,
-      testnet: $('testnetChk').checked,
+      testnet: false,
     });
     toast(`${ex === 'okx' ? 'OKX' : '币安'}主网实盘已解锁（重启服务会自动回到模拟）`, 'ok');
     closeModePanels();
