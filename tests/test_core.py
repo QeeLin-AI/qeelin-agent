@@ -718,7 +718,23 @@ class TestRiskBudgetSizing(unittest.TestCase):
         d = RiskEngine(cfg).check(self._prop(), self._state(), 0.01, 0.5, exchange_max_leverage=20)
         self.assertTrue(d.approved)
         self.assertGreater(d.size_pct, 0.02)                       # 比模型给的大
-        self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, cfg.max_loss_per_trade_pct, places=3)
+        # 杠杆只降不升：仓位顶到保证金上限后，实际风险只会低于上限，绝不超
+        self.assertAlmostEqual(d.size_pct, cfg.max_position_pct, places=4)
+        self.assertLessEqual(d.size_pct * d.leverage * 0.015, cfg.max_loss_per_trade_pct + 1e-9)
+        self.assertLessEqual(d.leverage, 2.0)                      # 没有为了凑风险抬杠杆
+
+    def test_risk_mode_never_raises_leverage(self):
+        """紧止损也不许把杠杆抬上去凑单笔风险。"""
+        from cryptoagent.risk import RiskEngine
+
+        cfg = self._cfg(sizing_mode="risk", max_loss_per_trade_pct=0.05,
+                        max_position_pct=0.5, max_leverage=20)
+        d = RiskEngine(cfg).check(self._prop(lev=2.0, stop=0.005), self._state(),
+                                  0.01, 0.5, exchange_max_leverage=20)
+        self.assertTrue(d.approved)
+        self.assertLessEqual(d.leverage, 2.0)                      # 杠杆没被抬高
+        self.assertAlmostEqual(d.size_pct, cfg.max_position_pct, places=4)  # 仓位被保证金上限压住
+        self.assertLessEqual(d.size_pct * d.leverage * 0.005, 0.05 + 1e-9)
 
     def test_llm_mode_keeps_model_size(self):
         from cryptoagent.risk import RiskEngine
@@ -739,7 +755,9 @@ class TestRiskBudgetSizing(unittest.TestCase):
 
         cfg = self._cfg(sizing_mode="risk", max_loss_per_trade_pct=0.02)
         d = RiskEngine(cfg).check(self._prop(size=0.40), self._state(), 0.01, 0.5, exchange_max_leverage=20)
-        self.assertAlmostEqual(d.size_pct * d.leverage * 0.015, 0.02, places=3)
+        self.assertAlmostEqual(d.size_pct, cfg.max_position_pct, places=4)  # 重算并顶到保证金上限
+        self.assertLessEqual(d.size_pct * d.leverage * 0.015, 0.02 + 1e-9)  # 实际风险不超上限
+        self.assertLessEqual(d.leverage, 2.0)
 
     def test_min_leverage_floor(self):
         from cryptoagent.risk import RiskEngine

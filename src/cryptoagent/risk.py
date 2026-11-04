@@ -136,14 +136,9 @@ class RiskEngine:
         if mode == "risk" and stop > 0 and cfg.max_loss_per_trade_pct > 0:
             upstream_size = float(size)   # 交易员 / 因子 / 风控官共同给出的建议仓位
             target_ratio = cfg.max_loss_per_trade_pct / max(stop, 1e-4)   # 名义敞口 / 权益
-            # 保证金上限会限制仓位：必要时抬高杠杆来容纳同样的风险（风险不变，只省保证金）
-            if cfg.max_position_pct > 0:
-                lev_needed = target_ratio / cfg.max_position_pct
-                if lev_needed > lev:
-                    lev = min(lev_needed, cap)
-                    reasons.append(
-                        f"按风险上限 {cfg.max_loss_per_trade_pct:.1%} 需要 {lev:.2f}x，已上调杠杆"
-                    )
+            # 杠杆只降不升：以前为了让「单笔风险」凑满上限，会按 target/max_position_pct
+            # 自动抬高杠杆，紧止损时能把杠杆推到 20~30x（反向 3~4% 就接近强平）——风险
+            # 并没变，爆仓概率却成倍放大。现在宁可让实际风险低于上限，也不抬杠杆。
             size = target_ratio / lev if lev > 0 else 0.0
             reasons.append(
                 f"按风险上限反推：目标名义 {target_ratio:.2f}x 权益 → 仓位 {size:.1%} @ {lev:.2f}x"

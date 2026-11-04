@@ -1940,8 +1940,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/research/auto":
             return self._json({"ok": True, "data": app.set_research_auto(payload)})
         if path == "/api/trading/arm":
+            prev_exchange = eng.state.get("exchange")
             res = app.arm(payload)
             app.invalidate_exchange_cache()   # 刚解锁：总览页要立刻改读交易所
+            if eng.state.get("exchange") != prev_exchange:
+                # 换了交易所/账户：旧账户的权益曲线不能接在新账户上，否则
+                # 峰值还是旧账户的，会算出伪回撤（实例：4619 → 3000 显示 -35%）
+                app.reset_exchange_view()
             return self._json({"ok": True, "data": res})
         if path == "/api/trading/disarm":
             res = eng.disarm()

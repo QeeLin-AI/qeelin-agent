@@ -233,7 +233,9 @@ class TradingPipeline:
         else:
             adjusted["size_pct"] = float(adjusted.get("size_pct", 0.0)) * officer["size_multiplier"]
         sizing_trace.append({"step": "风控官", "size_pct": round(float(adjusted["size_pct"]), 6),
-                             "detail": f"{officer['verdict']} ×{officer['size_multiplier']:.2f}"})
+                             "detail": f"{officer['verdict']} ×{officer['size_multiplier']:.2f}"
+                                       + ("（risk 模式：不参与最终仓位）"
+                                          if self.cfg.risk.sizing_mode == "risk" else "")})
 
         decision = self.risk.check(
             adjusted,

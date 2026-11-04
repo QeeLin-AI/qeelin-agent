@@ -215,7 +215,7 @@ python run.py web --host 127.0.0.1 --port 8000
 | `min_leverage` | 1 | 杠杆下限，模型偏保守时的托底（1 = 不干预） |
 | `sizing_mode` | `llm` | 仓位怎么定：`llm` 听交易员 / `risk` 按单笔风险上限反推 |
 | `max_position_pct` | 0.8 | 单笔最大保证金占用（占权益） |
-| `max_loss_per_trade_pct` | 0.05 | 单笔最大亏损（按仓位 × 杠杆 × 止损计算） |
+| `max_loss_per_trade_pct` | 0.02 | 单笔最大亏损（按仓位 × 杠杆 × 止损计算） |
 | `daily_loss_limit_pct` | 0.05 | 单日亏损上限，触发后停止开仓 |
 | `max_drawdown_pct` | 0.2 | 最大回撤上限 |
 | `min_confidence` | 0.45 | 低于该置信度直接放弃 |

@@ -244,10 +244,12 @@ class TradingEngine:
         price = price if price is not None else self.price()
         live = self._live_equity()
         if live is not None:
-            # 内部账本还停在模拟期量级（如 10000 vs 实盘 4997）时先对齐，
-            # 否则会按幻影本金放大仓位、并算出伪回撤直接触发熔断。
-            peak = float(self.state.get("peak_equity") or 0.0)
-            if peak <= 0 or abs(peak - live) / live > 0.5:
+            # 只有「内部账本与交易所余额量级不符」时才对齐（如模拟期 10000 vs 实盘 4997，
+            # 或切换了交易所/账户）。
+            # 注意：不能拿 peak 与 live 比 —— 那样真实回撤超过 33%（peak/live > 1.5）就会
+            # 把峰值重置成当前权益，回撤瞬间归零，max_drawdown_pct 熔断永远触发不了。
+            ledger = float(self.state.get("equity") or 0.0)
+            if ledger <= 0 or abs(ledger - live) / live > 0.5:
                 self._rebase_ledger(live)
             equity = live
         else:
@@ -307,6 +309,31 @@ class TradingEngine:
             self.state["day"] = _today()
             self.state["live_baseline_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             self._live_eq_cache = (float(equity), time.time())
+            self._save()
+
+    def _reset_account_scope(self, acct: dict | None = None) -> None:
+        """切换交易所/账户后重置「账户级」状态。
+
+        peak_equity / day_start_equity / consecutive_losses 都是绑定在某个账户上的：
+        换了账户还沿用旧值，会得到「旧账户峰值 vs 新账户余额」的伪回撤，以及旧账户
+        留下的伪连亏（会一路写进风控官提示词并压低仓位）。
+        position_history 属于审计流水，保留不动。
+        """
+        equity: float | None = None
+        if acct:
+            try:
+                equity = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+            except (TypeError, ValueError):
+                equity = None
+        with self.lock:
+            if equity and equity > 0:
+                self.state["equity"] = float(equity)
+                self.state["peak_equity"] = float(equity)
+                self.state["day_start_equity"] = float(equity)
+                self.state["day"] = _today()
+            self.state["consecutive_losses"] = 0
+            self.state["live_baseline_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._live_eq_cache = None
             self._save()
 
     def _live_fill(self, symbol: str, order_id: str) -> dict | None:
@@ -497,6 +524,7 @@ class TradingEngine:
             self.state["exchange"] = exchange
             self._save()
             if prev_exchange != exchange:
+                self._reset_account_scope(acct)
                 self.reload_for_exchange()
             return {
                 "mode": "testnet",
@@ -515,13 +543,14 @@ class TradingEngine:
         client = self.connect(testnet=testnet, exchange=exchange)
         client.armed = True
         client.ping()
-        client.account()  # 验证签名
+        acct = client.account()  # 验证签名
         self.armed = True
         self.state["mode"] = "live"
         self.state["testnet"] = testnet
         self.state["exchange"] = exchange
         self._save()
         if prev_exchange != exchange:
+            self._reset_account_scope(acct)
             self.reload_for_exchange()
         return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
@@ -758,7 +787,13 @@ class TradingEngine:
         return dict(self.scan_state)
 
     def _pick_best_symbol(self, min_score: float | None = None) -> str | None:
-        """自主选品种：扫全品种，返回机会分最大且超阈值的品种（无则 None）。"""
+        """自主选品种：扫全品种，返回机会分最大且超阈值的品种。
+
+        全部低于阈值时不再「原地不动」——否则会一直死守当前品种（可能还是评分最低
+        的那个），每次决策都在最弱的信号上打转。此时退而求其次切到相对最强品种，
+        但要求它明显优于当前品种（分差 ≥ 0.02），并加 30 分钟冷却，避免弱机会区间
+        反复横跳。
+        """
         threshold = float(min_score if min_score is not None else self.cfg.market.rotate_min_score)
         # 5 分钟内的扫描结果直接复用：自动轮动每轮都扫一遍会和页面扫描重复，白烧 CPU
         fresh = (time.time() - float(self.scan_state.get("last_ts") or 0.0)) < 300.0
@@ -766,8 +801,25 @@ class TradingEngine:
         if not rows:
             return None
         top = rows[0]
-        if top.get("error") or (top["score"] or 0) < threshold:
+        if top.get("error"):
             return None
+        score = float(top.get("score") or 0.0)
+        if score >= threshold:
+            return top["symbol"]
+
+        # —— 全体弱机会：切到相对最强，但要「明显更好」且限频 ——
+        current = str(self.cfg.market.symbol or "")
+        if top["symbol"] == current:
+            return None
+        cur_score = next(
+            (float(r.get("score") or 0.0) for r in rows if r.get("symbol") == current), 0.0
+        )
+        if score - cur_score < 0.02:
+            return None
+        now = time.time()
+        if now - float(getattr(self, "_last_fallback_rotate_at", 0.0)) < 1800.0:
+            return None
+        self._last_fallback_rotate_at = now
         return top["symbol"]
 
     # ------------------------------------------------------------------

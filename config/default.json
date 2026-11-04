@@ -36,7 +36,7 @@
     "max_leverage": 20.0,
     "leverage_override": 0.0,
     "max_position_pct": 0.8,
-    "max_loss_per_trade_pct": 0.05,
+    "max_loss_per_trade_pct": 0.02,
     "daily_loss_limit_pct": 0.05,
     "max_drawdown_pct": 0.2,
     "min_confidence": 0.45,
