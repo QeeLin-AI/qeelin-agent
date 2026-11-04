@@ -15,6 +15,12 @@ const fmtQty = (n) => {
   return fmt(n, v >= 1000 ? 2 : v >= 1 ? 4 : 6);
 };
 const pct = (n) => (n === null || n === undefined) ? '--' : `${n >= 0 ? '+' : ''}${Number(n).toFixed(2)}%`;
+// 日历格子的窄屏版本：手机上一格只有约 42px，必须去掉千分位并按量级降精度，
+// 否则 "+1,024.55" 会把所在列撑宽，同一行 7 个格子就变成七种宽度
+const fmtCalShort = (n) => {
+  const a = Math.abs(Number(n) || 0);
+  return `${n >= 0 ? '+' : '-'}${a.toFixed(a >= 100 ? 0 : 1)}`;
+};
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // 持仓方向中文：多 / 空（保留英文便于对照）
 const sideCn = (s) => (s === 'LONG' ? '多' : s === 'SHORT' ? '空' : (s || ''));
@@ -1566,7 +1572,9 @@ function renderDaily() {
       else if (pnl < 0) losses += 1;
       // 不再铺底色，只用红绿数字表示盈亏，画面更干净
       cls += pnl >= 0 ? ' up' : ' down';
-      label = `<span class="v">${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)}</span>`;
+      // 宽屏用完整数值，窄屏换成紧凑写法，由 CSS 决定显示哪一个
+      label = `<span class="v v-full">${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)}</span>`
+        + `<span class="v v-sm">${fmtCalShort(pnl)}</span>`;
       tip = `${key} · ${rec.trades} 笔（胜 ${rec.wins}）· ${pnl >= 0 ? '+' : ''}${fmt(pnl, 2)} U`;
     }
     if (key === todayKey) cls += ' today';
@@ -1741,15 +1749,16 @@ function renderResearch(r, announce = false) {
   }
   const tb = $('researchTable').querySelector('tbody');
   if (!rows.length) { tb.innerHTML = '<tr><td colspan="7" class="muted center">没有结果</td></tr>'; return; }
+  // data-label 供窄屏卡片式布局用（thead 隐藏后由 ::before 还原字段名）
   tb.innerHTML = rows.map((x) => {
-    if (!x.ok) return `<tr><td>${esc(x.name)}</td><td>${esc(x.family)}</td><td colspan="4" class="muted">${esc(x.error)}</td><td class="down">失败</td></tr>`;
+    if (!x.ok) return `<tr><td class="cell-name" data-label="因子">${esc(x.name)}</td><td data-label="家族">${esc(x.family)}</td><td colspan="4" class="muted" data-label="错误">${esc(x.error)}</td><td class="down" data-label="结论">失败</td></tr>`;
     const cls = x.accepted ? 'up' : 'down';
     return `<tr>
-      <td class="mono">${esc(x.name)}</td><td class="muted">${esc(x.family)}</td>
-      <td>${x.is_sharpe.toFixed(2)}</td><td>${x.oos_sharpe.toFixed(2)}</td>
-      <td class="${x.oos_dd <= -20 ? 'down' : ''}">${x.oos_dd.toFixed(1)}%</td>
-      <td>${x.score === null ? '--' : x.score.toFixed(2)}</td>
-      <td class="${cls}">${x.accepted ? '通过' : esc(x.reject || '淘汰')}</td></tr>`;
+      <td class="mono cell-name" data-label="因子">${esc(x.name)}</td><td class="muted" data-label="家族">${esc(x.family)}</td>
+      <td data-label="IS 夏普">${x.is_sharpe.toFixed(2)}</td><td data-label="OOS 夏普">${x.oos_sharpe.toFixed(2)}</td>
+      <td data-label="OOS 回撤" class="${x.oos_dd <= -20 ? 'down' : ''}">${x.oos_dd.toFixed(1)}%</td>
+      <td data-label="评分">${x.score === null ? '--' : x.score.toFixed(2)}</td>
+      <td data-label="结论" class="${cls}">${x.accepted ? '通过' : esc(x.reject || '淘汰')}</td></tr>`;
   }).join('');
   if (announce && r.holdout && r.best) {
     toast(`最优因子 ${r.best.name} 留出集夏普 ${Number(r.holdout.sharpe).toFixed(2)}`, 'ok');
@@ -2295,7 +2304,15 @@ function applyTheme(mode) {
   const light = mode === 'light';
   document.documentElement.dataset.theme = light ? 'light' : 'dark';
   const btn = $('themeBtn');
-  if (btn) btn.textContent = light ? '🌙 暗色主题' : '☀ 亮色主题';
+  if (btn) {
+    // 图标与文字分开存：窄屏只留图标，改 textContent 会把图标一起抹掉
+    const ico = btn.querySelector('.theme-ico');
+    const txt = btn.querySelector('.theme-text');
+    if (ico) ico.textContent = light ? '🌙' : '☀';
+    if (txt) txt.textContent = light ? '暗色主题' : '亮色主题';
+    btn.title = light ? '切换到暗色主题' : '切换到亮色主题';
+    btn.setAttribute('aria-label', btn.title);
+  }
 }
 // 有本地偏好就听本地；没有则尊重 <html data-theme>（默认暗色）
 let savedTheme = null;

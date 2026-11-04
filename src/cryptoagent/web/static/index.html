@@ -59,7 +59,7 @@
 
   <div class="side-foot">
     <div class="side-foot-note">QeeLin-Agent Console</div>
-    <button id="themeBtn" class="btn ghost sm">☀ 亮色主题</button>
+    <button id="themeBtn" class="btn ghost sm theme-btn" title="切换亮色 / 暗色主题" aria-label="切换亮色 / 暗色主题"><span class="theme-ico" aria-hidden="true">☀</span><span class="theme-text">亮色主题</span></button>
   </div>
 </aside>
 
@@ -219,10 +219,12 @@
       </div>
       <p class="muted">对 <code>config/default.json</code> 里 <code>market.symbols</code> 的每个品种各跑一次完整决策（用各品种自己的数据），
         只给结论不下单。没缓存的品种会先自动下载。</p>
-      <table class="table" id="scanTable">
-        <thead><tr><th>品种</th><th>最新价</th><th>方向</th><th>仓位</th><th>杠杆</th><th>风控</th><th>理由</th></tr></thead>
-        <tbody><tr><td colspan="7" class="muted center">还没扫描</td></tr></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="table" id="scanTable">
+          <thead><tr><th>品种</th><th>最新价</th><th>方向</th><th>仓位</th><th>杠杆</th><th>风控</th><th>理由</th></tr></thead>
+          <tbody><tr><td colspan="7" class="muted center">还没扫描</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
     <div id="decisionBody" class="decision-body empty">还没有运行决策。点击右上角「运行决策」。</div>
@@ -258,10 +260,12 @@
     </div>
     <div class="card">
       <div class="card-head"><h2>排行榜</h2><span id="researchMeta" class="muted"></span></div>
-      <table class="table" id="researchTable">
-        <thead><tr><th>因子</th><th>家族</th><th>IS夏普</th><th>OOS夏普</th><th>OOS回撤</th><th>评分</th><th>结论</th></tr></thead>
-        <tbody><tr><td colspan="7" class="muted center">尚未运行</td></tr></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="table research-table" id="researchTable">
+          <thead><tr><th>因子</th><th>家族</th><th>IS夏普</th><th>OOS夏普</th><th>OOS回撤</th><th>评分</th><th>结论</th></tr></thead>
+          <tbody><tr><td colspan="7" class="muted center">尚未运行</td></tr></tbody>
+        </table>
+      </div>
     </div>
     <div class="card hidden" id="bestCard">
       <div class="card-head"><h2>冠军因子</h2><span id="bestMeta" class="muted"></span></div>

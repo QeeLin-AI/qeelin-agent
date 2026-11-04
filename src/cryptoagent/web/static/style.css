@@ -197,6 +197,8 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
 .side-foot { padding: 14px 14px 17px; border-top: 1px solid var(--border-soft); }
 .side-foot-note { font-size: 10.5px; color: var(--faint); margin-bottom: 10px; letter-spacing: .02em; }
 .side-foot .btn { width: 100%; }
+.theme-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.theme-btn .theme-ico { font-size: 13px; line-height: 1; }
 
 /* ---------------------------------------------------------------- 顶栏 */
 .topbar {
@@ -524,19 +526,23 @@ label.field > input, label.field > select { max-width: 420px; }
 .pnl-val { font-size: 12.5px; text-align: right; font-weight: 600; white-space: nowrap; }
 
 /* 日历热力 */
-.cal-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 14px; }
+.cal-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 14px; flex-wrap: wrap; }
 .cal-month { font-weight: 650; font-size: 13px; }
 .cal-head #calSummary { margin-left: 6px; font-size: 11.5px; }
-.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+/* minmax(0, 1fr)：纯 1fr 的最小值是 auto，格子里的 "+1,024.55" 会把所在列撑宽，
+   同一行 7 个格子就变成七种宽度 —— 必须显式允许收缩到 0 */
+.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .cal-weekdays { margin-bottom: 7px; font-size: 10px; font-weight: 700; color: var(--faint); text-align: center; letter-spacing: .08em; }
 .cal-cell {
   min-height: 52px; padding: 6px 8px; border-radius: 8px;
   border: 1px solid var(--border-soft); background: var(--surface-2);
   display: flex; flex-direction: column; justify-content: space-between;
   font-variant-numeric: tabular-nums;
+  min-width: 0; overflow: hidden;
 }
 .cal-cell .d { font-size: 10.5px; color: var(--faint); }
-.cal-cell .v { font-size: 11px; font-weight: 650; }
+.cal-cell .v { font-size: 11px; font-weight: 650; white-space: nowrap; }
+.cal-cell .v-sm { display: none; }
 .cal-cell.up { background: rgba(242, 99, 111, .10); border-color: rgba(242, 99, 111, .26); }
 .cal-cell.down { background: rgba(47, 192, 138, .10); border-color: rgba(47, 192, 138, .26); }
 .cal-cell.up .v { color: var(--up); }
@@ -951,6 +957,10 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .side-foot { padding: 0 0 0 10px; border: 0; border-left: 1px solid var(--border-soft); }
   .side-foot-note { display: none; }
   .side-foot .btn { width: auto; }
+  /* 手机端顶部横向导航寸土寸金：主题按钮只留日月图标，把宽度还给主菜单 */
+  .side-foot .theme-btn { width: 30px; padding: 0; gap: 0; flex: none; }
+  .side-foot .theme-btn .theme-text { display: none; }
+  .side-foot .theme-btn .theme-ico { font-size: 14px; }
   main { padding: 22px 18px 70px; }
   .topbar { padding: 10px 18px; }
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }
@@ -970,12 +980,59 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .fb-row { grid-template-columns: 100px minmax(0, 1fr) 56px; }
   .set-row { flex-wrap: wrap; gap: 6px; }
   .set-row > .row-label { flex-basis: 100%; }
+
+  /* 日历：390px 下每格只有约 42px，数值降精度 + 缩小内边距才放得下 */
+  .cal-head { row-gap: 8px; }
+  .cal-head #calSummary { flex-basis: 100%; margin-left: 0; }
+  .cal-weekdays, .cal-grid { gap: 4px; }
+  .cal-weekdays { font-size: 9.5px; letter-spacing: .04em; }
+  .cal-cell { min-height: 44px; padding: 5px 4px; border-radius: 6px; }
+  .cal-cell .d { font-size: 9.5px; }
+  .cal-cell .v { font-size: 9.5px; letter-spacing: -.01em; }
+  .cal-cell .v-full { display: none; }
+  .cal-cell .v-sm { display: block; }
+
+  /* 研究排行榜：7 列在手机上无论怎么压都会横向溢出，改为每行一张小卡片 */
+  .research-table thead { display: none; }
+  .research-table, .research-table tbody, .research-table tr, .research-table td { display: block; width: 100%; }
+  .research-table tr {
+    border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-2);
+    padding: 12px 14px; margin-bottom: 10px;
+  }
+  .research-table tr:last-child { margin-bottom: 0; }
+  .research-table td {
+    border: 0; padding: 4px 0; text-align: right; white-space: normal;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  }
+  .research-table td::before {
+    content: attr(data-label); flex: none; color: var(--faint);
+    font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  }
+  .research-table td.cell-name {
+    display: block; text-align: left; white-space: normal; overflow-wrap: anywhere;
+    font-size: 13px; font-weight: 650; padding: 0 0 9px; margin-bottom: 8px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .research-table td.cell-name::before { display: none; }
+  .research-table tbody tr:hover td { background: transparent; }
 }
 @media (max-width: 520px) {
   .stat-row { grid-template-columns: 1fr; }
   .tb-context, .tb-sep { display: none; }
   .price { font-size: 17px; }
   .top-right .tag { display: none; }
+  /* 手机竖屏宽度全给导航：品牌只留 LOGO，导航去掉装饰图标，5 个入口一屏放完 */
+  .side-brand { padding-right: 10px; }
+  .side-brand .side-brand-text { display: none; }
+  .side-scroll { gap: 6px; }
+  .tab { padding: 7px 8px; gap: 0; }
+  .tab .nav-ico { display: none; }
+  .side-foot { padding-left: 8px; }
+}
+@media (max-width: 380px) {
+  /* 360px 级别的窄屏：再把标签内边距和字号压一档，保证 5 个入口不出现横向滚动 */
+  .side-brand { padding-right: 8px; }
+  .tab { padding: 7px 6px; font-size: 12.5px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
