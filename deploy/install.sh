@@ -9,6 +9,9 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/crypto-agent}"
 SERVICE_USER="${SERVICE_USER:-cryptotrader}"
+# systemd 服务名跟着对外品牌走（QeeLin-Agent）；Python 包名仍是 cryptoagent，
+# 改包名要动全仓 import 与部署路径，所以 ExecStart 里保持 -m cryptoagent。
+SERVICE_NAME="${SERVICE_NAME:-qeelin-agent}"
 # 服务账号是 nologin 的（不需要、也不允许 SSH 登录），
 # 开隧道要用你自己的 sudo 账号或 root，否则 ssh 会直接被 nologin 拒掉。
 OPS_USER="${OPS_USER:-${SUDO_USER:-root}}"
@@ -73,31 +76,33 @@ else
 fi
 
 log "7/7 安装并启动 systemd 服务"
-install -m 644 "$APP_DIR/deploy/cryptoagent.service" /etc/systemd/system/cryptoagent.service
+install -m 644 "$APP_DIR/deploy/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
 systemctl daemon-reload
-systemctl enable --now cryptoagent
+systemctl enable --now "${SERVICE_NAME}"
 sleep 2
-systemctl --no-pager --lines=8 status cryptoagent || true
+systemctl --no-pager --lines=8 status "${SERVICE_NAME}" || true
 
 TOKEN_VAL="$(grep CRYPTOAGENT_WEB_TOKEN "$ENV_FILE" | cut -d= -f2)"
 cat <<EOF
 
-部署完成。控制台只监听 127.0.0.1，在你自己电脑上开隧道访问：
+部署完成。unit 默认监听 0.0.0.0:8000，两种访问方式任选：
 
-  ssh -N -L 8000:127.0.0.1:8000 ${OPS_USER}@<VPS_IP>
+A. 公网直连（手机 / 任意浏览器都能开，需先在轻量控制台放行 8000 端口）
+   http://<VPS_IP>:8000/?token=${TOKEN_VAL}
 
-然后本机浏览器（Windows/Mac 都行，不需要服务器有桌面）：
+B. SSH 隧道（不放行端口，只在自己电脑上用，不需要服务器有桌面）
+   ssh -N -L 8000:127.0.0.1:8000 ${OPS_USER}@<VPS_IP>
+   然后浏览器打开 http://127.0.0.1:8000/?token=${TOKEN_VAL}
 
-  http://127.0.0.1:8000/?token=${TOKEN_VAL}
+令牌就是密码：链接发出去等于控制台送出去。绑定非回环地址时，代码在缺少
+CRYPTOAGENT_WEB_TOKEN 的情况下会直接拒绝启动，不会出现裸奔控制台。
 
 注意：${SERVICE_USER} 是 nologin 服务账号，只能 sudo -u 运行程序，不能用来 SSH。
-想直接公网访问（和原来一样开浏览器输网址）：把 unit 里的 --host 改成 0.0.0.0，
-再到轻量控制台放行 8000 端口即可；令牌已生成，代码会强制校验。
 
 常用命令：
-  systemctl status cryptoagent        # 看状态
-  journalctl -u cryptoagent -f        # 看日志
-  systemctl restart cryptoagent       # 改完 .env 重启
+  systemctl status ${SERVICE_NAME}      # 看状态（旧名 cryptoagent 仍可用）
+  journalctl -u ${SERVICE_NAME} -f      # 看日志
+  systemctl restart ${SERVICE_NAME}     # 改完 .env 重启
   sudo -u ${SERVICE_USER} ${APP_DIR}/.venv/bin/python -m cryptoagent netcheck
   sudo -u ${SERVICE_USER} ${APP_DIR}/.venv/bin/python -m cryptoagent llmtest
 

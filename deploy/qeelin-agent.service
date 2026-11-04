@@ -1,5 +1,5 @@
 [Unit]
-Description=crypto-agent 永续合约研究/交易控制台
+Description=QeeLin-Agent 永续合约研究/交易控制台
 Documentation=file:/opt/crypto-agent/README.md
 After=network-online.target
 Wants=network-online.target
@@ -44,7 +44,11 @@ LockPersonality=true
 # 实盘 Key 只在这个文件里，权限 600
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=cryptoagent
+SyslogIdentifier=qeelin-agent
 
 [Install]
 WantedBy=multi-user.target
+# 兼容旧名：老机器上 `systemctl restart cryptoagent` / `journalctl -u cryptoagent`
+# 仍然可用（Alias 由 enable 生成软链，不占独立 unit 文件）。
+# 注意 [Install] 里的 Alias 只有重新 enable 一次才生效。
+Alias=cryptoagent.service
