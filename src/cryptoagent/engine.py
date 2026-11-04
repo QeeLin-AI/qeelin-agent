@@ -398,7 +398,13 @@ class TradingEngine:
             return cached[0]
         try:
             interval = str(getattr(self.cfg.market, "short_interval", "5m") or "5m")
-            df = fetch_klines(sym, interval, 5, prefer=self.state.get("exchange", "binance"))
+            # fetch_klines 返回 (df, 来源)；漏了这一步解包，df 会是个 tuple，
+            # df["close"] 直接 TypeError —— 非活跃品种从此永远取不到价：
+            # 标记价冻结在旧值、持仓管理员每轮都报「取不到最新价」、
+            # 非当前品种的止损检查也一并失效。多品种下这是致命的。
+            df, _src = fetch_klines(sym, interval, 5, prefer=self.state.get("exchange", "binance"))
+            if df is None or not len(df):
+                return 0.0
             px = float(df["close"].iloc[-1])
         except Exception:  # noqa: BLE001 - 单个品种取价失败不影响其它仓位
             return 0.0
@@ -423,7 +429,9 @@ class TradingEngine:
             return cached[0]
         try:
             interval = str(getattr(self.cfg.market, "short_interval", "5m") or "5m")
-            df = fetch_klines(sym, interval, 200, prefer=self.state.get("exchange", "binance"))
+            # 同 _quote_for：必须解包 (df, 来源)，否则拿到的是 tuple，
+            # 下面的 len(df) 恒为 2，会把一个 tuple 当 K 线喂给持仓管理员。
+            df, _src = fetch_klines(sym, interval, 200, prefer=self.state.get("exchange", "binance"))
         except Exception:  # noqa: BLE001 - 拿不到就退化成「本轮不管理」
             return None
         if df is not None and len(df):
@@ -969,6 +977,15 @@ class TradingEngine:
             self._sync_position_view()
             self._save()
         df, src = self.refresh_data()
+        # 切完之后，原持仓品种就成了「非活跃品种」，它的行情不再由 self.df 提供，
+        # 只靠 _last_prices。这里立刻补一次报价，否则页面上的标记价会显示 --，
+        # 直到守护线程下一轮（最长 30 秒）才恢复。
+        for sym in list(self._positions_map()):
+            if sym != symbol:
+                try:
+                    self._quote_for(sym, ttl=0.0)
+                except Exception:  # noqa: BLE001 - 补价失败不影响切换本身
+                    pass
         return {
             "symbol": symbol,
             "changed": True,

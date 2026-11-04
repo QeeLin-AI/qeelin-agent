@@ -92,6 +92,25 @@ document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
 });
 
+// 多仓时点总览的「持仓」卡 → 跳到交易页并定位到持仓表。
+// 单仓不响应：那一档已经把方向和开仓价都写在卡上了，没有「明细」可看，
+// 让整张卡可点反而会变成误触。
+document.getElementById('posCard')?.addEventListener('click', () => {
+  const list = (lastStatus && Array.isArray(lastStatus.positions)) ? lastStatus.positions : [];
+  if (list.length < 2) return;
+  showTab('trading');
+  const tbl = document.getElementById('posTable');
+  if (!tbl) return;
+  // 等一帧再滚：panel 刚从 display:none 变 block，同一帧里量到的位置不准
+  requestAnimationFrame(() => {
+    tbl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    tbl.classList.remove('flash');
+    void tbl.offsetWidth;          // 强制重排，否则同一张表连续点两次不会重放动画
+    tbl.classList.add('flash');
+    setTimeout(() => tbl.classList.remove('flash'), 1800);
+  });
+});
+
 /* ---------------- 状态轮询 ---------------- */
 async function poll() {
   try {
@@ -1213,19 +1232,40 @@ function renderStatus(s) {
   posChip.classList.toggle('hidden', !exOk);
   if (exOk) posChip.textContent = '交易所';
 
-  // 多品种：总览卡只显示「当前品种」或「N 个持仓」的汇总，明细在持仓页
+  // 总览卡只有一行大字的位置，按持仓数量分两档，避免挤：
+  //  · 单仓 —— 大字放「方向 数量」，品种名挂在标题旁（原来只有方向+数量，看不出是哪个品种）
+  //  · 多仓 —— 大字放「合计浮盈亏」，品种数量挂在标题旁，明细统一去交易页看；
+  //            整张卡可点，点一下直接跳到交易页的持仓表
   const posAll = Array.isArray(s.positions) ? s.positions : (s.position ? [s.position] : []);
+  const posCard = $('posCard');
+  const posSym = $('posSym');
+  const shortSym = (v) => String(v || '').replace(/USDT$/, '');
   if (posAll.length) {
     const p = s.position || posAll[0];
+    // 有仓位还没报价时合计会偏小，用 known 标记并在数字后加 *，别让残缺合计数冒充真值
+    const known = posAll.every((x) => x.unrealized != null);
     const totalUnreal = posAll.reduce(
       (a, x) => a + (x.unrealized == null ? 0 : Number(x.unrealized)), 0);
     if (posAll.length === 1) {
-      $('position').textContent = `${sideCn(p.side)} ${fmt(p.qty, 4)}`;
+      // 数量按量级取精度：144.4000 这种在 26px 下会把卡片撑满，
+      // 144.40 / 14440 / 0.0432 才是人真正想看的位数
+      const q = Math.abs(Number(p.qty) || 0);
+      const qtyTxt = q >= 1000 ? fmt(p.qty, 0) : q >= 1 ? fmt(p.qty, 2) : fmt(p.qty, 4);
+      $('position').textContent = `${sideCn(p.side)} ${qtyTxt}`;
       $('position').className = p.side === 'LONG' ? 'up' : 'down';
+      posSym.textContent = shortSym(p.symbol || s.symbol) || '—';
     } else {
-      $('position').textContent = `${posAll.length} 个持仓`;
-      $('position').className = '';
+      $('position').textContent =
+        `${totalUnreal >= 0 ? '+' : ''}${fmt(totalUnreal)}${known ? '' : '*'}`;
+      $('position').className = totalUnreal >= 0 ? 'up' : 'down';
+      posSym.textContent = `${posAll.length} 个品种`;
     }
+    posSym.title = posAll.length === 1
+      ? String(p.symbol || s.symbol || '')
+      : posAll.map((x) => x.symbol).join(' / ');
+    posSym.classList.remove('hidden');
+    posCard.classList.toggle('clickable', posAll.length > 1);
+    posCard.title = posAll.length > 1 ? '点击查看持仓明细' : '';
     // 持仓管理员的常态是 hold——不产生任何动作，而「持仓管理员」卡片只在真改止损/
     // 平仓时才出现，于是页面上长期看不到它在工作。这里把「上一轮巡检」常态化显示：
     // 状态点 + 高亮时间戳徽标 + 距今秒数。守护线程 30 秒一轮，秒数不涨即说明停了。
@@ -1251,15 +1291,21 @@ function renderStatus(s) {
         + `<i class="pm-dot"></i>巡检 <span class="pm-time">${esc(at)}</span>`
         + ` <span class="pm-age">${age}s 前</span> · ${tail}</span>`;
     }
+    // 合计已经放在大字里了，这行只报「哪几个品种」，超过 3 个折成 +N，不再拼一遍盈亏
     const head = posAll.length === 1
       ? `开仓 ${esc(fmtPx(p.entry))} · 浮盈亏 ${esc(fmt(p.unrealized))}`
-      : `${esc(posAll.map((x) => String(x.symbol || '').replace(/USDT$/, '')).join(' / '))}`
-        + ` · 合计 ${esc(fmt(totalUnreal))}`;
+      : posAll.slice(0, 3).map((x) => esc(shortSym(x.symbol))).join(' / ')
+        + (posAll.length > 3 ? ` +${posAll.length - 3}` : '')
+        + (known ? '' : ' · 部分待报价');
     $('posSub').innerHTML = `${head}<br>${guardLine}`;
   } else {
     $('position').textContent = '空仓';
     $('position').className = '';
     $('posSub').textContent = '';
+    posSym.classList.add('hidden');
+    posSym.textContent = '';
+    posCard.classList.remove('clickable');
+    posCard.title = '';
   }
 
   // 成交表

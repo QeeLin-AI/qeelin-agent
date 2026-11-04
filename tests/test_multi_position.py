@@ -250,5 +250,54 @@ class TestMultiPositionRiskGate(unittest.TestCase):
         self.assertTrue(d.approved)
 
 
+class TestQuoteFetchUnpack(unittest.TestCase):
+    """fetch_klines 返回的是 (df, 来源)，不是裸 DataFrame。
+
+    漏了解包时 df 变成 tuple：`df["close"]` 抛 TypeError 被 except 吞掉 → 返回 0。
+    后果全部落在「非当前品种」身上：标记价冻结在旧值（重启后直接显示 --）、
+    持仓管理员每轮报「取不到最新价」、非活跃品种的止损检查一并失效。
+    """
+
+    def test_quote_for_unpacks_tuple(self):
+        from unittest import mock
+
+        import pandas as pd
+
+        e = _engine()
+        df = pd.DataFrame({"close": [94.0, 95.5]})
+        with mock.patch("cryptoagent.engine.fetch_klines", return_value=(df, "network")):
+            self.assertAlmostEqual(e._quote_for("SOLUSDT"), 95.5)
+        # 顺带写进缓存，之后 status() 的 _mark_price 才有价可读
+        self.assertAlmostEqual(e._last_prices["SOLUSDT"], 95.5)
+
+    def test_frame_for_returns_dataframe_not_tuple(self):
+        from unittest import mock
+
+        import pandas as pd
+
+        e = _engine()
+        df = pd.DataFrame({"close": [1.0] * 5, "high": [2.0] * 5, "low": [0.5] * 5})
+        with mock.patch("cryptoagent.engine.fetch_klines", return_value=(df, "disk-cache")):
+            got = e._frame_for("SOLUSDT")
+        self.assertIsInstance(got, pd.DataFrame)
+        self.assertEqual(len(got), 5)
+
+    def test_quote_for_failure_falls_back_to_zero(self):
+        from unittest import mock
+
+        e = _engine()
+        with mock.patch("cryptoagent.engine.fetch_klines", side_effect=RuntimeError("boom")):
+            self.assertEqual(e._quote_for("SOLUSDT"), 0.0)
+
+    def test_mark_price_reads_cached_quote_for_inactive_symbol(self):
+        """切成别的品种后，原持仓的标记价只能来自 _last_prices。"""
+        e = _engine()
+        e.cfg.market.symbol = "DOGEUSDT"
+        e._last_prices["SOLUSDT"] = 94.69
+        self.assertAlmostEqual(e._mark_price("SOLUSDT"), 94.69)
+        # 完全没缓存的品种返回 0（status 会转成 None，前端显示 --），绝不拿别家价格硬套
+        self.assertEqual(e._mark_price("XRPUSDT"), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

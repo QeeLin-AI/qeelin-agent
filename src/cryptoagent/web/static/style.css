@@ -435,7 +435,11 @@ label.field > input, label.field > select { max-width: 420px; }
 }
 .stat-row > .stat label { color: rgba(255, 255, 255, .82); }
 .stat-row > .stat small { color: rgba(255, 255, 255, .62); }
-.stat-row > .stat b { color: #fff; font-size: 26px; }
+.stat-row > .stat b {
+  color: #fff; font-size: 26px;
+  /* 兜底：数量/金额极端长时（如几万枚 DOGE）宁可显示省略号，也不让它撑破卡片 */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .stat-row > .stat .up, .stat-row > .stat .down,
 .stat-row > .stat .long, .stat-row > .stat .short { color: #fff; }
 .stat-row > .stat .src-chip { background: rgba(255, 255, 255, .18); color: #fff; border-color: rgba(255, 255, 255, .25); }
@@ -463,6 +467,20 @@ label.field > input, label.field > select { max-width: 420px; }
 .pm-age { color: rgba(255, 255, 255, .75); font-variant-numeric: tabular-nums; }
 .pm-act { color: rgba(255, 255, 255, .9); font-weight: 600; }
 .pm-r { color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* 多仓时整张持仓卡可点（跳交易页看明细）：给一点位移 + 提亮，表明它不是纯展示。
+   单仓不加这个类——那一档已经把方向/开仓价写在卡上，没有明细可点。 */
+.stat-row > .stat.clickable {
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+}
+.stat-row > .stat.clickable:hover { transform: translateY(-2px); filter: brightness(1.07); box-shadow: 0 18px 38px rgba(0, 0, 0, .36); }
+.stat-row > .stat.clickable:active { transform: translateY(0); filter: brightness(1.02); }
+/* 从持仓卡跳到交易页后，持仓表闪一下边框，避免「跳过去了但不知道看哪儿」 */
+@keyframes tableFlash {
+  0%, 100% { outline-color: transparent; }
+  12%, 46% { outline-color: var(--accent); }
+}
+.table.flash { outline: 2px solid transparent; outline-offset: 3px; animation: tableFlash 1.8s ease-out; }
 @keyframes pmPulse {
   0% { box-shadow: 0 0 0 0 rgba(111, 242, 172, .55); }
   70% { box-shadow: 0 0 0 5px rgba(111, 242, 172, 0); }
