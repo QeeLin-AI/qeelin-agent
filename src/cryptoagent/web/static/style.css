@@ -529,8 +529,9 @@ label.field > input, label.field > select { max-width: 420px; }
 .cal-block, .opp-panel { min-width: 0; }
 .cal-block { padding-bottom: 4px; }
 
-/* 通知流 */
-.notif-list { display: flex; flex-direction: column; gap: 8px; }
+/* 通知流：高度由 app.js 的 fitNotifHeight() 按「机会榜底端 = 盈亏卡底端」反推，
+   超出部分在列表内部滚动，卡片本身不再随消息条数无限变长 */
+.notif-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; }
 .notif-item {
   display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; align-items: start;
   padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border-soft);
