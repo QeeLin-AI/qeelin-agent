@@ -98,6 +98,7 @@ async function poll() {
     const s = await api('/api/status');
     lastStatus = s;
     renderStatus(s);
+    renderPositionManagement(s && s.data);
   } catch (e) {
     console.error(e);
   }
@@ -651,6 +652,44 @@ function factorSigHtml(p) {
     · ${esc(names)}。留出集为负的因子已自动淘汰，不参与决策。</div>${bars}`;
 }
 
+function sizingTraceHtml(p) {
+  const t = p.sizing_trace || [];
+  if (!t.length) return '';
+  const rows = t.map((x) => `<div class="st-row">
+      <span>${esc(x.step)}</span>
+      <b>${(Number(x.size_pct || 0) * 100).toFixed(2)}%</b>
+      <span class="muted">${esc(x.detail || '')}</span>
+    </div>`).join('');
+  return `<div class="sizing-trace"><b>仓位归因</b>${rows}</div>`;
+}
+
+function costGateHtml(p) {
+  const g = p.cost_gate;
+  if (!g) return '';
+  const cls = g.approved ? 'up' : 'down';
+  return `<div class="cost-gate">执行成本闸 <b class="${cls}">${g.approved ? '通过' : '拒绝'}</b>
+    · 成本 ${(Number(g.cost_pct || 0) * 100).toFixed(3)}% / 止盈 ${(Number(g.expected_pct || 0) * 100).toFixed(2)}%
+    · 净边际 ${(Number(g.net_edge_pct || 0) * 100).toFixed(2)}%
+    · 参与率 ${(Number(g.participation || 0) * 100).toFixed(2)}%
+    <div class="muted">${esc((g.reasons || []).join('；'))}</div></div>`;
+}
+
+function renderPositionManagement(d) {
+  const card = $('posMgmtCard');
+  if (!card) return;
+  const m = d && d.position_management;
+  const has = m && m.action && m.action !== 'hold';
+  card.classList.toggle('hidden', !has);
+  if (!has) return;
+  const cls = m.action === 'close' ? 'down' : 'up';
+  $('posMgmtBody').innerHTML = `<p>最近一次判断：<b class="${cls}">${esc(m.action)}</b>
+    · ${esc(m.reason || '')}</p>
+    ${m.new_stop ? `<p class="muted">新止损 ${fmt(m.new_stop)}</p>` : ''}
+    ${m.explanation ? `<p class="muted">${esc(m.explanation)}</p>` : ''}
+    <p class="muted">守护线程${(d.position_guard || {}).running ? '运行中' : '未运行'}，
+    每 ${(d.position_guard || {}).interval_sec || 30} 秒检查一次，不依赖自动交易循环。</p>`;
+}
+
 function renderResearchAuto(a) {
   const chk = $('autoResearchChk');
   const el = $('autoResearchState');
@@ -699,6 +738,10 @@ function renderRisk(r) {
   if (rmlv && document.activeElement !== rmlv) rmlv.value = Number(r.max_leverage || 20).toFixed(0);
   const rml = $('riskMinLev');
   if (rml && document.activeElement !== rml) rml.value = Number(r.min_leverage || 1).toFixed(0);
+  const rport = $('riskPortfolioCap');
+  if (rport && document.activeElement !== rport) rport.value = Number(r.max_portfolio_notional_pct || 1.2).toFixed(1);
+  const rcorr = $('riskCorrCap');
+  if (rcorr && document.activeElement !== rcorr) rcorr.value = Number(r.correlated_exposure_pct || 0.9).toFixed(1);
 }
 
 // 风控保存后的非阻塞提醒：硬顶由用户自主设定，系统只提示、不改值
@@ -759,6 +802,26 @@ $('riskDrawdown').addEventListener('change', async () => {
     const d = await api('/api/risk', 'POST', { max_drawdown_pct: v / 100 });
     renderRisk(d.risk); riskWarn(d);
     toast(`最大回撤已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskPortfolioCap').addEventListener('change', async () => {
+  const v = Number($('riskPortfolioCap').value);
+  if (!v || v < 0.1 || v > 100) { toast('组合名义敞口上限需在 0.1 ~ 100 倍权益之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { max_portfolio_notional_pct: v });
+    renderRisk(d.risk); riskWarn(d);
+    toast(`组合名义敞口上限已设为 ${v}x 权益`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskCorrCap').addEventListener('change', async () => {
+  const v = Number($('riskCorrCap').value);
+  if (!v || v < 0.1 || v > 100) { toast('相关组敞口上限需在 0.1 ~ 100 倍权益之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { correlated_exposure_pct: v });
+    renderRisk(d.risk); riskWarn(d);
+    toast(`相关组敞口上限已设为 ${v}x 权益`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
@@ -1410,6 +1473,8 @@ function renderDecision(d, switchTab = true) {
         </div>
         <p class="muted">${esc(p.rationale)}</p>
         ${factorSigHtml(p)}
+        ${sizingTraceHtml(p)}
+        ${costGateHtml(p)}
       </div>
       <div class="card">
         <div class="card-head"><h2>④ 风控</h2></div>

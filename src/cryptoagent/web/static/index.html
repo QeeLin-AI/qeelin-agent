@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QeeLin-Agent 控制台</title>
 <link rel="stylesheet" href="/static/style.css" />
+<link rel="stylesheet" href="/static/theme-v2.css" />
 <script>
   // 尽早应用主题，避免刷新时先闪一下暗色
   try {
@@ -16,18 +17,19 @@
 <body>
 <aside class="sidebar">
   <div class="side-brand">
-    <span class="logo">◆</span>
+    <span class="brand-mark"><i>◆</i></span>
     <div class="side-brand-text">
       <span class="brand-name">QeeLin-Agent</span>
       <span class="ver" id="verTag">--</span>
     </div>
   </div>
+  <div class="nav-label">工作台</div>
   <nav class="tabs">
-    <button class="tab active" data-tab="overview">总览</button>
-    <button class="tab" data-tab="trading">交易</button>
-    <button class="tab" data-tab="settings">设置</button>
-    <button class="tab" data-tab="decision">决策</button>
-    <button class="tab" data-tab="research">因子研究</button>
+    <button class="tab active" data-tab="overview"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>总览</span></button>
+    <button class="tab" data-tab="trading"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l5-5 4 3 7-8"/><path d="M16 7h4v4"/></svg><span>交易</span></button>
+    <button class="tab" data-tab="settings"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h8M18 7h2M4 17h3M13 17h7"/><circle cx="15" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>设置</span></button>
+    <button class="tab" data-tab="decision"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h6M12 12V6h5M12 12v6h5"/><circle cx="5" cy="12" r="1.5"/><circle cx="19" cy="6" r="1.5"/><circle cx="19" cy="18" r="1.5"/></svg><span>决策</span></button>
+    <button class="tab" data-tab="research"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16M7 16v-6M12 16V5M17 16v-4"/></svg><span>因子研究</span></button>
   </nav>
   <div class="side-foot">
     <button id="themeBtn" class="btn ghost sm">☀ 亮色主题</button>
@@ -76,6 +78,11 @@
       <div class="stat"><label>当日盈亏</label><b id="dayPnl">--</b><small id="dayPnlSub"></small></div>
       <div class="stat"><label>回撤</label><b id="drawdown">--</b></div>
       <div class="stat"><label>持仓 <span id="posSrc" class="src-chip hidden"></span></label><b id="position">空仓</b><small id="posSub"></small></div>
+    </div>
+
+    <div class="card hidden" id="posMgmtCard">
+      <div class="card-head"><h2>持仓管理员</h2><span class="muted">移动止损 / 时间止损 / 趋势反转</span></div>
+      <div id="posMgmtBody"></div>
     </div>
 
     <div class="card">
@@ -438,13 +445,14 @@
         </div>
         <p class="set-hint">
           杠杆只决定占用多少保证金、不放大风险。<br />
-          仓位大小：<b>听交易员</b>＝模型给多少用多少；<b>按风险上限反推</b>＝用 单笔风险上限 ÷ 止损幅度 反推名义敞口。
+          仓位大小：<b>听交易员</b>＝模型给多少用多少；<b>按风险上限反推</b>＝用 单笔风险上限 ÷ 止损幅度 反推名义敞口。<br />
+          注意：选「按风险上限反推」时以反推值为准，交易员 / 因子信号 / 风控官给出的<b>仓位建议不参与最终仓位</b>（方向与拒绝仍有效），决策页「仓位归因」可看到每一步的变化。
         </p>
       </div>
 
       <div class="set-group">
         <div class="set-group-title">风险控制</div>
-        <div class="set-grid">
+        <div class="set-grid risk-six">
           <label class="set-field">
             <span class="set-label">单笔风险上限</span>
             <span class="input-suffix">
@@ -473,10 +481,26 @@
               <span class="suffix">% 权益</span>
             </span>
           </label>
+          <label class="set-field">
+            <span class="set-label">组合名义敞口上限</span>
+            <span class="input-suffix">
+              <input id="riskPortfolioCap" type="number" min="0.1" max="100" step="0.5" />
+              <span class="suffix">x 权益</span>
+            </span>
+          </label>
+          <label class="set-field">
+            <span class="set-label">相关组敞口上限</span>
+            <span class="input-suffix">
+              <input id="riskCorrCap" type="number" min="0.1" max="100" step="0.5" />
+              <span class="suffix">x 权益</span>
+            </span>
+          </label>
         </div>
         <p class="set-hint">
-          这 4 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围。
-          实际仓位由上方「仓位大小」决定：听交易员时用模型给的 size，按风险上限反推时才用 上限 ÷ 止损。
+          前 4 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围。
+          实际仓位由上方「仓位大小」决定：听交易员时用模型给的 size，按风险上限反推时才用 上限 ÷ 止损。<br />
+          后 2 项是<b>组合层敞口</b>（单位：倍权益），约束多笔/多品种<b>同向叠加</b>的名义敞口；
+          设得小于「仓位上限 × 杠杆上限」时，单笔满仓单也会被组合层拒绝。拦截告警会带上当前上限值。
         </p>
       </div>
 

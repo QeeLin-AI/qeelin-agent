@@ -1352,16 +1352,16 @@ class WebApp:
                 v = float(payload["max_portfolio_notional_pct"])
             except (TypeError, ValueError) as exc:
                 raise ApiError("max_portfolio_notional_pct 必须是数字", 400) from exc
-            if not (0.1 <= v <= 10.0):
-                raise ApiError("组合名义敞口上限只能在 10% ~ 1000% 之间", 400)
+            if not (0.1 <= v <= 100.0):
+                raise ApiError("组合名义敞口上限只能在 0.1 ~ 100 倍权益之间", 400)
             r.max_portfolio_notional_pct = v
         if "correlated_exposure_pct" in payload:
             try:
                 v = float(payload["correlated_exposure_pct"])
             except (TypeError, ValueError) as exc:
                 raise ApiError("correlated_exposure_pct 必须是数字", 400) from exc
-            if not (0.1 <= v <= 10.0):
-                raise ApiError("相关组敞口上限只能在 10% ~ 1000% 之间", 400)
+            if not (0.1 <= v <= 100.0):
+                raise ApiError("相关组敞口上限只能在 0.1 ~ 100 倍权益之间", 400)
             r.correlated_exposure_pct = v
         # 风控硬顶由用户自主设定，系统不擅自改写任何配置值。
         # 仅在「单笔最大名义（仓位上限 × 杠杆上限）」超出组合上限时给出警告，

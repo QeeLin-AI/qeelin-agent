@@ -279,9 +279,23 @@ class TestConfig(unittest.TestCase):
                 load_config(p)
 
     def test_defaults_load(self):
-        cfg = load_config(ROOT / "config" / "default.json")
+        # 断言代码默认值，不依赖运行时 config/default.json：那个文件会被设置页
+        # 改写成当前线上品种，用它断言 BTCUSDT 会让测试随部署环境变红。
+        cfg = load_config()
         self.assertEqual(cfg.market.symbol, "BTCUSDT")
         self.assertGreater(cfg.risk.max_leverage, 0)
+        # 另用临时文件验证 JSON → dataclass 的覆盖链仍然有效
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "cfg.json"
+            p.write_text(json.dumps({
+                "market": {"symbol": "ETHUSDT"},
+                "risk": {"max_leverage": 12.0},
+            }), encoding="utf-8")
+            c2 = load_config(p)
+            self.assertEqual(c2.market.symbol, "ETHUSDT")
+            self.assertEqual(c2.risk.max_leverage, 12.0)
 
     def test_split_is_chronological(self):
         df = synthetic_ohlcv(1000, 2)
@@ -1333,6 +1347,129 @@ class TestDerivativesFactors(unittest.TestCase):
         with patch("cryptoagent.derivatives._fetch_all", side_effect=OSError("network down")):
             out = enrich_derivatives(df, "BTCUSDT", "1h")
         self.assertEqual(list(out.columns), list(df.columns))
+
+
+class TestDecisionChainFixes(unittest.TestCase):
+    """成本闸移到风控终审后、risk 模式透明化、组合敞口与状态持久化。"""
+
+    def _pipeline(self, **cost_kw):
+        from cryptoagent.agents.pipeline import TradingPipeline
+        from cryptoagent.config import AppConfig
+
+        cfg = AppConfig()
+        cfg.llm.provider = "mock"
+        cfg.market.source = "synthetic"
+        for k, v in cost_kw.items():
+            setattr(cfg.backtest.costs, k, v)
+        return cfg, TradingPipeline(cfg)
+
+    def test_cost_gate_runs_after_risk_and_can_veto(self):
+        from cryptoagent.data import synthetic_ohlcv
+
+        cfg, pipe = self._pipeline(fee_bps=5000.0)   # 2×50% 手续费必然吃掉止盈
+        d = pipe.run(synthetic_ohlcv(600, 7), persist=False)
+        self.assertFalse(d.risk_decision["approved"])
+        self.assertEqual(d.risk_decision["action"], "flat")
+        self.assertIn("执行成本闸", " ".join(d.risk_decision["reasons"]))
+        self.assertIsNone(d.order)
+        self.assertEqual([c["check"] for c in d.risk_decision["checks"] if c["check"] == "cost_gate"],
+                         ["cost_gate"])
+
+    def test_sizing_trace_has_all_five_steps(self):
+        from cryptoagent.data import synthetic_ohlcv
+
+        _, pipe = self._pipeline()
+        d = pipe.run(synthetic_ohlcv(600, 7), persist=False)
+        steps = [t["step"] for t in d.proposal.get("sizing_trace", [])]
+        self.assertEqual(steps, ["交易员", "因子信号", "风控官", "风控引擎", "执行成本闸"])
+        self.assertAlmostEqual(d.proposal["final_size_pct"], d.risk_decision["size_pct"], places=4)
+
+    def test_cost_gate_uses_final_size_in_risk_mode(self):
+        from cryptoagent.data import synthetic_ohlcv
+
+        cfg, pipe = self._pipeline()
+        cfg.risk.sizing_mode = "risk"
+        d = pipe.run(synthetic_ohlcv(600, 7), persist=False)
+        g = d.proposal["cost_gate"]
+        self.assertIn("notional", g["details"])
+        # 成本闸的名义来自最终仓位，不是交易员最初给的仓位
+        self.assertAlmostEqual(
+            g["details"]["notional"],
+            d.risk_decision["size_pct"] * d.risk_decision["leverage"] * cfg.backtest.initial_equity,
+            places=1,
+        )
+
+    def test_risk_mode_reports_upstream_override(self):
+        from cryptoagent.config import RiskConfig
+        from cryptoagent.risk import AccountState, RiskEngine
+
+        cfg = RiskConfig(sizing_mode="risk", max_loss_per_trade_pct=0.05,
+                         max_position_pct=0.5, max_portfolio_notional_pct=5.0,
+                         correlated_exposure_pct=5.0, max_leverage=20)
+        state = AccountState(equity=10000, peak_equity=10000,
+                             day_start_equity=10000, consecutive_losses=0)
+        prop = {"action": "long", "size_pct": 0.02, "leverage": 2.0,
+                "stop_loss_pct": 0.015, "take_profit_pct": 0.03, "confidence": 0.8}
+        d = RiskEngine(cfg).check(prop, state, 0.01, 0.5, exchange_max_leverage=20)
+        self.assertTrue(d.approved)
+        self.assertIn("覆盖上游建议仓位", " ".join(d.reasons))
+
+    def test_portfolio_cap_over_10x_is_accepted_by_config(self):
+        import tempfile
+
+        from cryptoagent.config import load_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "cfg.json"
+            p.write_text(json.dumps({"risk": {
+                "max_portfolio_notional_pct": 27.0,
+                "correlated_exposure_pct": 27.0,
+            }}), encoding="utf-8")
+            cfg = load_config(p)
+        self.assertEqual(cfg.risk.max_portfolio_notional_pct, 27.0)
+        self.assertEqual(cfg.risk.correlated_exposure_pct, 27.0)
+
+    def test_guard_thread_starts_without_auto_loop(self):
+        import tempfile
+        import threading
+
+        from cryptoagent.config import AppConfig
+        from cryptoagent.engine import TradingEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = AppConfig()
+            cfg.runs_dir = tmp
+            e = TradingEngine(cfg)
+            try:
+                self.assertTrue(e._guard_thread.is_alive())
+                self.assertFalse(e.state.get("auto", {}).get("running", False))
+            finally:
+                e.stop_position_guard()
+
+    def test_alert_dedupe_and_stop_cooldown_persist(self):
+        import tempfile
+        import time
+
+        from cryptoagent.config import AppConfig
+        from cryptoagent.engine import TradingEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = AppConfig()
+            cfg.runs_dir = tmp
+            e = TradingEngine(cfg)
+            try:
+                e._reject_alert_at["ETHUSDT|test"] = 12345.0
+                e.state["alert_dedupe"] = e._reject_alert_at
+                e.state["last_stop_adjust_at"] = 23456.0
+                e._save()
+                e2 = TradingEngine(cfg)
+                try:
+                    self.assertEqual(e2._reject_alert_at.get("ETHUSDT|test"), 12345.0)
+                    self.assertEqual(e2._stop_adjust_at, 23456.0)
+                finally:
+                    e2.stop_position_guard()
+            finally:
+                e.stop_position_guard()
 
 
 class TestAnalystCalibration(unittest.TestCase):

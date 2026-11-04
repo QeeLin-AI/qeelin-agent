@@ -86,8 +86,21 @@ class TradingEngine:
             "error": "",
         }
         self._rotate_cycle_count = 0
-        # 风控拦截通知去重：同品种同原因在冷却期内只报一次，避免每轮刷屏
-        self._reject_alert_at: dict[str, float] = {}
+        # 风控拦截通知去重：同品种同原因在冷却期内只报一次，避免每轮刷屏。
+        # 落盘保存，服务重启后不会立刻重复推送同样内容。
+        self._reject_alert_at: dict[str, float] = dict(
+            self.state.setdefault("alert_dedupe", {}) or {}
+        )
+        self._stop_adjust_at = float(self.state.get("last_stop_adjust_at", 0.0) or 0.0)
+        self.last_management: dict = {}
+        # 持仓管理守护线程：不依赖「启动自动循环」，手动/半自动模式下开仓后
+        # 也能做移动止损、时间止损与趋势反转退出。
+        self._guard_lock = threading.Lock()
+        self._guard_stop = threading.Event()
+        self._guard_thread: threading.Thread | None = None
+        self._guard_interval = 30
+        self._composite_cache: dict = {}
+        self.start_position_guard()
 
     # ------------------------------------------------------------------
     def _default_state(self) -> dict:
@@ -774,14 +787,37 @@ class TradingEngine:
     # 持仓管理员：开仓之后的退出决策（移动止损 / 时间止损 / 趋势反转）
     # ------------------------------------------------------------------
     def _opportunity_composite(self, symbol: str) -> float | None:
-        """复用机会扫描缓存里的因子信号，不额外跑一次因子子进程。"""
+        """先复用机会扫描缓存；没有缓存时就地算一次（90 秒短缓存）。
+
+        机会扫描只在 auto_rotate 开启或前端打开机会榜时触发，否则持仓管理员
+        的「因子强反向退出」永远拿不到 composite。这里做一次按需兜底。
+        """
         for r in (getattr(self, "opportunities", None) or []):
             if r.get("symbol") == symbol and not r.get("error"):
                 try:
                     return float(r.get("composite") or 0.0)
                 except (TypeError, ValueError):
                     return None
-        return None
+        cache = getattr(self, "_composite_cache", None)
+        if cache is None:
+            cache = self._composite_cache = {}
+        now = time.time()
+        hit = cache.get(symbol)
+        if hit and now - float(hit[0]) < 90.0:
+            return float(hit[1])
+        if self.df is None:
+            return None
+        try:
+            from .factors.signal import compute_factor_signal
+
+            val = float(
+                compute_factor_signal(self.cfg.research.factor_library, self.df)
+                .get("composite", 0.0) or 0.0
+            )
+        except Exception:  # noqa: BLE001 - 因子算不出来就退回纯价格规则
+            return None
+        cache[symbol] = (now, val)
+        return val
 
     def _sync_live_stops(self, pos: dict, new_stop: float) -> bool:
         """实盘按新止损重挂条件单。
@@ -815,14 +851,94 @@ class TradingEngine:
             try:
                 client.place_stop_market(sym, close_side, float(pos["tp"]),
                                          order_type="TAKE_PROFIT_MARKET")
-            except Exception as exc:  # noqa: BLE001 - 止盈挂不上不影响止损
+                pos.pop("tp_pending", None)      # 本次重挂成功，清掉待补标记
+            except Exception as exc:  # noqa: BLE001 - 止损已生效，但止盈缺失必须告警
+                pos["tp_pending"] = True
                 self.last_error = f"移动止损后止盈单重挂失败：{exc}"
+                self._notify(
+                    "critical", f"{sym} 止盈单重挂失败",
+                    f"仓位目前只有止损、没有止盈；守护线程会在下一轮补挂。错误：{str(exc)[:120]}",
+                    {"symbol": sym, "tp": pos.get("tp")},
+                )
             return True
         except Exception as exc:  # noqa: BLE001
             self.last_error = f"移动止损撤单失败：{exc}"
             return False
 
+    def _retry_pending_take_profit(self, pos: dict) -> None:
+        """止盈单曾重挂失败时，守护线程每轮尝试单独补挂（不动其它条件单）。"""
+        if not pos.get("tp_pending"):
+            return
+        client = self.live_client
+        if client is None or not self.armed or pos.get("mode") != "live":
+            return
+        sym = pos.get("symbol") or self.cfg.market.symbol
+        close_side = "SELL" if pos["side"] == "LONG" else "BUY"
+        try:
+            client.place_stop_market(sym, close_side, float(pos["tp"]),
+                                     order_type="TAKE_PROFIT_MARKET")
+            with self.lock:
+                pos.pop("tp_pending", None)
+                self._save()
+            self._notify("info", f"{sym} 止盈单已补挂",
+                         f"触发价 {pos.get('tp')}", {"symbol": sym})
+        except Exception:  # noqa: BLE001 - 下轮继续重试，不刷屏
+            pass
+
+    # ------------------------------------------------------------------
+    # 持仓管理守护线程：脱离自动循环，手动模式下也生效
+    # ------------------------------------------------------------------
+    def start_position_guard(self, interval_sec: int = 30) -> None:
+        """启动/确认持仓守护线程。幂等，重复调用不会创建第二个线程。"""
+        self._guard_interval = max(5, int(interval_sec))
+        if getattr(self, "_guard_thread", None) and self._guard_thread.is_alive():
+            return
+        self._guard_stop.clear()
+        self._guard_thread = threading.Thread(
+            target=self._guard_loop, name="position-guard", daemon=True
+        )
+        self._guard_thread.start()
+
+    def stop_position_guard(self) -> None:
+        self._guard_stop.set()
+
+    def _guard_loop(self) -> None:
+        while not self._guard_stop.wait(self._guard_interval):
+            try:
+                if self.df is None or not self.state.get("position"):
+                    continue
+                self._reconcile_position_with_exchange()
+                pos = self.state.get("position")
+                if not pos:
+                    continue
+                self._retry_pending_take_profit(pos)
+                px = None
+                if self.live_price_provider is not None:
+                    try:
+                        v = float(self.live_price_provider() or 0.0)
+                        if v > 0:
+                            px = v
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._manage_open_position(pos, px)
+            except Exception as exc:  # noqa: BLE001 - 守护线程绝不能因单次异常退出
+                self.last_error = f"持仓守护异常：{type(exc).__name__}: {str(exc)[:120]}"
+
     def _manage_open_position(self, pos: dict, price: float | None = None) -> dict:
+        """包装：抢锁防重入（自动循环与守护线程可能同时进入）。"""
+        lock = getattr(self, "_guard_lock", None)
+        if lock is None:      # 兼容用 object.__new__ 构造的测试实例
+            return self._manage_open_position_inner(pos, price)
+        if not lock.acquire(blocking=False):
+            return {"action": "hold", "reason": "持仓管理已在另一线程执行", "details": {}}
+        try:
+            out = self._manage_open_position_inner(pos, price)
+            self.last_management = out
+            return out
+        finally:
+            lock.release()
+
+    def _manage_open_position_inner(self, pos: dict, price: float | None = None) -> dict:
         """在「已有持仓、跳过开仓决策」的这一轮里做退出管理。"""
         cfg = getattr(self.cfg, "position", None)
         if cfg is None or not cfg.enabled:
@@ -854,6 +970,8 @@ class TradingEngine:
                         pos["stop"] = float(dec.new_stop)
                         self._save()
                 self._stop_adjust_at = now
+                self.state["last_stop_adjust_at"] = now
+                self._save()
                 self._notify("info", f"{sym} 移动止损已更新", dec.reason,
                              {"symbol": sym, "new_stop": dec.new_stop})
 
@@ -917,6 +1035,8 @@ class TradingEngine:
                 if len(alerts) > 50:      # 防止长期运行无限增长
                     for k in sorted(alerts, key=alerts.get)[:25]:
                         alerts.pop(k, None)
+                self.state["alert_dedupe"] = alerts
+                self._save()
                 self._notify("warn", f"{decision.symbol} 决策被风控拦截",
                              "；".join(reasons[:3]) or "未通过风控检查",
                              {"symbol": decision.symbol, "checks": decision.risk_decision.get("checks")})
@@ -1371,6 +1491,13 @@ class TradingEngine:
                 "llm": {"provider": self.cfg.llm.provider, "model": self.cfg.llm.model},
                 # 分析师权重校准状态（样本不足时 calibrated=False，权重仍是默认值）
                 "analyst_calibration": calibration_summary(self.state.get("analyst_accuracy")),
+                # 持仓管理员最近一次判断 + 守护线程状态（手动模式下也能看到退出决策）
+                "position_management": getattr(self, "last_management", {}),
+                "position_guard": {
+                    "running": bool(getattr(self, "_guard_thread", None)
+                                    and self._guard_thread.is_alive()),
+                    "interval_sec": int(getattr(self, "_guard_interval", 30)),
+                },
                 "history": hist,
                 "last_error": self.last_error,
                 "exchange": self.state.get("exchange", "binance"),

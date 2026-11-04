@@ -134,6 +134,7 @@ class RiskEngine:
         # 仓位：可选用「按风险上限反推」（旧配置里的 max 视为 llm，不再放大仓位）
         mode = cfg.sizing_mode if cfg.sizing_mode in ("llm", "risk") else "llm"
         if mode == "risk" and stop > 0 and cfg.max_loss_per_trade_pct > 0:
+            upstream_size = float(size)   # 交易员 / 因子 / 风控官共同给出的建议仓位
             target_ratio = cfg.max_loss_per_trade_pct / max(stop, 1e-4)   # 名义敞口 / 权益
             # 保证金上限会限制仓位：必要时抬高杠杆来容纳同样的风险（风险不变，只省保证金）
             if cfg.max_position_pct > 0:
@@ -147,6 +148,12 @@ class RiskEngine:
             reasons.append(
                 f"按风险上限反推：目标名义 {target_ratio:.2f}x 权益 → 仓位 {size:.1%} @ {lev:.2f}x"
             )
+            if abs(upstream_size - size) > 1e-6:
+                # 明确写出「静默覆盖」，否则决策报告里上游环节看起来都生效了，实际没有
+                reasons.append(
+                    f"此模式以反推值为准，覆盖上游建议仓位 {upstream_size:.2%}"
+                    "（交易员/因子/风控官的仓位调整不参与最终仓位，仅方向与拒绝仍有效）"
+                )
 
         # 6. 仓位夹紧（占权益比例）
         if size > cfg.max_position_pct:
@@ -198,7 +205,9 @@ class RiskEngine:
         if not self._record(checks, "portfolio_notional", total_notional <= cap_total,
                             f"组合名义敞口 {total_notional:,.0f} / 上限 {cap_total:,.0f}"):
             return RiskDecision(False, "flat", 0.0, 0.0,
-                                [f"组合总敞口 {total_notional:,.0f} 超过上限 {cap_total:,.0f}，本次不开仓"], checks)
+                                [f"组合总敞口 {total_notional:,.0f} 超过上限 {cap_total:,.0f}"
+                                 f"（当前 {cfg.max_portfolio_notional_pct:.1f}x 权益，"
+                                 "可在 设置→风险控制→组合名义敞口上限 调整），本次不开仓"], checks)
 
         # 同一相关性组内、与本次同向的敞口（含本次）不得越线
         group = next((g for g in cfg.correlation_groups if proposal.get("symbol") in g), [])
@@ -213,7 +222,9 @@ class RiskEngine:
                                      same_dir_notional <= cap_corr,
                                      f"相关组同向敞口 {same_dir_notional:,.0f} / 上限 {cap_corr:,.0f}（{','.join(group)}）"):
             return RiskDecision(False, "flat", 0.0, 0.0,
-                                [f"相关组 {','.join(group)} 同向敞口 {same_dir_notional:,.0f} 超限，拒绝同向加仓"],
+                                [f"相关组 {','.join(group)} 同向敞口 {same_dir_notional:,.0f} "
+                                 f"超过上限 {cap_corr:,.0f}（当前 {cfg.correlated_exposure_pct:.1f}x 权益，"
+                                 "可在 设置→风险控制→相关组敞口上限 调整），拒绝同向加仓"],
                                 checks)
 
         return RiskDecision(True, action, size, lev, reasons or ["通过全部风控检查"], checks)

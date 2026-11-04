@@ -184,6 +184,9 @@ class TradingPipeline:
             },
         )
         proposal["symbol"] = snap.symbol
+        # 仓位归因：每一步都留痕，否则多个环节连乘后无法解释最终仓位
+        trader_size = float(proposal.get("size_pct", 0.0) or 0.0)
+        sizing_trace = [{"step": "交易员", "size_pct": round(trader_size, 6)}]
 
         # 因子信号注入：研究产出的因子参与决策（方向一致放大，相反缩小/观望）
         fsig = compute_factor_signal(self.cfg.research.factor_library, df)
@@ -218,21 +221,8 @@ class TradingPipeline:
             })
         proposal["factor_contributions"] = contributions
         _apply_factor_signal(proposal, fsig["composite"])
-
-        # 执行成本闸（纯代码）：先看这笔单的预期收益能否覆盖手续费/滑点/资金费/冲击成本，
-        # 再决定放行、缩仓还是拒绝。放在风控官之前，让它看到的是已修正的提案。
-        gate = evaluate_execution_cost(
-            proposal, df, self.cfg, price=snap.price,
-            equity=state.equity, atr_pct=snap.atr_pct,
-        )
-        proposal["cost_gate"] = gate.to_dict()
-        if not gate.approved:
-            proposal["action"] = "flat"
-            proposal["size_pct"] = 0.0
-        elif gate.size_multiplier < 1.0:
-            proposal["size_pct"] = round(
-                float(proposal.get("size_pct", 0.0)) * gate.size_multiplier, 6
-            )
+        sizing_trace.append({"step": "因子信号", "size_pct": round(float(proposal.get("size_pct", 0.0)), 6),
+                             "detail": f"复合信号 {fsig['composite']:+.2f}"})
 
         officer, deg_risk = risk_review(self.llm, snap, proposal, state, self.cfg.risk, positions=positions)
 
@@ -242,6 +232,8 @@ class TradingPipeline:
             adjusted["size_pct"] = 0.0
         else:
             adjusted["size_pct"] = float(adjusted.get("size_pct", 0.0)) * officer["size_multiplier"]
+        sizing_trace.append({"step": "风控官", "size_pct": round(float(adjusted["size_pct"]), 6),
+                             "detail": f"{officer['verdict']} ×{officer['size_multiplier']:.2f}"})
 
         decision = self.risk.check(
             adjusted,
@@ -251,6 +243,38 @@ class TradingPipeline:
             exchange_max_leverage=exchange_max_leverage,
             positions=positions,
         )
+        sizing_trace.append({"step": "风控引擎", "size_pct": round(decision.size_pct, 6),
+                             "detail": "；".join(decision.reasons[:2])})
+
+        # 执行成本闸放在**风控终审之后**：用最终仓位/杠杆核算，才不会被
+        # sizing_mode=risk 的反推覆盖，也不会用被风控压小前的名义高估参与率。
+        final_proposal = dict(adjusted)
+        final_proposal["action"] = decision.action
+        final_proposal["size_pct"] = decision.size_pct
+        final_proposal["leverage"] = decision.leverage
+        gate = evaluate_execution_cost(
+            final_proposal, df, self.cfg, price=snap.price,
+            equity=state.equity, atr_pct=snap.atr_pct,
+        )
+        proposal["cost_gate"] = gate.to_dict()
+        if decision.approved and decision.action != "flat":
+            if not gate.approved:
+                decision.approved = False
+                decision.action = "flat"
+                decision.size_pct = 0.0
+                decision.reasons.append("执行成本闸拒绝：" + "；".join(gate.reasons))
+                decision.checks.append({"check": "cost_gate", "passed": False,
+                                        "detail": f"成本 {gate.cost_pct:.3%} / 止盈 {gate.expected_pct:.2%}"})
+            elif gate.size_multiplier < 1.0:
+                decision.size_pct = round(decision.size_pct * gate.size_multiplier, 6)
+                decision.reasons.append(
+                    f"执行成本闸：参与率 {gate.participation:.1%} 偏高，最终仓位 ×{gate.size_multiplier:.2f}"
+                )
+        sizing_trace.append({"step": "执行成本闸", "size_pct": round(decision.size_pct, 6),
+                             "detail": f"成本 {gate.cost_pct:.3%} / 止盈 {gate.expected_pct:.2%}"})
+        proposal["sizing_trace"] = sizing_trace
+        proposal["final_size_pct"] = round(decision.size_pct, 6)
+
         order = _build_order(adjusted, decision, snap.price, state.equity)
         if order is not None:
             order["symbol"] = snap.symbol
@@ -346,7 +370,15 @@ def render_markdown(d: Decision) -> str:
     ]
     lines += [f"- {r}" for r in d.risk_decision["reasons"]]
 
-    lines += ["", "## 5. 订单计划", ""]
+    trace = d.proposal.get("sizing_trace") or []
+    if trace:
+        lines += ["", "## 5. 仓位归因", "", "| 环节 | 仓位 | 说明 |", "|---|---|---|"]
+        for t in trace:
+            lines.append(
+                f"| {t.get('step', '')} | {float(t.get('size_pct', 0.0)):.2%} | {t.get('detail', '')} |"
+            )
+
+    lines += ["", "## 6. 订单计划", ""]
     if d.order:
         o = d.order
         lines += [

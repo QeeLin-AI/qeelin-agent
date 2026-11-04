@@ -789,7 +789,17 @@ select option { background: var(--panel); color: var(--text); }
 .set-group-title::before {
   content: ""; width: 3px; height: 13px; border-radius: 2px; background: var(--cyan);
 }
-.set-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+/* 设置页统一栅格：所有分组共用一套列宽 / 间距，断点只用 1280 / 1080 / 720 三档。
+   改布局时优先调变量，别再为每个分组写一套硬编码数值。 */
+:root {
+  --set-gap: 10px;
+  --set-col-min: 200px;
+  --set-stat-min: 140px;
+  --set-stat-max: 200px;
+  --set-section-gap: 14px;
+  --set-side-gap: 18px;
+}
+.set-grid { display: grid; gap: var(--set-gap); grid-template-columns: repeat(auto-fit, minmax(var(--set-col-min), 1fr)); }
 .set-field {
   background: var(--panel-2); border: 1px solid transparent; border-radius: 8px;
   padding: 10px 12px; margin: 0; display: flex; flex-direction: column; gap: 7px;
@@ -800,7 +810,13 @@ select option { background: var(--panel); color: var(--text); }
 .set-field.wide { grid-column: span 2; }
 .set-grid.narrow { grid-template-columns: minmax(240px, 460px); }
 .set-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 1280px) { .set-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* 风险控制 6 项固定 3 列 × 2 行：auto-fit 会排成 5+1，末尾一张孤卡很难看 */
+.set-grid.risk-six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* 断点 1 / 3：宽屏 4 列 → 中等宽度 2 列 */
+@media (max-width: 1280px) {
+  .set-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .set-grid.risk-six { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .set-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .set-field .input-suffix {
   width: 100%; justify-content: flex-end; gap: 7px; align-self: stretch;
@@ -832,7 +848,7 @@ html[data-theme="light"] .set-field .input-suffix input[type="number"] { border-
 }
 
 /* 只读状态卡 */
-.set-stats { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); margin-top: 10px; }
+.set-stats { display: grid; gap: var(--set-gap); grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); margin-top: 10px; }
 .set-stat {
   background: var(--panel-2); border-radius: 8px; padding: 12px 14px;
   display: flex; flex-direction: column; justify-content: center; gap: 6px;
@@ -840,18 +856,34 @@ html[data-theme="light"] .set-field .input-suffix input[type="number"] { border-
 }
 .set-stat > span { color: var(--muted); }
 .set-stat > b { font-size: 14px; font-weight: 600; color: var(--text); word-break: break-all; }
-.set-stats.three { grid-template-columns: repeat(3, minmax(140px, 200px)); justify-content: start; }
-@media (max-width: 720px) { .set-stats.three { grid-template-columns: 1fr; } }
+.set-stats.three { grid-template-columns: repeat(3, minmax(var(--set-stat-min), var(--set-stat-max))); justify-content: start; }
+/* 断点 3 / 3：≤720 手机，三卡与四列网格都落回单列 */
+@media (max-width: 720px) {
+  .set-stats.three { grid-template-columns: 1fr; }
+  .set-grid.four { grid-template-columns: 1fr; }
+  .set-grid.risk-six { grid-template-columns: 1fr; }
+}
 /* 账户状态：三张窄卡不铺满，按钮与卡片之间留出间距 */
-.set-account .actions { margin-top: 14px; }
+.set-account .actions { margin-top: var(--set-section-gap); }
 
 /* 设置页右栏：只放连接状态卡（复用交易页 .conn-panel 样式） */
 .set-side { min-width: 0; }
+/* 断点 2 / 3：≤1080 双栏回流单栏 */
 @media (max-width: 1080px) {
-  /* 窄屏下右栏落回下方，和上面的账户状态拉开距离 */
-  .set-side { margin-top: 18px; }
+  .set-side { margin-top: var(--set-side-gap); }
   .set-side .conn-panel { max-width: 420px; }
 }
+
+/* 决策页：仓位归因链 + 执行成本闸 */
+.sizing-trace { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; font-size: 12px; }
+.sizing-trace > b { display: block; color: var(--muted); margin-bottom: 6px; }
+.st-row { display: grid; grid-template-columns: 90px 78px 1fr; gap: 8px; align-items: baseline; padding: 3px 0; }
+.st-row > span:first-child { color: var(--muted); }
+.st-row > b { font-variant-numeric: tabular-nums; }
+.st-row > .muted { font-size: 11px; word-break: break-all; }
+.cost-gate { margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: rgba(59,130,246,.08); font-size: 12px; line-height: 1.7; }
+.cost-gate .muted { font-size: 11px; margin-top: 4px; }
+@media (max-width: 720px) { .st-row { grid-template-columns: 76px 68px 1fr; font-size: 11px; } }
 
 /* 卡片内的开关列表 */
 .set-switch-list { margin-top: 10px; }
