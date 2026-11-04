@@ -169,8 +169,16 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
   50%      { transform: scale(1.035); box-shadow: 0 0 0 1px rgba(255,255,255,.6) inset, 0 4px 12px rgba(16,24,40,.16), 0 0 15px rgba(10,125,130,.80); }
 }
 .side-brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.035em; white-space: nowrap; }
-.brand-suffix { color: var(--accent); font-weight: 600; }
+/* 品牌锁标：QeeLin 主名，Agent 缩小上标叠压在其右上，主次分明 */
+.brand-name {
+  display: inline-block; font-size: 15px; font-weight: 700;
+  letter-spacing: -.035em; white-space: nowrap; line-height: 1.15;
+}
+.brand-suffix {
+  display: inline-block; color: var(--accent); font-weight: 700;
+  font-size: .58em; letter-spacing: .17em; text-transform: uppercase;
+  margin-left: .26em; transform: translateY(-.4em);
+}
 .ver {
   align-self: flex-start; font-size: 10px; font-weight: 600; letter-spacing: .04em;
   color: var(--faint); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
@@ -1025,24 +1033,33 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .tb-context, .tb-sep { display: none; }
   .price { font-size: 17px; }
   .top-right .tag { display: none; }
-  /* 手机竖屏宽度全给导航：品牌只留 LOGO；图标改到文字上方，
-     宽度仍由文字决定，5 个带图标的入口照样一屏放完 */
-  .side-brand { padding-right: 10px; }
-  .side-brand .side-brand-text { display: none; }
-  .side-scroll { gap: 6px; }
+  /* 手机竖屏：品牌保留「LOGO + 名称」（版本号让位给导航），图标叠到文字上方，
+     宽度由文字决定，5 个带图标的入口仍能一屏放完 */
+  .side-brand { gap: 6px; padding-right: 6px; }
+  .side-brand .brand-name { font-size: 12.5px; }
+  .side-brand .ver { display: none; }
+  .side-brand .brand-mark { width: 30px; height: 30px; border-radius: 8px; }
+  .side-brand .brand-mark svg { width: 27px; height: 27px; }
+  .side-scroll { gap: 3px; }
   .tab {
     flex-direction: column; gap: 2px; width: auto;
-    padding: 5px 8px; text-align: center; line-height: 1.15;
+    padding: 5px 4px; font-size: 12.5px; text-align: center; line-height: 1.15;
   }
   .tab .nav-ico { display: block; width: 15px; height: 15px; }
   .tab .lbl-long { display: none; }
   .tab .lbl-short { display: inline; }
-  .side-foot { padding-left: 8px; }
+  .side-foot { padding-left: 2px; }
+  /* 盈亏区：横向排列时统计卡只剩 98px（还被 minmax 撑破），改为上下两段、卡片占满整行 */
+  .pnl-hero { flex-direction: column; flex-wrap: nowrap; gap: 10px; }
+  .pnl-total { flex: 0 0 auto; }
+  .pnl-stats { flex: none; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
 }
-@media (max-width: 380px) {
-  /* 360px 级别的窄屏：再把标签内边距和字号压一档，保证 5 个入口不出现横向滚动 */
+@media (max-width: 370px) {
+  /* 370px 以下（360 级别窄屏）：放不下「品牌名 + 5 个入口」，
+     品牌回退成只留 LOGO，把宽度全部还给导航 */
+  .side-brand .side-brand-text { display: none; }
   .side-brand { padding-right: 8px; }
-  .tab { padding: 5px 6px; font-size: 12.5px; }
+  .tab { padding: 5px 6px; }
   .tab .nav-ico { width: 14px; height: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
