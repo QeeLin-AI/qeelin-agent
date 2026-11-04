@@ -1045,6 +1045,9 @@ class TradingEngine:
             return {"action": "hold", "reason": "持仓管理已在另一线程执行", "details": {}}
         try:
             out = self._manage_open_position_inner(pos, price)
+            # 每轮都刷新时间戳。hold 不产生动作，没有时间戳就分不清
+            # 「刚刚巡检过」和「线程早就停了」——页面靠它显示上次巡检时刻。
+            out["ts"] = time.time()
             self.last_management = out
             return out
         finally:

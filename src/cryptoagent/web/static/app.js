@@ -1138,7 +1138,24 @@ function renderStatus(s) {
     const p = s.position;
     $('position').textContent = `${sideCn(p.side)} ${fmt(p.qty, 4)}`;
     $('position').className = p.side === 'LONG' ? 'up' : 'down';
-    $('posSub').textContent = `开仓 ${fmtPx(p.entry)} · 浮盈亏 ${fmt(p.unrealized)}`;
+    // 持仓管理员的常态是 hold——不产生任何动作，而「持仓管理员」卡片只在真改止损/
+    // 平仓时才出现，于是页面上长期看不到它在工作。这里把「上一轮巡检」常态化显示：
+    // 时间戳每 30 秒刷新一次，停了就不再变，一眼能看出是否还活着。
+    const pm = s.position_management || {};
+    const gd = s.position_guard || {};
+    const ts = Number(pm.ts) || 0;
+    const at = ts ? new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+    let guardLine;
+    if (!gd.running) guardLine = '持仓管理员未运行';
+    else if (!ts) guardLine = '持仓管理员运行中 · 等待首轮巡检';
+    else {
+      const bits = [`管理员 ${at} 巡检`, pm.action || 'hold'];
+      const r = pm.details && pm.details.floating_r;
+      if (r != null) bits.push(`${Number(r) >= 0 ? '+' : ''}${Number(r).toFixed(2)}R`);
+      guardLine = bits.join(' · ');
+    }
+    $('posSub').innerHTML = `开仓 ${esc(fmtPx(p.entry))} · 浮盈亏 ${esc(fmt(p.unrealized))}`
+      + `<br>${esc(guardLine)}`;
   } else {
     $('position').textContent = '空仓';
     $('position').className = '';
