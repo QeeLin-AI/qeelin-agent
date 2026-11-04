@@ -101,13 +101,15 @@ class RiskConfig:
     min_leverage: float = 1.0
     daily_loss_limit_pct: float = 0.03
     max_drawdown_pct: float = 0.15
-    max_slippage_bps: float = 10.0
     min_confidence: float = 0.55
     kill_switch_file: str = "runs/TRADING_HALT"
     # —— 组合层风控（A3）——
-    # 注意：单笔最大名义敞口 = max_position_pct × max_leverage = 0.30 × 3 = 0.90（占权益），
-    # 所以这两个上限必须 ≥ 0.90，否则会误拒一笔正常的满仓单。它们真正的作用是
-    # 在多品种/多笔同时持仓时约束「叠加敞口」，而非限制单笔。
+    # 关键不变量：max_portfolio_notional_pct 与 correlated_exposure_pct 都必须 ≥
+    # 单笔最大名义敞口 = max_position_pct × max_leverage（占权益）。
+    # 本 dataclass 默认 0.30 × 3 = 0.90，故默认上限 1.20 / 0.90 满足要求。
+    # ⚠️ 若通过 config/default.json 抬高 max_leverage 或 max_position_pct，
+    #    必须同步抬高这两个上限，否则风控会在 risk.py step 11 把每一笔正常交易都拒掉。
+    #    它们真正的作用是约束「多品种/多笔同时持仓」的叠加敞口，而非限制单笔。
     max_portfolio_notional_pct: float = 1.20   # 全部持仓名义敞口上限（占权益）
     correlated_exposure_pct: float = 0.90      # 同一相关性组内同向敞口上限（占权益）
     # 相关性分组：同组品种视为高度相关，同向叠加敞口受 correlated_exposure_pct 约束。
@@ -205,7 +207,7 @@ class AppConfig:
 # 已删除、但旧配置文件里可能还留着的字段：读取时忽略，避免升级后直接起不来。
 # 只登记「确实删过」的字段名，不要用它掩盖真正的拼写错误。
 _LEGACY_FIELDS: dict[type, set[str]] = {
-    RiskConfig: {"risk_per_trade_pct"},
+    RiskConfig: {"risk_per_trade_pct", "max_slippage_bps"},
 }
 
 

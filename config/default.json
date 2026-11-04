@@ -1,6 +1,16 @@
 {
   "market": {
-    "symbol": "BTCUSDT",
+    "symbol": "ETHUSDT",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT"
+    ],
+    "pinned": [],
+    "symbol_exchanges": {},
     "interval": "1h",
     "bars": 6000,
     "seed": 7,
@@ -10,15 +20,7 @@
     "short_bars": 200,
     "auto_rotate": true,
     "rotate_min_score": 0.2,
-    "rotate_every_cycles": 1,
-    "symbols": [
-      "BTCUSDT",
-      "ETHUSDT",
-      "SOLUSDT",
-      "BNBUSDT",
-      "XRPUSDT",
-      "DOGEUSDT"
-    ]
+    "rotate_every_cycles": 1
   },
   "backtest": {
     "initial_equity": 10000.0,
@@ -32,13 +34,27 @@
   },
   "risk": {
     "max_leverage": 20.0,
-    "max_position_pct": 0.5,
+    "leverage_override": 0.0,
+    "max_position_pct": 0.8,
     "max_loss_per_trade_pct": 0.05,
     "daily_loss_limit_pct": 0.05,
     "max_drawdown_pct": 0.2,
-    "max_slippage_bps": 10.0,
     "min_confidence": 0.45,
-    "kill_switch_file": "runs/TRADING_HALT"
+    "kill_switch_file": "runs/TRADING_HALT",
+    "max_portfolio_notional_pct": 16.0,
+    "correlated_exposure_pct": 16.0,
+    "correlation_groups": [
+      [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT"
+      ],
+      [
+        "XRPUSDT",
+        "DOGEUSDT"
+      ]
+    ]
   },
   "research": {
     "iterations": 6,
@@ -47,7 +63,8 @@
     "min_oos_sharpe": 0.3,
     "max_lookback": 500,
     "out_dir": "runs/research",
-    "factor_library": "factors_library"
+    "factor_library": "factors_library",
+    "auto_interval_sec": 86400
   },
   "llm": {
     "provider": "mock",
@@ -58,6 +75,28 @@
     "max_tokens": 1500,
     "timeout": 60,
     "retries": 2
+  },
+  "sentiment": {
+    "enabled": true,
+    "source": "price_action",
+    "cryptopanic_api_key_env": "CRYPTOPANIC_API_KEY",
+    "cache_ttl_sec": 600
+  },
+  "notify": {
+    "enabled": true,
+    "channels": [
+      "console",
+      "inapp"
+    ],
+    "webhook_url_env": "CRYPTOAGENT_WEBHOOK_URL",
+    "telegram_token_env": "CRYPTOAGENT_TG_TOKEN",
+    "telegram_chat_env": "CRYPTOAGENT_TG_CHAT",
+    "email_smtp_host_env": "CRYPTOAGENT_SMTP_HOST",
+    "email_smtp_port_env": "CRYPTOAGENT_SMTP_PORT",
+    "email_user_env": "CRYPTOAGENT_SMTP_USER",
+    "email_pass_env": "CRYPTOAGENT_SMTP_PASS",
+    "email_to_env": "CRYPTOAGENT_SMTP_TO",
+    "inapp_path": "runs/notifications.jsonl"
   },
   "runs_dir": "runs"
 }

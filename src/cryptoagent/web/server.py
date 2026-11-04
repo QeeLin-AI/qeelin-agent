@@ -1332,6 +1332,14 @@ class WebApp:
             if not (0.001 <= v <= 1.0):
                 raise ApiError("最大回撤只能在 0.1% ~ 100% 之间", 400)
             r.max_drawdown_pct = v
+        if "min_confidence" in payload:
+            try:
+                v = float(payload["min_confidence"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("min_confidence 必须是数字", 400) from exc
+            if not (0.0 <= v <= 1.0):
+                raise ApiError("置信度门槛只能在 0 ~ 1 之间", 400)
+            r.min_confidence = v
         if "sizing_mode" in payload:
             mode = str(payload["sizing_mode"]).strip().lower()
             if mode == "max":      # 旧值：两者取大已废弃，回落到「听交易员」
