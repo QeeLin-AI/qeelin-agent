@@ -349,9 +349,9 @@ python tools/validate_factors.py --bars 8000 --symbol ETHUSDT --write
 
 ```jsonc
 // config/default.json → market
-"short_interval": "15m",           // 中频信号周期
-"klines_cache": true,              // 短周期 K 线落盘
-"klines_prewarm": true,            // 主行情刷新后后台预热
+"short_interval": "5m",             // 中频信号周期（默认 5m，可改 15m）
+"klines_cache": true,               // 短周期 K 线落盘
+"klines_prewarm": true,             // 主行情刷新后后台预热
 "klines_prewarm_intervals": ["15m"] // 除 short_interval 外额外保持预热的周期
 ```
 
