@@ -416,7 +416,8 @@ label.field > input, label.field > select { max-width: 420px; }
 
 /* ---------------------------------------------------------------- 指标卡 */
 .stat-row {
-  display: grid; grid-template-columns: 1.35fr 1fr 1fr 1fr;
+  display: grid; /* 持仓卡要放「N 个持仓 + 品种 + 合计 + 心跳行」，给它宽位；权益卡内容少，收窄 */
+  grid-template-columns: 1fr 1fr 1fr 1.35fr;
   gap: 14px; margin-bottom: 22px;
 }
 .stat {
@@ -681,6 +682,9 @@ label.field > input, label.field > select { max-width: 420px; }
 .set-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .set-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .set-grid.risk-six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* 风险控制 8 项：每行 4 张卡片，第一行正好是互相联动的四项
+   （单笔风险 / 单笔仓位 / 持仓品种数 / 保证金合计） */
+.set-grid.risk-eight { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .set-grid.narrow { grid-template-columns: minmax(240px, 420px); }
 .set-field {
   background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px;
@@ -691,6 +695,23 @@ label.field > input, label.field > select { max-width: 420px; }
 .set-field:hover { border-color: var(--border); }
 .set-field.wide { grid-column: span 2; }
 .set-label { font-size: 11.5px; color: var(--muted); white-space: nowrap; font-weight: 600; }
+/* 卡片副标题：一句话说清这个数字到底在限制什么（4 列布局下比长段落更好读） */
+.set-sub {
+  display: block; margin-top: 3px; font-size: 10.5px; line-height: 1.4;
+  color: var(--faint); white-space: normal; font-weight: 400;
+}
+/* 联动提示：单笔仓位 × 品种数 与保证金合计的关系，超限时立刻变红 */
+.risk-link {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  margin: 11px 0 0; padding: 8px 12px; border-radius: 9px;
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+  font-size: 11.5px; color: var(--muted);
+}
+.risk-link b { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.risk-link .rl-ico { font-weight: 700; color: var(--ok); }
+.risk-link.bad { border-color: rgba(242, 99, 111, .45); background: rgba(242, 99, 111, .07); color: #ffb3b8; }
+.risk-link.bad b { color: #ffd0d3; }
+.risk-link.bad .rl-ico { color: var(--up); }
 .set-field select { width: 100%; max-width: none; margin: 0; }
 .input-suffix { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; }
 .input-suffix .suffix { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
@@ -880,6 +901,7 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-grid.risk-six { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .set-grid.risk-eight { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .trade-split { grid-template-columns: 1fr; }
   .pos-grid { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
@@ -916,7 +938,7 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }
 }
 @media (max-width: 720px) {
-  .set-stats.three, .set-grid.four, .set-grid.risk-six, .set-grid.narrow { grid-template-columns: 1fr; }
+  .set-stats.three, .set-grid.four, .set-grid.risk-six, .set-grid.risk-eight, .set-grid.narrow { grid-template-columns: 1fr; }
   .debate, .kv { grid-template-columns: 1fr; }
   .ov-side { grid-template-columns: 1fr; }
   .ov-side .opp-panel { grid-column: auto; }

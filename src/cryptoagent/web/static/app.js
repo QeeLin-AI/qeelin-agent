@@ -762,6 +762,18 @@ $('autoResearchChk').addEventListener('change', async () => {
   }
 });
 
+// 服务端当前生效的三个值。校验与回滚都以它为基准：
+// change 事件触发时输入框里已经是用户改后的值，不能拿来当「原值」。
+let riskLast = { pos: 0, slots: 1, margin: 0 };
+
+function marginRuleMsg(posPct, slots, marginPct) {
+  const need = Math.round(posPct * slots * 100) / 100;
+  if (!(need > marginPct + 1e-6)) return '';
+  const fix = Math.ceil(need * 10) / 10;
+  return `单笔仓位上限 ${posPct}% × ${slots} 个品种 = ${need}% 权益，`
+    + `超过保证金占用上限 ${marginPct}%。请先把「保证金占用上限」提到 ${fix}% 以上`;
+}
+
 function renderRisk(r) {
   if (!r) return;
   const ov = Number(r.leverage_override || 0);
@@ -793,6 +805,28 @@ function renderRisk(r) {
   if (rmc && document.activeElement !== rmc) {
     rmc.value = String(Math.round(Number(r.max_margin_usage_pct || 1) * 100));
   }
+  renderMarginRule(r);
+}
+
+// 把「单笔仓位 × 品种数 vs 保证金合计」的关系摆在设置项下面：
+// 合规时灰字说明能开满，超限时整条变红并写清要提到多少。
+function renderMarginRule(r) {
+  const box = $('riskMarginRule');
+  const txt = $('riskMarginRuleText');
+  if (!box || !txt) return;
+  const pos = Math.round(Number(r.max_position_pct || 0) * 1000) / 10;
+  const slots = Math.max(1, Math.round(Number(r.max_concurrent_positions || 1)));
+  const margin = Math.round(Number(r.max_margin_usage_pct || 0) * 1000) / 10;
+  const bad = !!marginRuleMsg(pos, slots, margin);
+  const need = Math.round(pos * slots * 100) / 100;
+  riskLast = { pos, slots, margin };
+  box.classList.toggle('bad', bad);
+  box.querySelector('.rl-ico').textContent = bad ? '!' : '✓';
+  txt.innerHTML = bad
+    ? `单笔仓位 <b>${pos}%</b> × <b>${slots}</b> 个品种 = <b>${need}%</b> 权益，`
+      + `已超过保证金占用上限 <b>${margin}%</b>，需先把合计上限提到 <b>${Math.ceil(need * 10) / 10}%</b>`
+    : `单笔仓位 <b>${pos}%</b> × <b>${slots}</b> 个品种 = <b>${need}%</b> 权益 `
+      + `≤ 保证金占用上限 <b>${margin}%</b>，按仓位上限可以开满`;
 }
 
 // 风控保存后的非阻塞提醒：硬顶由用户自主设定，系统只提示、不改值
@@ -828,17 +862,29 @@ $('riskTotal').addEventListener('change', async () => {
 
 $('riskPosCapInput').addEventListener('change', async () => {
   const v = Number($('riskPosCapInput').value);
-  if (!v || v < 0.1 || v > 100) { toast('仓位持仓上限需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
+  if (!v || v < 0.1 || v > 100) { toast('单笔仓位上限需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
+  const blocked = marginRuleMsg(v, riskLast.slots, riskLast.margin);
+  if (blocked) {
+    $('riskPosCapInput').value = String(riskLast.pos);     // 立即回滚，别等轮询
+    toast(blocked, 'err');
+    return;
+  }
   try {
     const d = await api('/api/risk', 'POST', { max_position_pct: v / 100 });
     renderRisk(d.risk); riskWarn(d);
-    toast(`仓位持仓上限已设为 ${v}%`, 'ok');
+    toast(`单笔仓位上限已设为 ${v}%`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
 $('riskMaxPos').addEventListener('change', async () => {
   const v = Math.round(Number($('riskMaxPos').value));
   if (!v || v < 1 || v > 20) { toast('同时持仓品种数需在 1 ~ 20 之间', 'err'); poll(); return; }
+  const blocked = marginRuleMsg(riskLast.pos, v, riskLast.margin);
+  if (blocked) {
+    $('riskMaxPos').value = String(riskLast.slots);
+    toast(blocked, 'err');
+    return;
+  }
   try {
     const d = await api('/api/risk', 'POST', { max_concurrent_positions: v });
     renderRisk(d.risk); riskWarn(d);
@@ -849,6 +895,12 @@ $('riskMaxPos').addEventListener('change', async () => {
 $('riskMarginCap').addEventListener('change', async () => {
   const v = Number($('riskMarginCap').value);
   if (!v || v < 1 || v > 100) { toast('保证金占用上限需在 1% ~ 100% 之间', 'err'); poll(); return; }
+  const blocked = marginRuleMsg(riskLast.pos, riskLast.slots, v);
+  if (blocked) {
+    $('riskMarginCap').value = String(riskLast.margin);
+    toast(blocked, 'err');
+    return;
+  }
   try {
     const d = await api('/api/risk', 'POST', { max_margin_usage_pct: v / 100 });
     renderRisk(d.risk); riskWarn(d);

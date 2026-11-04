@@ -314,6 +314,49 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("125", body["error"])
 
+    def test_margin_rule_blocks_oversized_position_cap(self):
+        """单笔仓位上限 × 品种数 超过保证金占用上限时必须拒绝，且不留半改状态。"""
+        status, raw = self._get("/api/status")
+        risk0 = json.loads(raw)["data"]["risk"]
+        slots = risk0["max_concurrent_positions"]
+        margin = risk0["max_margin_usage_pct"]
+        # 顶到刚好超过上限一档
+        too_big = (margin / slots) + 0.05
+        status, body = self._post("/api/risk", {"max_position_pct": too_big})
+        self.assertEqual(status, 400)
+        self.assertIn("保证金占用上限", body["error"])
+
+        # 回滚：磁盘和内存都还是原值
+        status, raw = self._get("/api/status")
+        self.assertAlmostEqual(json.loads(raw)["data"]["risk"]["max_position_pct"],
+                               risk0["max_position_pct"], places=6)
+        saved = json.loads((Path(self.tmp.name) / "default.json").read_text(encoding="utf-8"))
+        self.assertAlmostEqual(saved["risk"]["max_position_pct"], risk0["max_position_pct"], places=6)
+
+    def test_margin_rule_blocks_lowering_margin_cap(self):
+        status, raw = self._get("/api/status")
+        risk0 = json.loads(raw)["data"]["risk"]
+        need = risk0["max_position_pct"] * risk0["max_concurrent_positions"]
+        if need <= 0.02:
+            self.skipTest("当前配置乘积过小，构造不出越界场景")
+        status, body = self._post("/api/risk", {"max_margin_usage_pct": round(need / 2, 4)})
+        self.assertEqual(status, 400)
+        self.assertIn("保证金占用上限", body["error"])
+        status, raw = self._get("/api/status")
+        self.assertAlmostEqual(json.loads(raw)["data"]["risk"]["max_margin_usage_pct"],
+                               risk0["max_margin_usage_pct"], places=6)
+
+    def test_margin_rule_allows_exact_fit(self):
+        """乘积正好等于上限（0.3×3=0.9）是合法的，不能因浮点误差判越界。"""
+        status, raw = self._get("/api/status")
+        risk0 = json.loads(raw)["data"]["risk"]
+        margin = 0.9
+        pos = margin / risk0["max_concurrent_positions"]
+        status, body = self._post("/api/risk", {"max_margin_usage_pct": margin,
+                                                "max_position_pct": pos})
+        self.assertEqual(status, 200, body)
+        self.assertAlmostEqual(body["data"]["risk"]["max_position_pct"], pos, places=6)
+
     def test_research_auto_toggle(self):
         status, raw = self._get("/api/status")
         self.assertIn("research_auto", json.loads(raw)["data"])

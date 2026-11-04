@@ -214,7 +214,7 @@ python run.py web --host 127.0.0.1 --port 8000
 | `leverage_override` | 0 | 0 = 跟随决策；>0 = 强制使用该杠杆 |
 | `min_leverage` | 1 | 杠杆下限，模型偏保守时的托底（1 = 不干预） |
 | `sizing_mode` | `llm` | 仓位怎么定：`llm` 听交易员 / `risk` 按单笔风险上限反推 |
-| `max_position_pct` | 0.8 | 单笔最大保证金占用（占权益） |
+| `max_position_pct` | 0.8 | 单笔最大保证金占用（占权益），控制台叫「单笔仓位上限」。同时决定单笔最大名义 = `max_position_pct × max_leverage` |
 | `max_loss_per_trade_pct` | 0.02 | 单笔最大亏损（按仓位 × 杠杆 × 止损计算） |
 | `daily_loss_limit_pct` | 0.05 | 单日亏损上限，触发后停止开仓 |
 | `max_drawdown_pct` | 0.2 | 最大回撤上限 |
@@ -224,7 +224,9 @@ python run.py web --host 127.0.0.1 --port 8000
 | `max_concurrent_positions` | 1 | 同时持仓的品种数上限；`1` = 单仓（升级后默认不变，多仓需手动打开） |
 | `max_margin_usage_pct` | 0.95 | 全部持仓的保证金占用上限（占权益）。交易所拒单看的是这个，不是名义敞口；多仓建议降到 60%~80% |
 
-> 上表是 `config/default.json` 的出厂值；代码内 dataclass 兜底更保守（3x / 30% / 1% / 3% / 15% / 0.55），配置文件缺失时以代码为准。6 项硬顶（单笔风险 / 仓位 / 同时持仓品种数 / 保证金占用 / 当日亏损 / 最大回撤）在控制台都可自由设置；组合层两项（`max_portfolio_notional_pct` / `correlated_exposure_pct`）单位为**倍权益**，可在 **0.1–100x** 设置。设得大只是放宽允许范围，不代表实际会用满。
+> 上表是 `config/default.json` 的出厂值；代码内 dataclass 兜底更保守（3x / 30% / 1% / 3% / 15% / 0.55），配置文件缺失时以代码为准。6 项硬顶（单笔风险 / 单笔仓位 / 同时持仓品种数 / 保证金占用 / 当日亏损 / 最大回撤）在控制台都可自由设置；组合层两项（`max_portfolio_notional_pct` / `correlated_exposure_pct`）单位为**倍权益**，可在 **0.1–100x** 设置。设得大只是放宽允许范围，不代表实际会用满。
+>
+> **约束：`max_position_pct × max_concurrent_positions ≤ max_margin_usage_pct`。** 否则「允许开 N 仓」是假承诺——按单笔上限开满时保证金必然不够，第 N 仓会被组合层拒掉。控制台在这条不成立时会拒绝保存（前端先提示、`/api/risk` 再硬拦一道），提示把保证金占用上限提上去。
 
 **多品种并发持仓**：`max_concurrent_positions > 1` 时，持仓存在 `state["positions"]`（按品种索引），同一个品种只允许一笔。开新仓受三道闸约束——品种数上限、保证金占用上限、组合名义敞口上限。**多仓时务必同步下调 `max_loss_per_trade_pct`**：单笔 5% 风险在 3 个品种同时打满止损时就是 15%，`portfolio_risk ≈ 单笔风险 × 品种数`。
 

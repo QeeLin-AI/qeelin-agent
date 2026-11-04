@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import threading
@@ -1283,9 +1284,14 @@ class WebApp:
 
     def set_risk(self, payload: dict) -> dict:
         """改杠杆/风险上限并写进 config/default.json（重启后仍生效）。"""
+        from dataclasses import fields as dc_fields
+
         from ..config import config_path, save_config
 
         r = self.cfg.risk
+        # 逐字段赋值，任何一步校验失败都要整体回滚，否则会留下「改了一半」的配置
+        # （比如仓位上限已改成 50%、后面才因为保证金不够被拒，内存里就是 50%）。
+        _snap = {f.name: getattr(r, f.name) for f in dc_fields(r)}
         if "leverage_override" in payload:
             try:
                 lev = float(payload["leverage_override"])
@@ -1391,6 +1397,23 @@ class WebApp:
             if not (0.1 <= v <= 100.0):
                 raise ApiError("相关组敞口上限只能在 0.1 ~ 100 倍权益之间", 400)
             r.correlated_exposure_pct = v
+        # 单笔仓位上限 × 同时持仓品种数 = 所有仓位打满要占的保证金。
+        # 它必须 ≤ 保证金占用上限，否则「允许开 N 仓」是假承诺：按上限开满时，
+        # 第 N 仓一定被组合层保证金闸拒掉。这里硬拦，前端只是先提示一道。
+        _pos = float(r.max_position_pct)
+        _slots = max(1, int(r.max_concurrent_positions or 1))
+        _margin = float(r.max_margin_usage_pct)
+        if _pos * _slots > _margin + 1e-9:
+            need = _pos * _slots
+            for _k, _v in _snap.items():
+                setattr(r, _k, _v)
+            raise ApiError(
+                f"单笔仓位上限 {_pos:.1%} × 同时持仓 {_slots} 个 = {need:.1%} 权益，"
+                f"超过保证金占用上限 {_margin:.1%}，本次修改已撤销。"
+                f"请先把「保证金占用上限」提高到 {math.ceil(need * 1000) / 10:.1f}% 以上",
+                400,
+            )
+
         # 风控硬顶由用户自主设定，系统不擅自改写任何配置值。
         # 仅在「单笔最大名义（仓位上限 × 杠杆上限）」超出组合上限时给出警告，
         # 提示这类单会被组合层拒绝，由用户自己决定是否调整。

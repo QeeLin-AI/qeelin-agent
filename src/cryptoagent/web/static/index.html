@@ -548,71 +548,73 @@
 
       <div class="set-group">
         <div class="set-group-title">风险控制</div>
-        <div class="set-grid risk-six">
+        <div class="set-grid risk-eight">
           <label class="set-field">
-            <span class="set-label">单笔风险上限</span>
+            <span class="set-label">单笔风险上限<span class="set-sub">单笔最多亏权益的百分之几</span></span>
             <span class="input-suffix">
               <input id="riskTotal" type="number" min="0.1" max="100" step="0.1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">仓位持仓上限</span>
+            <span class="set-label">单笔仓位上限<span class="set-sub">一笔最多押多少保证金</span></span>
             <span class="input-suffix">
               <input id="riskPosCapInput" type="number" min="0.1" max="100" step="0.1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">同时持仓品种数</span>
+            <span class="set-label">同时持仓品种数<span class="set-sub">最多同时开几个仓</span></span>
             <span class="input-suffix">
               <input id="riskMaxPos" type="number" min="1" max="20" step="1" />
               <span class="suffix">个</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">保证金占用上限</span>
+            <span class="set-label">保证金占用上限<span class="set-sub">所有持仓合计（交易所卡这道）</span></span>
             <span class="input-suffix">
               <input id="riskMarginCap" type="number" min="1" max="100" step="1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">当日亏损上限</span>
+            <span class="set-label">当日亏损上限<span class="set-sub">当天亏到就停止开仓</span></span>
             <span class="input-suffix">
               <input id="riskDaily" type="number" min="0.1" max="100" step="0.1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">最大回撤</span>
+            <span class="set-label">最大回撤<span class="set-sub">权益从峰值回撤触发熔断</span></span>
             <span class="input-suffix">
               <input id="riskDrawdown" type="number" min="0.1" max="100" step="0.1" />
               <span class="suffix">% 权益</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">组合名义敞口上限</span>
+            <span class="set-label">组合名义敞口上限<span class="set-sub">所有持仓的名义合计</span></span>
             <span class="input-suffix">
               <input id="riskPortfolioCap" type="number" min="0.1" max="100" step="0.5" />
               <span class="suffix">x 权益</span>
             </span>
           </label>
           <label class="set-field">
-            <span class="set-label">相关组敞口上限</span>
+            <span class="set-label">相关组敞口上限<span class="set-sub">同类同向品种的名义合计</span></span>
             <span class="input-suffix">
               <input id="riskCorrCap" type="number" min="0.1" max="100" step="0.5" />
               <span class="suffix">x 权益</span>
             </span>
           </label>
         </div>
+        <div class="risk-link" id="riskMarginRule"><span class="rl-ico">·</span><span id="riskMarginRuleText">--</span></div>
         <p class="set-hint">
+          前 4 项是<b>互相联动的一组</b>：<b>单笔仓位上限 × 同时持仓品种数</b> 就是「全部仓位打满要占多少保证金」，
+          它必须 ≤ <b>保证金占用上限</b>，否则按仓位上限开满后必然有仓被拒。不满足时保存会被拒绝，
+          提示你先把保证金占用上限提上去。<br />
           前 6 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围。
-          实际仓位由上方「仓位大小」决定：听交易员时用模型给的 size，按风险上限反推时才用 上限 ÷ 止损。<br />
-          <b>同时持仓品种数</b>限制能同时开几个仓；<b>保证金占用上限</b>是交易所真正卡你的那道闸
-          （名义敞口再宽松，保证金不够一样拒单），多品种时通常先撞这个。<br />
-          后 2 项是<b>组合层敞口</b>（单位：倍权益），约束多笔/多品种<b>同向叠加</b>的名义敞口；
-          设得小于「仓位上限 × 杠杆上限」时，单笔满仓单也会被组合层拒绝。拦截告警会带上当前上限值。
+          实际仓位由上方「仓位大小」决定：听交易员时用模型给的 size，按风险上限反推时用 单笔风险上限 ÷ 止损 ÷ 杠杆。<br />
+          后 2 项是<b>组合层敞口</b>（单位：倍权益），约束多笔/多品种<b>同向叠加</b>的名义敞口，与保证金是两套算法：
+          名义看「开了多大的仓」，保证金看「押了多少本金」。拦截告警会带上当前上限值。
         </p>
       </div>
 
