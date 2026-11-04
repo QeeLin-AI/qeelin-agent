@@ -346,6 +346,7 @@ python tools/validate_factors.py --bars 8000 --symbol ETHUSDT --write
 - **后台预热**：主行情每次刷新后，用 `klines_prewarm` 把 `short_interval` 与 `klines_prewarm_intervals`（默认 `["15m"]`）的 K 线焐热，按盘缓存有效期节流。**只在主行情刷新时触发**，多品种机会扫描不预热，避免 6 倍请求。
 - **口径一致**：中频突破信号用的 `prefer` 跟着当前下单交易所走（原先固定用币安，在 OKX 上跑会错配行情）。
 - 缓存文件损坏 / 条数不足 / 写了一半，一律当作没有缓存，退回网络重新拉，不会拿脏数据凑数。
+- **备用源不被 WAF 误杀**：主接口失败按 `fapi → demo → Gate 永续` 回退。Gate 的 WAF 按 UA 指纹拉黑旧浏览器版本（Chrome/120 稳定 403、131 正常），所以 UA 固定用近期版本，并在 403 时换一个无浏览器指纹的兜底 UA 重试一次；429 / 5xx 不重试，直接交给下一个源。
 
 ```jsonc
 // config/default.json → market
