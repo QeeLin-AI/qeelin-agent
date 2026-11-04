@@ -19,8 +19,10 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONIOENCODING=utf-8
 # 包在 src/ 下，必须把 src 加进 PYTHONPATH（否则 No module named cryptoagent）
 Environment=PYTHONPATH=/opt/crypto-agent/src
-# 只监听本机，外部通过 SSH 隧道或 nginx 反代进来
-ExecStart=/opt/crypto-agent/.venv/bin/python -m cryptoagent web --host 127.0.0.1 --port 8000 --no-browser
+# 监听所有网卡，手机/外网可直接访问 http://<公网IP>:8000/?token=...
+# serve() 在绑定非回环地址且没有 CRYPTOAGENT_WEB_TOKEN 时会直接拒绝启动，
+# 不会出现「裸奔控制台」。只想本机访问（SSH 隧道）就把这里改回 127.0.0.1。
+ExecStart=/opt/crypto-agent/.venv/bin/python -m cryptoagent web --host 0.0.0.0 --port 8000 --no-browser
 Restart=always
 RestartSec=5
 
