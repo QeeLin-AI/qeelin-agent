@@ -1293,6 +1293,14 @@ class WebApp:
             r.leverage_override = lev
             # 不再抬 max_leverage：它只是「未连交易所时的保守兜底」，
             # 实际杠杆上限由交易所支持的最大杠杆决定（连上交易所就按交易所的来）
+        if "max_leverage" in payload:
+            try:
+                v = float(payload["max_leverage"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("max_leverage 必须是数字", 400) from exc
+            if not (1.0 <= v <= 125.0):
+                raise ApiError("杠杆上限只能在 1 ~ 125 之间", 400)
+            r.max_leverage = v
         if "max_loss_per_trade_pct" in payload:
             try:
                 v = float(payload["max_loss_per_trade_pct"])

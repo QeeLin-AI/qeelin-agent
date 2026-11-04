@@ -695,8 +695,8 @@ function renderRisk(r) {
   if (rdd && document.activeElement !== rdd) rdd.value = (Number(r.max_drawdown_pct) * 100).toFixed(0);
   const sm = $('riskSizingMode');
   if (sm && document.activeElement !== sm) sm.value = r.sizing_mode || 'llm';
-  const rb = $('riskBudget');
-  if (rb && document.activeElement !== rb) rb.value = (Number(r.risk_per_trade_pct || 0.01) * 100).toFixed(1);
+  const rmlv = $('riskMaxLev');
+  if (rmlv && document.activeElement !== rmlv) rmlv.value = Number(r.max_leverage || 20).toFixed(0);
   const rml = $('riskMinLev');
   if (rml && document.activeElement !== rml) rml.value = Number(r.min_leverage || 1).toFixed(0);
 }
@@ -765,13 +765,13 @@ $('riskSizingMode').addEventListener('change', async () => {
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
-$('riskBudget').addEventListener('change', async () => {
-  const v = Number($('riskBudget').value);
-  if (!v || v < 0.1 || v > 5) { toast('单笔风险预算需在 0.1% ~ 5% 之间', 'err'); poll(); return; }
+$('riskMaxLev').addEventListener('change', async () => {
+  const v = Number($('riskMaxLev').value);
+  if (!v || v < 1 || v > 125) { toast('杠杆上限需在 1 ~ 125 之间', 'err'); poll(); return; }
   try {
-    const d = await api('/api/risk', 'POST', { risk_per_trade_pct: v / 100 });
+    const d = await api('/api/risk', 'POST', { max_leverage: v });
     renderRisk(d.risk);
-    toast(`单笔风险预算已设为 ${v}%（止损 1.5% 时名义约 ${(v / 1.5).toFixed(1)}x 权益）`, 'ok');
+    toast(`杠杆上限已设为 ${v}x（实际杠杆取 min(交易所上限, 此值)）`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
