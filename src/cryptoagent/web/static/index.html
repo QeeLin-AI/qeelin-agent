@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QeeLin-Agent 控制台</title>
 <link rel="stylesheet" href="/static/style.css" />
-<link rel="stylesheet" href="/static/theme-v2.css" />
 <script>
   // 尽早应用主题，避免刷新时先闪一下暗色
   try {
@@ -17,26 +16,49 @@
 <body>
 <aside class="sidebar">
   <div class="side-brand">
-    <span class="brand-mark"><i>◆</i></span>
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none"><rect x="1" y="1" width="30" height="30" rx="9" fill="url(#bmg)"/><path d="M9 20.5L16 8l7 12.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 17h8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><defs><linearGradient id="bmg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#8b8cf9"/><stop offset="1" stop-color="#4f46e5"/></linearGradient></defs></svg>
+    </span>
     <div class="side-brand-text">
-      <span class="brand-name">QeeLin-Agent</span>
+      <span class="brand-name">QeeLin<span class="brand-suffix">Agent</span></span>
       <span class="ver" id="verTag">--</span>
     </div>
   </div>
-  <div class="nav-label">工作台</div>
-  <nav class="tabs">
-    <button class="tab active" data-tab="overview"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>总览</span></button>
-    <button class="tab" data-tab="trading"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l5-5 4 3 7-8"/><path d="M16 7h4v4"/></svg><span>交易</span></button>
-    <button class="tab" data-tab="settings"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h8M18 7h2M4 17h3M13 17h7"/><circle cx="15" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>设置</span></button>
-    <button class="tab" data-tab="decision"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h6M12 12V6h5M12 12v6h5"/><circle cx="5" cy="12" r="1.5"/><circle cx="19" cy="6" r="1.5"/><circle cx="19" cy="18" r="1.5"/></svg><span>决策</span></button>
-    <button class="tab" data-tab="research"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16M7 16v-6M12 16V5M17 16v-4"/></svg><span>因子研究</span></button>
-  </nav>
+
+  <div class="side-scroll">
+    <div class="nav-group">
+      <div class="nav-label">工作台</div>
+      <nav class="tabs">
+      <button class="tab active" data-tab="overview"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>总览</span></button>
+      <button class="tab" data-tab="trading"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l5-5 4 3 9-9"/><path d="M16 6h5v5"/></svg><span>交易</span></button>
+      </nav>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">智能体</div>
+      <nav class="tabs">
+      <button class="tab" data-tab="decision"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h4V6h4M12 12v6h4"/></svg><span>决策</span></button>
+      <button class="tab" data-tab="research"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19h16"/><path d="M7 16v-5M12 16V5M17 16v-8"/><circle cx="7" cy="8" r="1"/><circle cx="12" cy="4" r="1"/><circle cx="17" cy="6" r="1"/></svg><span>因子研究</span></button>
+      </nav>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">系统</div>
+      <nav class="tabs">
+      <button class="tab" data-tab="settings"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span>设置</span></button>
+      </nav>
+    </div>
+  </div>
+
   <div class="side-foot">
+    <div class="side-foot-note">QeeLin-Agent Console</div>
     <button id="themeBtn" class="btn ghost sm">☀ 亮色主题</button>
   </div>
 </aside>
 
 <header class="topbar">
+  <div class="tb-context">
+    <span class="tb-mark" aria-hidden="true"></span>
+    <span class="tb-title">控制台</span>
+  </div>
   <div class="price-block">
     <div class="price-row">
       <select id="symbolSelect" class="symbol-select" title="切换品种（配置里 market.symbols）"></select>
@@ -54,8 +76,9 @@
     <span id="dataSource" class="tag">数据源 --</span>
     <span id="llmTag" class="tag">LLM --</span>
     <span id="modeBadge" class="badge paper">PAPER</span>
-    <button id="clearCacheBtn" class="btn ghost" title="强制重新加载界面，清除浏览器缓存的旧版本">强制刷新</button>
-    <button id="haltBtn" class="btn danger ghost">熔断</button>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button id="clearCacheBtn" class="btn ghost sm" title="强制重新加载界面，清除浏览器缓存的旧版本">强制刷新</button>
+    <button id="haltBtn" class="btn ghost sm danger">熔断</button>
   </div>
   <div class="win-controls hidden" id="winControls">
     <button id="tbMin" class="wc-btn" title="最小化">─</button>
@@ -73,55 +96,70 @@
 <main>
   <!-- ============ 总览 ============ -->
   <section id="tab-overview" class="panel active">
-    <div class="stat-row">
-      <div class="stat"><label>账户权益 <span id="equitySrc" class="src-chip">本地模拟</span></label><b id="equity">--</b><small id="equitySub">--</small></div>
+    <div class="page-head">
+      <div class="page-head-main">
+        <span class="eyebrow">WORKSPACE / 工作台</span>
+        <h1>总览</h1>
+        <p class="page-sub">账户权益、当前持仓与盈亏表现，一屏掌握。</p>
+      </div>
+      <div class="page-head-aside">
+        <span class="ph-note">Portfolio overview</span>
+      </div>
+    </div>
+
+        <div class="stat-row">
+      <div class="stat stat-primary"><label>账户权益 <span id="equitySrc" class="src-chip">本地模拟</span></label><b id="equity">--</b><small id="equitySub">--</small></div>
       <div class="stat"><label>当日盈亏</label><b id="dayPnl">--</b><small id="dayPnlSub"></small></div>
       <div class="stat"><label>回撤</label><b id="drawdown">--</b></div>
       <div class="stat"><label>持仓 <span id="posSrc" class="src-chip hidden"></span></label><b id="position">空仓</b><small id="posSub"></small></div>
     </div>
 
-    <div class="card hidden" id="posMgmtCard">
-      <div class="card-head"><h2>持仓管理员</h2><span class="muted">移动止损 / 时间止损 / 趋势反转</span></div>
-      <div id="posMgmtBody"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h2>通知 / 告警</h2><span class="muted" id="notifChannels"></span><div class="actions"><button id="notifClearBtn" class="btn ghost sm" title="清空通知列表">清除</button></div></div>
-      <div class="notif-list" id="notifList"><div class="muted center">暂无通知</div></div>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h2>盈亏</h2></div>
-      <div class="pnl-hero">
-        <div class="pnl-total">
-          <label>累计已实现盈亏</label>
-          <b id="pnlTotal">--</b>
+    <div class="overview-grid">
+      <div class="ov-main">
+        <div class="card pnl-card">
+          <div class="card-head"><h2>盈亏</h2><span class="card-kicker">已实现 · PERFORMANCE</span></div>
+          <div class="pnl-hero">
+            <div class="pnl-total">
+              <label>累计已实现盈亏</label>
+              <b id="pnlTotal">--</b>
+            </div>
+            <div class="pnl-stats" id="pnlStats"></div>
+          </div>
+          <div class="pnl-trades" id="pnlTrades"><div class="muted center">暂无平仓成交</div></div>
+          <div class="divider"><span>每日盈亏（已实现）</span></div>
+          <div class="cal-block">
+            <div class="cal-head">
+              <button id="calPrev" class="btn ghost sm" title="上个月">‹</button>
+              <span id="calMonth" class="cal-month">--</span>
+              <button id="calNext" class="btn ghost sm" title="下个月">›</button>
+              <span id="calSummary" class="muted"></span>
+            </div>
+            <div class="cal-weekdays">
+              <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+            </div>
+            <div class="cal-grid" id="calGrid"></div>
+            <div class="cal-legend">
+              <span class="cal-key up">+0.00</span>盈利
+              <span class="cal-key down">-0.00</span>亏损
+              <span class="cal-key today">今天</span>
+              <span class="muted">悬停看当天笔数与胜场</span>
+            </div>
+          </div>
         </div>
-        <div class="pnl-stats" id="pnlStats"></div>
       </div>
-      <div class="pnl-trades" id="pnlTrades"><div class="muted center">暂无平仓成交</div></div>
-      <div class="divider"><span>每日盈亏（已实现）</span></div>
-      <div class="pnl-split">
-        <div class="cal-block">
-          <div class="cal-head">
-            <button id="calPrev" class="btn ghost sm" title="上个月">‹</button>
-            <span id="calMonth" class="cal-month">--</span>
-            <button id="calNext" class="btn ghost sm" title="下个月">›</button>
-            <span id="calSummary" class="muted"></span>
-          </div>
-          <div class="cal-weekdays">
-            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
-          </div>
-          <div class="cal-grid" id="calGrid"></div>
-          <div class="cal-legend">
-            <span class="cal-key up">+0.00</span>盈利
-            <span class="cal-key down">-0.00</span>亏损
-            <span class="cal-key today">今天</span>
-            <span class="muted">悬停看当天笔数与胜场</span>
-          </div>
+
+      <aside class="ov-side">
+        <div class="card hidden" id="posMgmtCard">
+          <div class="card-head"><h2>持仓管理员</h2><span class="muted">移动止损 / 时间止损 / 趋势反转</span></div>
+          <div id="posMgmtBody"></div>
         </div>
 
-        <aside class="opp-panel">
+        <div class="card notif-card">
+          <div class="card-head"><h2>通知 / 告警</h2><span class="muted" id="notifChannels"></span><div class="actions"><button id="notifClearBtn" class="btn ghost sm" title="清空通知列表">清除</button></div></div>
+          <div class="notif-list" id="notifList"><div class="muted center">暂无通知</div></div>
+        </div>
+
+        <div class="card opp-panel">
           <div class="opp-head">
             <span class="opp-title">机会信号排行榜</span>
             <button id="rotateRefresh" class="btn ghost sm">重扫</button>
@@ -132,14 +170,25 @@
             <label class="inline"><input id="rotateToggle" type="checkbox" /> 自动选品种</label>
           </div>
           <div class="opp-list" id="oppList"><div class="muted center">扫描中…（自动循环会周期性扫描）</div></div>
-        </aside>
-      </div>
+        </div>
+      </aside>
     </div>
-  </section>
+</section>
 
   <!-- ============ 决策 ============ -->
 
   <section id="tab-decision" class="panel">
+    <div class="page-head">
+      <div class="page-head-main">
+        <span class="eyebrow">AGENTS / 智能体</span>
+        <h1>决策</h1>
+        <p class="page-sub">多智能体链路的推理过程、仓位归因与多品种扫描。</p>
+      </div>
+      <div class="page-head-aside">
+        <span class="ph-note">Decision pipeline</span>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <h2>多智能体决策</h2>
@@ -172,6 +221,17 @@
 
   <!-- ============ 研究 ============ -->
   <section id="tab-research" class="panel">
+    <div class="page-head">
+      <div class="page-head-main">
+        <span class="eyebrow">AGENTS / 智能体</span>
+        <h1>因子研究</h1>
+        <p class="page-sub">因子自动挖掘、沙箱验证与样本外表现排行。</p>
+      </div>
+      <div class="page-head-aside">
+        <span class="ph-note">Factor lab</span>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <h2>因子自动研究</h2>
@@ -203,6 +263,17 @@
 
   <!-- ============ 交易 ============ -->
   <section id="tab-trading" class="panel">
+    <div class="page-head">
+      <div class="page-head-main">
+        <span class="eyebrow">WORKSPACE / 工作台</span>
+        <h1>交易</h1>
+        <p class="page-sub">自动交易开关、交易所连接、持仓与成交流水。</p>
+      </div>
+      <div class="page-head-aside">
+        <span class="ph-note">Execution</span>
+      </div>
+    </div>
+
     <div>
       <div class="card">
         <div class="card-head"><h2>自动交易</h2><span id="autoState" class="badge">停止</span></div>
@@ -281,7 +352,28 @@
 
   <!-- ============ 设置 ============ -->
   <section id="tab-settings" class="panel">
-    <div class="card">
+    <div class="page-head">
+      <div class="page-head-main">
+        <span class="eyebrow">SYSTEM / 系统</span>
+        <h1>设置</h1>
+        <p class="page-sub">交易所凭据、风控参数、模型与通知通道。</p>
+      </div>
+      <div class="page-head-aside">
+        <span class="ph-note">Configuration</span>
+      </div>
+    </div>
+
+        <div class="settings-layout">
+      <nav class="set-nav" aria-label="设置分区">
+        <span class="set-nav-label">分区</span>
+        <button type="button" class="set-nav-item" onclick="document.getElementById('set-exchange').scrollIntoView({behavior:'smooth',block:'start'})">交易所与连接</button>
+        <button type="button" class="set-nav-item" onclick="document.getElementById('set-params').scrollIntoView({behavior:'smooth',block:'start'})">交易参数</button>
+        <button type="button" class="set-nav-item" onclick="document.getElementById('set-llm').scrollIntoView({behavior:'smooth',block:'start'})">模型设置</button>
+        <button type="button" class="set-nav-item" onclick="document.getElementById('set-sentiment').scrollIntoView({behavior:'smooth',block:'start'})">情绪 / 新闻源</button>
+        <button type="button" class="set-nav-item" onclick="document.getElementById('set-notify').scrollIntoView({behavior:'smooth',block:'start'})">通知 / 告警</button>
+      </nav>
+      <div class="set-content">
+<div class="card" id="set-exchange">
       <div class="card-head"><h2>交易与交易所</h2><span id="exNow" class="muted"></span><span id="armState" class="badge paper">PAPER</span></div>
     <div class="trade-split">
     <div class="trade-main">
@@ -400,7 +492,7 @@
     </aside>
     </div>
     </div>
-    <div class="card">
+    <div class="card" id="set-params">
       <div class="card-head"><h2>交易参数</h2><span class="muted">仓位与风控</span></div>
 
       <div class="set-group">
@@ -505,7 +597,7 @@
       </div>
 
     </div>
-    <div class="card">
+    <div class="card" id="set-llm">
       <div class="card-head"><h2>LLM 模型设置</h2><span class="muted" id="llmStatus">--</span></div>
 
       <div class="set-group">
@@ -566,7 +658,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="set-sentiment">
       <div class="card-head"><h2>情绪 / 新闻源（A1）</h2><span class="muted" id="sentimentStatus">--</span></div>
 
       <div class="set-group">
@@ -599,7 +691,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="set-notify">
       <div class="card-head"><h2>通知 / 告警（A2）</h2><span class="muted" id="notifyStatus">--</span></div>
 
       <div class="set-group">
@@ -642,7 +734,9 @@
         <button id="notifySaveBtn" class="btn primary">保存</button>
       </div>
     </div>
-  </section>
+        </div>
+    </div>
+</section>
 </main>
 
 <!-- 交易品种管理 -->
