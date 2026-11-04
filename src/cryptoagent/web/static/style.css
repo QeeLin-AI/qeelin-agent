@@ -441,22 +441,22 @@ label.field > input, label.field > select { max-width: 420px; }
 .stat-row > .stat:nth-child(1) { background: linear-gradient(155deg, #0e8a85 0%, #0b6c68 100%); } /* 账户权益 — 深青 */
 .stat-row > .stat:nth-child(2) { background: linear-gradient(155deg, #2a57e0 0%, #1d3ca8 100%); } /* 当日盈亏 — 深蓝 */
 .stat-row > .stat:nth-child(3) { background: linear-gradient(155deg, #c2620a 0%, #954807 100%); } /* 回撤 — 深琥珀 */
-.stat-row > .stat:nth-child(4) { background: linear-gradient(155deg, #0f9d57 0%, #0a753f 100%); } /* 持仓 — 深绿 */
+.stat-row > .stat:nth-child(4) { background: linear-gradient(155deg, #9c2830 0%, #6f1a20 100%); } /* 持仓 — 枣红 */
 /* 持仓卡第三行：持仓管理员巡检心跳。时间戳做成高亮徽标，配合状态点与距今秒数，
    一眼能判断守护线程是否还在跑（页面每 3 秒轮询，秒数不变即为停滞）。 */
 .pm-line {
-  display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap;
-  margin-top: 2px; font-size: 11px; color: rgba(255, 255, 255, .62);
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  margin-top: 2px; font-size: 10.5px; color: rgba(255, 255, 255, .64);
 }
 .pm-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; background: rgba(255, 255, 255, .4); }
 .pm-line.live .pm-dot { background: #6ff2ac; animation: pmPulse 2.4s ease-out infinite; }
 .pm-line.warn { color: #ffe3ae; }
 .pm-line.warn .pm-dot { background: #ffc76b; animation: none; }
-.pm-line.off { color: #ffc4c4; }
-.pm-line.off .pm-dot { background: #ff8585; }
+.pm-line.off { color: #ffd0d0; }
+.pm-line.off .pm-dot { background: #ff9b9b; }
 .pm-time {
-  padding: 1px 6px; border-radius: 6px; background: rgba(255, 255, 255, .22);
-  font-size: 12px; font-weight: 700; color: #fff; letter-spacing: .02em;
+  padding: 1px 5px; border-radius: 6px; background: rgba(255, 255, 255, .24);
+  font-size: 11.5px; font-weight: 700; color: #fff; letter-spacing: .01em;
   font-variant-numeric: tabular-nums;
 }
 .pm-age { color: rgba(255, 255, 255, .75); font-variant-numeric: tabular-nums; }
