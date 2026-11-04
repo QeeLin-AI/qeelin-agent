@@ -701,11 +701,18 @@ function renderRisk(r) {
   if (rml && document.activeElement !== rml) rml.value = Number(r.min_leverage || 1).toFixed(0);
 }
 
+// 风控保存后的非阻塞提醒：硬顶由用户自主设定，系统只提示、不改值
+function riskWarn(d) {
+  const w = (d && d.warnings) || [];
+  if (!w.length) return;
+  setTimeout(() => toast(w[0], 'err'), 1400);
+}
+
 $('levSelect').addEventListener('change', async () => {
   const v = Number($('levSelect').value);
   try {
     const d = await api('/api/risk', 'POST', { leverage_override: v });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(v > 0
       ? `杠杆已固定为 ${v}x，已写进配置（下次决策生效）`
       : '杠杆恢复自动（跟随决策，上限以交易所为准）', 'ok');
@@ -720,37 +727,37 @@ $('riskTotal').addEventListener('change', async () => {
   if (!v || v < 0.1 || v > 100) { toast('单笔风险上限需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { max_loss_per_trade_pct: v / 100 });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(`单笔风险上限已设为 ${v}%`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
 $('riskPosCapInput').addEventListener('change', async () => {
   const v = Number($('riskPosCapInput').value);
-  if (!v || v < 1 || v > 100) { toast('仓位持仓上限需在 1% ~ 100% 之间', 'err'); poll(); return; }
+  if (!v || v < 0.1 || v > 100) { toast('仓位持仓上限需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { max_position_pct: v / 100 });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(`仓位持仓上限已设为 ${v}%`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
 $('riskDaily').addEventListener('change', async () => {
   const v = Number($('riskDaily').value);
-  if (!v || v < 1 || v > 30) { toast('当日亏损上限需在 1% ~ 30% 之间', 'err'); poll(); return; }
+  if (!v || v < 0.1 || v > 100) { toast('当日亏损上限需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { daily_loss_limit_pct: v / 100 });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(`当日亏损上限已设为 ${v}%`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
 $('riskDrawdown').addEventListener('change', async () => {
   const v = Number($('riskDrawdown').value);
-  if (!v || v < 5 || v > 50) { toast('最大回撤需在 5% ~ 50% 之间', 'err'); poll(); return; }
+  if (!v || v < 0.1 || v > 100) { toast('最大回撤需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { max_drawdown_pct: v / 100 });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(`最大回撤已设为 ${v}%`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
@@ -759,7 +766,7 @@ $('riskSizingMode').addEventListener('change', async () => {
   const v = $('riskSizingMode').value;
   try {
     const d = await api('/api/risk', 'POST', { sizing_mode: v });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     const label = { llm: '听交易员', risk: '按风险预算反推', max: '两者取大' }[v] || v;
     toast(`仓位方式已改为「${label}」`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
@@ -770,7 +777,7 @@ $('riskMaxLev').addEventListener('change', async () => {
   if (!v || v < 1 || v > 125) { toast('杠杆上限需在 1 ~ 125 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { max_leverage: v });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(`杠杆上限已设为 ${v}x（实际杠杆取 min(交易所上限, 此值)）`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
@@ -780,7 +787,7 @@ $('riskMinLev').addEventListener('change', async () => {
   if (!v || v < 1 || v > 50) { toast('杠杆下限需在 1 ~ 50 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { min_leverage: v });
-    renderRisk(d.risk);
+    renderRisk(d.risk); riskWarn(d);
     toast(`杠杆下限已设为 ${v}x`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });

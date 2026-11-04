@@ -1314,24 +1314,24 @@ class WebApp:
                 v = float(payload["max_position_pct"])
             except (TypeError, ValueError) as exc:
                 raise ApiError("max_position_pct 必须是数字", 400) from exc
-            if not (0.01 <= v <= 1.0):
-                raise ApiError("仓位上限只能在 1% ~ 100% 之间", 400)
+            if not (0.001 <= v <= 1.0):
+                raise ApiError("仓位上限只能在 0.1% ~ 100% 之间", 400)
             r.max_position_pct = v
         if "daily_loss_limit_pct" in payload:
             try:
                 v = float(payload["daily_loss_limit_pct"])
             except (TypeError, ValueError) as exc:
                 raise ApiError("daily_loss_limit_pct 必须是数字", 400) from exc
-            if not (0.01 <= v <= 0.30):
-                raise ApiError("当日亏损上限只能在 1% ~ 30% 之间", 400)
+            if not (0.001 <= v <= 1.0):
+                raise ApiError("当日亏损上限只能在 0.1% ~ 100% 之间", 400)
             r.daily_loss_limit_pct = v
         if "max_drawdown_pct" in payload:
             try:
                 v = float(payload["max_drawdown_pct"])
             except (TypeError, ValueError) as exc:
                 raise ApiError("max_drawdown_pct 必须是数字", 400) from exc
-            if not (0.05 <= v <= 0.50):
-                raise ApiError("最大回撤只能在 5% ~ 50% 之间", 400)
+            if not (0.001 <= v <= 1.0):
+                raise ApiError("最大回撤只能在 0.1% ~ 100% 之间", 400)
             r.max_drawdown_pct = v
         if "sizing_mode" in payload:
             mode = str(payload["sizing_mode"]).strip().lower()
@@ -1370,20 +1370,28 @@ class WebApp:
             if not (0.1 <= v <= 10.0):
                 raise ApiError("相关组敞口上限只能在 10% ~ 1000% 之间", 400)
             r.correlated_exposure_pct = v
-        # 组合/相关性敞口上限必须 ≥ 单笔最大名义（= 仓位上限 × 杠杆上限），
-        # 否则单笔满仓单会被组合层误拒（见 config.py RiskConfig 注释）。
+        # 风控硬顶由用户自主设定，系统不擅自改写任何配置值。
+        # 仅在「单笔最大名义（仓位上限 × 杠杆上限）」超出组合上限时给出警告，
+        # 提示这类单会被组合层拒绝，由用户自己决定是否调整。
+        warnings = []
         _need = float(r.max_position_pct) * float(r.max_leverage)
         if _need > 0:
             if r.max_portfolio_notional_pct < _need:
-                r.max_portfolio_notional_pct = _need
+                warnings.append(
+                    f"单笔最大名义 {_need:.1f}x 权益 超过组合名义敞口上限 "
+                    f"{r.max_portfolio_notional_pct:.1f}x，超过该值的单会被组合层拒绝"
+                )
             if r.correlated_exposure_pct < _need:
-                r.correlated_exposure_pct = _need
+                warnings.append(
+                    f"单笔最大名义 {_need:.1f}x 权益 超过相关组敞口上限 "
+                    f"{r.correlated_exposure_pct:.1f}x，同向集中持仓会被拒绝"
+                )
         try:
             save_config(self.cfg, config_path())
             saved = True
         except OSError:
             saved = False          # 只读文件系统：内存里仍然生效
-        return {"risk": self.risk_config(), "saved": saved}
+        return {"risk": self.risk_config(), "saved": saved, "warnings": warnings}
 
     def opportunities(self, payload: dict) -> dict:
         """机会信号排行榜：立即返回缓存结果，扫描放到后台线程（一次扫描约 10 秒）。
