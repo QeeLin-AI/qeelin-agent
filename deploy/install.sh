@@ -22,18 +22,18 @@ log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 [[ $EUID -eq 0 ]] || { echo "要用 root 跑：sudo bash deploy/install.sh"; exit 1; }
 
-log "1/7 安装系统依赖"
+log "1/8 安装系统依赖"
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip chrony curl git rsync ca-certificates
 
-log "2/7 时间同步（签名时间戳偏差 >1s 会被币安拒单）"
+log "2/8 时间同步（签名时间戳偏差 >1s 会被币安拒单）"
 systemctl enable --now chrony >/dev/null 2>&1 || true
 chronyc makestep >/dev/null 2>&1 || true
 
-log "3/7 创建用户 ${SERVICE_USER}"
+log "3/8 创建用户 ${SERVICE_USER}"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd -r -m -d "/home/${SERVICE_USER}" -s /usr/sbin/nologin "$SERVICE_USER"
 
-log "4/7 同步代码到 ${APP_DIR}"
+log "4/8 同步代码到 ${APP_DIR}"
 mkdir -p "$APP_DIR"
 if [[ "$SRC_DIR" != "$APP_DIR" ]]; then
   # 不带账本/缓存/虚拟环境
@@ -45,12 +45,12 @@ fi
 mkdir -p "$APP_DIR"/{runs,data,factors_library}
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
 
-log "5/7 建 venv 装依赖"
+log "5/8 建 venv 装依赖"
 sudo -u "$SERVICE_USER" python3 -m venv "$APP_DIR/.venv"
 sudo -u "$SERVICE_USER" "$APP_DIR/.venv/bin/pip" install -q --upgrade pip
 sudo -u "$SERVICE_USER" "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
 
-log "6/7 写环境变量文件（含访问令牌）"
+log "6/8 写环境变量文件（含访问令牌）"
 if [[ ! -f "$ENV_FILE" ]]; then
   TOKEN="$(openssl rand -hex 24)"
   cat > "$ENV_FILE" <<EOF
@@ -75,12 +75,23 @@ else
   echo "  $ENV_FILE 已存在，保持不变"
 fi
 
-log "7/7 安装并启动 systemd 服务"
+log "7/8 安装并启动 systemd 服务"
 install -m 644 "$APP_DIR/deploy/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}"
 sleep 2
 systemctl --no-pager --lines=8 status "${SERVICE_NAME}" || true
+
+log "8/8 安装 fail2ban（SSH 爆破防护）"
+# 配置里覆盖了 journalmatch：Debian/Ubuntu 的 SSH 单元叫 ssh.service，
+# 而 fail2ban 默认找 sshd.service，不覆盖就永远匹配不到日志（jail 空转）。
+apt-get install -y -qq fail2ban
+install -m 644 -o root -g root "$APP_DIR/deploy/fail2ban/qeelin.conf" /etc/fail2ban/jail.d/qeelin.local
+systemctl enable --now fail2ban
+systemctl restart fail2ban
+sleep 2
+fail2ban-client status sshd 2>/dev/null | grep -E "Journal matches|Currently banned" || \
+  echo "  fail2ban 未就绪，检查 journalctl -u fail2ban"
 
 TOKEN_VAL="$(grep CRYPTOAGENT_WEB_TOKEN "$ENV_FILE" | cut -d= -f2)"
 cat <<EOF

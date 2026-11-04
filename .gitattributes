@@ -2,6 +2,8 @@
 # 否则会报 `$'\r': command not found`（2026-11 迁 Linux 时踩过）。
 *.sh      text eol=lf
 *.service text eol=lf
+# fail2ban 的 jail 配置也由 Linux 侧读取，保持 LF
+*.conf    text eol=lf
 
 # Windows 批处理反过来，必须是 CRLF
 *.cmd text eol=crlf
