@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.1.0--Beta-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.0--Beta-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -13,7 +13,7 @@
 
 > 核心原则：数字由代码算，语言交给模型。LLM 负责解释与权衡，不负责算术，也没有下单权限。开仓后的移动止损、时间止损、趋势反转退出，以及成本/流动性检查，全部是确定性代码。
 
-> **V1.1.0-Beta**：现代 SaaS 控制台视觉重做（分组侧栏、五个页签、双主题），并延续 V1.0.2 的持仓管理员（退出决策）、执行成本闸、43 个内置因子（含基差 / 持仓量 / 多空比等衍生品维度）与分析师权重事后校准；同时修正了默认风控上限自相矛盾的问题（组合 / 相关敞口上限已与单笔名义上限对齐）。
+> **v1.1.0-Beta**：现代 SaaS 控制台视觉重做（分组侧栏、五个页签、双主题），并延续 v1.0.2 的持仓管理员（退出决策）、执行成本闸、43 个内置因子（含基差 / 持仓量 / 多空比等衍生品维度）与分析师权重事后校准；同时修正了默认风控上限自相矛盾的问题（组合 / 相关敞口上限已与单笔名义上限对齐）。
 
 ![总览](docs/ui.png)
 
