@@ -23,6 +23,11 @@ sudo -u "$SERVICE_USER" git reset --hard origin/main
 
 sudo -u "$SERVICE_USER" "$APP_DIR/.venv/bin/pip" install -q -r requirements.txt
 
+# unit 文件也会随代码更新（环境变量、重启策略、加固项），必须一并同步，
+# 否则代码更新了、systemd 还在跑老配置
+install -m 644 deploy/cryptoagent.service /etc/systemd/system/cryptoagent.service
+systemctl daemon-reload
+
 systemctl restart cryptoagent
 sleep 2
 systemctl --no-pager --lines=10 status cryptoagent || true
