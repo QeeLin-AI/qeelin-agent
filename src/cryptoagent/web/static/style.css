@@ -194,6 +194,9 @@ canvas { width: 100%; height: auto; display: block; }
 .price.is-loading { font-size: 13px; font-weight: 500; color: var(--muted); }
 .pct { font-size: 12.5px; font-weight: 650; white-space: nowrap; }
 .pct-span { font-size: 10.5px; color: var(--faint); margin-left: 2px; white-space: nowrap; }
+/* 顶栏价格跟随本品种 24h 涨跌着色（涨红 / 跌绿，沿用 .pct 的 up/down 信号，纯 CSS，不依赖 JS） */
+.price-row:has(.pct.up) .price:not(.is-loading) { color: var(--up); }
+.price-row:has(.pct.down) .price:not(.is-loading) { color: var(--down); }
 .live-dot { font-size: 9px; color: var(--faint); transition: color .2s; }
 .live-dot.on { color: var(--ok); }
 .live-dot.err { color: var(--up); }
