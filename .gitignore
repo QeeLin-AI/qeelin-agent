@@ -35,6 +35,8 @@ docs/*
 !docs/ui.png
 !docs/tab-decision.png
 !docs/tab-research.png
+!docs/tab-settings.png
+!docs/tab-trading.png
 
 # 桌面端构建产物（体积大，不入库）
 desktop/node_modules/
