@@ -3,6 +3,9 @@ Description=crypto-agent 永续合约研究/交易控制台
 Documentation=file:/opt/crypto-agent/README.md
 After=network-online.target
 Wants=network-online.target
+# 崩溃重启限流。这两个键只认 [Unit]，写在 [Service] 里 systemd 会忽略并告警。
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -14,13 +17,12 @@ WorkingDirectory=/opt/crypto-agent
 EnvironmentFile=-/opt/crypto-agent/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONIOENCODING=utf-8
+# 包在 src/ 下，必须把 src 加进 PYTHONPATH（否则 No module named cryptoagent）
+Environment=PYTHONPATH=/opt/crypto-agent/src
 # 只监听本机，外部通过 SSH 隧道或 nginx 反代进来
 ExecStart=/opt/crypto-agent/.venv/bin/python -m cryptoagent web --host 127.0.0.1 --port 8000 --no-browser
 Restart=always
 RestartSec=5
-# 崩溃重启，但不要疯狂重启
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 # --- 加固 ---
 NoNewPrivileges=true
