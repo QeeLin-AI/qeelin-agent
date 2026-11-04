@@ -717,7 +717,7 @@ $('levSelect').addEventListener('change', async () => {
 
 $('riskTotal').addEventListener('change', async () => {
   const v = Number($('riskTotal').value);
-  if (!v || v < 0.1 || v > 5) { toast('单笔风险上限需在 0.1% ~ 5% 之间', 'err'); poll(); return; }
+  if (!v || v < 0.1 || v > 100) { toast('单笔风险上限需在 0.1% ~ 100% 之间', 'err'); poll(); return; }
   try {
     const d = await api('/api/risk', 'POST', { max_loss_per_trade_pct: v / 100 });
     renderRisk(d.risk);

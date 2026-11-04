@@ -1306,8 +1306,8 @@ class WebApp:
                 v = float(payload["max_loss_per_trade_pct"])
             except (TypeError, ValueError) as exc:
                 raise ApiError("max_loss_per_trade_pct 必须是数字", 400) from exc
-            if not (0.001 <= v <= 0.05):
-                raise ApiError("单笔风险上限只能在 0.1% ~ 5% 之间", 400)
+            if not (0.001 <= v <= 1.0):
+                raise ApiError("单笔风险上限只能在 0.1% ~ 100% 之间", 400)
             r.max_loss_per_trade_pct = v
         if "max_position_pct" in payload:
             try:
@@ -1370,6 +1370,14 @@ class WebApp:
             if not (0.1 <= v <= 10.0):
                 raise ApiError("相关组敞口上限只能在 10% ~ 1000% 之间", 400)
             r.correlated_exposure_pct = v
+        # 组合/相关性敞口上限必须 ≥ 单笔最大名义（= 仓位上限 × 杠杆上限），
+        # 否则单笔满仓单会被组合层误拒（见 config.py RiskConfig 注释）。
+        _need = float(r.max_position_pct) * float(r.max_leverage)
+        if _need > 0:
+            if r.max_portfolio_notional_pct < _need:
+                r.max_portfolio_notional_pct = _need
+            if r.correlated_exposure_pct < _need:
+                r.correlated_exposure_pct = _need
         try:
             save_config(self.cfg, config_path())
             saved = True
