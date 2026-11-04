@@ -166,7 +166,8 @@ class TradingEngine:
 
         决策里的中频突破信号、页面切 15m 图，走的都是 fetch_klines。没有预热时
         它们只能现场打交易所：慢几百毫秒，而且哪次拉失败就静默退化成「无信号」。
-        这里在主行情刷新后顺手把 short_interval 的 K 线拉到盘里，之后两边都读本地。
+        这里在主行情刷新后顺手把 short_interval（以及额外配置的 15m）拉到盘里，
+        之后两边都读本地。
 
         三条纪律：
         - 只在主行情刷新时触发，机会扫描（6 品种 × 4 请求）不预热；
@@ -178,17 +179,18 @@ class TradingEngine:
             return
         if not getattr(mkt, "klines_cache", True) or not getattr(mkt, "klines_prewarm", True):
             return
-        interval = str(getattr(mkt, "short_interval", "5m") or "5m")
-        if interval not in KL_INTERVALS:
-            return
         # short_interval + 额外周期（默认 15m）：中频信号和图表各要一个粒度，
         # 两个周期各一次请求，比让它们各自在请求线程里现场拉省得多。
-        intervals = [interval]
-        for extra in getattr(mkt, "klines_prewarm_intervals", ["15m"]) or []:
-            iv = str(extra or "").strip()
-            if iv and iv in KL_INTERVALS and iv not in intervals:
+        wanted = [str(getattr(mkt, "short_interval", "5m") or "5m")]
+        wanted += [str(x or "") for x in (getattr(mkt, "klines_prewarm_intervals", ["15m"]) or [])]
+        intervals: list[str] = []
+        for iv in wanted:
+            iv = iv.strip()
+            if iv in KL_INTERVALS and iv not in intervals:
                 intervals.append(iv)
-        every = kl_disk_ttl(interval)
+        if not intervals:
+            return
+        every = kl_disk_ttl(intervals[0])
         now = time.time()
         with self.lock:
             if self._kl_prewarm_busy or (now - self._kl_prewarm_at) < every:
@@ -201,14 +203,16 @@ class TradingEngine:
         exchange = self.state.get("exchange", "binance")
 
         def _worker() -> None:
-            for iv in intervals:
-                try:
-                    # force 不设为 True：盘里还新鲜就直接跳过，不跟页面/决策抢同一份数据。
-                    # 盘过期时它自己会走网络并覆盖，这就是「预热」的本意。
-                    fetch_klines(symbol, iv, bars, prefer=exchange)
-                except Exception:  # noqa: BLE001 - 预热是旁路，失败只跳过本轮
-                    continue
-            self._kl_prewarm_busy = False
+            try:
+                for iv in intervals:
+                    try:
+                        # force 不设为 True：盘里还新鲜就直接跳过，不跟页面/决策抢同一份数据。
+                        # 盘过期时它自己会走网络并覆盖，这就是「预热」的本意。
+                        fetch_klines(symbol, iv, bars, prefer=exchange)
+                    except Exception:  # noqa: BLE001 - 单个周期失败不影响其他周期
+                        continue
+            finally:
+                self._kl_prewarm_busy = False   # 任何情况都要解锁，否则预热永久停摆
 
         threading.Thread(target=_worker, daemon=True, name="kl-prewarm").start()
 
