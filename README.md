@@ -343,15 +343,16 @@ python tools/validate_factors.py --bars 8000 --symbol ETHUSDT --write
 | 交易所 | — | 盘缓存过期后整段重拉一次并**原子覆盖**，不做增量拼接 |
 
 - **交易所隔离**：币安与 OKX 分开存文件，切交易所绝不会读到另一家的价格。
-- **后台预热**：主行情每次刷新后，用 `klines_prewarm` 把 `short_interval` 的 K 线焐热（按盘缓存有效期节流）。**只在主行情刷新时触发**，多品种机会扫描不预热，避免 6 倍请求。
+- **后台预热**：主行情每次刷新后，用 `klines_prewarm` 把 `short_interval` 与 `klines_prewarm_intervals`（默认 `["15m"]`）的 K 线焐热，按盘缓存有效期节流。**只在主行情刷新时触发**，多品种机会扫描不预热，避免 6 倍请求。
 - **口径一致**：中频突破信号用的 `prefer` 跟着当前下单交易所走（原先固定用币安，在 OKX 上跑会错配行情）。
 - 缓存文件损坏 / 条数不足 / 写了一半，一律当作没有缓存，退回网络重新拉，不会拿脏数据凑数。
 
 ```jsonc
 // config/default.json → market
-"short_interval": "15m",   // 中频信号周期
-"klines_cache": true,      // 短周期 K 线落盘
-"klines_prewarm": true     // 主行情刷新后后台预热
+"short_interval": "15m",           // 中频信号周期
+"klines_cache": true,              // 短周期 K 线落盘
+"klines_prewarm": true,            // 主行情刷新后后台预热
+"klines_prewarm_intervals": ["15m"] // 除 short_interval 外额外保持预热的周期
 ```
 
 ---

@@ -53,6 +53,9 @@ class MarketConfig:
     # 主行情刷新后后台预热 short_interval 的 K 线，让上面的缓存始终是热的。
     # 只在主行情刷新时触发，机会扫描的 6 品种扫描不会预热（避免 6 倍请求）。
     klines_prewarm: bool = True
+    # 除 short_interval 外，额外保持预热的周期。15m 是中频观察/图表最常用的粒度，
+    # 预热后切 15m 图、查 /api/klines?interval=15m 都直接读盘，不再等网络。
+    klines_prewarm_intervals: list[str] = field(default_factory=lambda: ["15m"])
     # 自主选品种：自动循环里按因子信号扫描全部品种，切到最有「机会」的品种（有持仓时不切）
     auto_rotate: bool = False
     # 选品种信号阈值：|因子复合信号| 超过它才算「有机会」，否则留在当前品种

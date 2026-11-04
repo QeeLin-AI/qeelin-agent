@@ -505,6 +505,7 @@ class TestKlinePrewarm(unittest.TestCase):
         opts = dict(
             symbol="ETHUSDT", source="binance", short_interval="15m", short_bars=200,
             klines_cache=True, klines_prewarm=True, cache_dir="data/cache",
+            klines_prewarm_intervals=["15m"],
         )
         opts.update(market)
         e.cfg = types.SimpleNamespace(market=types.SimpleNamespace(**opts))
@@ -527,6 +528,15 @@ class TestKlinePrewarm(unittest.TestCase):
         engine_mod.fetch_klines = fake
         self.addCleanup(setattr, engine_mod, "fetch_klines", orig)
 
+    @staticmethod
+    def _wait(calls: list, n: int, timeout: float = 3.0) -> int:
+        import time as _t
+
+        end = _t.time() + timeout
+        while _t.time() < end and len(calls) < n:
+            _t.sleep(0.02)
+        return len(calls)
+
     def test_prewarms_short_interval_on_current_exchange(self):
         import threading
 
@@ -537,10 +547,37 @@ class TestKlinePrewarm(unittest.TestCase):
 
         e._prewarm_klines()
         self.assertTrue(done.wait(2.0), "预热线程没跑起来")
+        self._wait(calls, 1)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["interval"], "15m")   # 跟 short_interval 走
         self.assertEqual(calls[0]["limit"], 200)       # 跟 short_bars 走
         self.assertEqual(calls[0]["prefer"], "okx")     # 跟当前交易所走，别预热币安
+
+    def test_prewarms_extra_interval_too(self):
+        import threading
+
+        # short_interval 是 5m 时，额外把 15m 也焐热（两者不同，各一次请求）
+        e = self._engine(short_interval="5m")
+        calls: list = []
+        done = threading.Event()
+        self._patch(calls, done)
+
+        e._prewarm_klines()
+        self.assertTrue(done.wait(2.0))
+        self.assertEqual(self._wait(calls, 2), 2)
+        self.assertEqual(sorted(c["interval"] for c in calls), ["15m", "5m"])
+
+    def test_extra_interval_deduped(self):
+        import threading
+
+        e = self._engine(short_interval="15m", klines_prewarm_intervals=["15m", "15m", ""])
+        calls: list = []
+        done = threading.Event()
+        self._patch(calls, done)
+
+        e._prewarm_klines()
+        self.assertTrue(done.wait(2.0))
+        self.assertEqual(self._wait(calls, 2, timeout=0.3), 1)   # 同一个周期不重复拉
 
     def test_throttled_within_ttl(self):
         import threading
