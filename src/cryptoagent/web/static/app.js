@@ -2330,5 +2330,8 @@ $('themeBtn').addEventListener('click', () => {
     const sc = await api('/api/scan');
     if (sc && sc.rows) renderScan(sc);
   } catch (_) { /* 还没扫描过 */ }
-  setInterval(poll, 8000);          // 状态轮询降到 8 秒，别把币安签名接口刷爆（429/418 封 IP）
+  // 3 秒一轮：标记价要跟着报价线程（4 秒）走，8 秒会明显发木。
+  // /api/status 不现场打交易所——实时价来自 ticker 线程，实盘权益 20 秒缓存，
+  // 其余全是内存数据，所以这个频率不会把签名接口刷爆。
+  setInterval(poll, 3000);
 })();

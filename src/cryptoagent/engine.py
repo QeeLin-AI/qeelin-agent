@@ -20,7 +20,14 @@ from .agents.calibration import record_accuracy, summary as calibration_summary,
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
 from .agents.position_manager import explain_management, manage_position
 from .config import AppConfig
-from .data import KL_INTERVALS, fetch_klines, kl_disk_ttl, load_market, set_kl_cache_dir
+from .data import (
+    KL_INTERVALS,
+    fetch_klines,
+    fetch_live_price,
+    kl_disk_ttl,
+    load_market,
+    set_kl_cache_dir,
+)
 from .derivatives import enrich_derivatives
 from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
 from .notify import get_notifier
@@ -101,8 +108,9 @@ class TradingEngine:
         )
         self.last_management: dict = {}
         self.last_management_by_symbol: dict[str, dict] = {}
-        # 各品种最新价（非活跃品种没有 self.df，靠短周期 K 线取，带 10s 缓存）
+        # 各品种最新价（非活跃品种也要实时刷新，标记价/浮盈都读它）
         self._last_prices: dict[str, float] = {}
+        self._price_ts: dict[str, float] = {}
         self._quote_cache: dict[str, tuple[float, float]] = {}
         self._frame_cache: dict[str, tuple[pd.DataFrame, float]] = {}
         # 持仓管理守护线程：不依赖「启动自动循环」，手动/半自动模式下开仓后
@@ -111,8 +119,14 @@ class TradingEngine:
         self._guard_stop = threading.Event()
         self._guard_thread: threading.Thread | None = None
         self._guard_interval = 30
+        # 报价线程：30 秒的管理轮询喂不动页面上的标记价，单独用毫秒级 ticker
+        # 每 4 秒刷一次持仓品种的最新价（只看有仓的品种，空仓时零请求）。
+        self._quote_stop = threading.Event()
+        self._quote_thread: threading.Thread | None = None
+        self._quote_interval = 4
         self._composite_cache: dict = {}
         self.start_position_guard()
+        self.start_quote_guard()
 
     # ------------------------------------------------------------------
     def _default_state(self) -> dict:
@@ -377,10 +391,15 @@ class TradingEngine:
         return max(1, n)
 
     def _quote_for(self, symbol: str, ttl: float = 10.0) -> float:
-        """取某个品种的最新价。活跃品种直接读 self.df，其余读短周期 K 线（带缓存）。
+        """取某个品种的最新价。活跃品种直接读 self.df，其余走毫秒级 ticker。
 
         多品种止损检查不能都拿「当前品种的价格」：BTC 的价套到 SOL 仓位上，
         止损/止盈会瞬间误触发。取不到价就返回 0，调用方跳过该品种本轮检查。
+
+        ⚠️ 非活跃品种**必须**走 fetch_live_price（/ticker/price，毫秒级），不能
+        用 fetch_klines 的最后一根收盘价顶替：盘缓存有效期是「半个 bar」，
+        5m 周期最长 150 秒，页面上的标记价会像卡住一样每两三分钟才跳一次。
+        K 线只作为 ticker 全源失败时的兜底。
         """
         sym = str(symbol).upper()
         cur = str(self.cfg.market.symbol).upper()
@@ -388,7 +407,7 @@ class TradingEngine:
             try:
                 px = float(self.df["close"].iloc[-1])
                 if px > 0:
-                    self._last_prices[sym] = px
+                    self._stamp_price(sym, px)
                     return px
             except Exception:  # noqa: BLE001
                 pass
@@ -396,22 +415,27 @@ class TradingEngine:
         cached = self._quote_cache.get(sym)
         if cached and (now - cached[1]) < ttl:
             return cached[0]
+        px = 0.0
         try:
-            interval = str(getattr(self.cfg.market, "short_interval", "5m") or "5m")
-            # fetch_klines 返回 (df, 来源)；漏了这一步解包，df 会是个 tuple，
-            # df["close"] 直接 TypeError —— 非活跃品种从此永远取不到价：
-            # 标记价冻结在旧值、持仓管理员每轮都报「取不到最新价」、
-            # 非当前品种的止损检查也一并失效。多品种下这是致命的。
-            df, _src = fetch_klines(sym, interval, 5, prefer=self.state.get("exchange", "binance"))
-            if df is None or not len(df):
+            px, _src = fetch_live_price(sym, prefer=self.state.get("exchange", "binance"))
+            px = float(px or 0.0)
+        except Exception:  # noqa: BLE001 - ticker 挂了再退回 K 线
+            px = 0.0
+        if px <= 0:
+            # 兜底：ticker 全源不可用时用 K 线收盘价（可能偏旧，总比没有强）
+            try:
+                interval = str(getattr(self.cfg.market, "short_interval", "5m") or "5m")
+                # fetch_klines 返回 (df, 来源)；漏了这一步解包，df 会是个 tuple，
+                # df["close"] 直接 TypeError —— 非活跃品种从此永远取不到价。
+                df, _src = fetch_klines(sym, interval, 5, prefer=self.state.get("exchange", "binance"))
+                if df is not None and len(df):
+                    px = float(df["close"].iloc[-1])
+            except Exception:  # noqa: BLE001 - 单个品种取价失败不影响其它仓位
                 return 0.0
-            px = float(df["close"].iloc[-1])
-        except Exception:  # noqa: BLE001 - 单个品种取价失败不影响其它仓位
-            return 0.0
         if px <= 0:
             return 0.0
         self._quote_cache[sym] = (px, now)
-        self._last_prices[sym] = px
+        self._stamp_price(sym, px, now)
         return px
 
     def _frame_for(self, symbol: str, ttl: float = 60.0) -> pd.DataFrame | None:
@@ -528,16 +552,26 @@ class TradingEngine:
             return max(m.values(), key=lambda x: float(x.get("ts") or 0.0))
         return getattr(self, "last_management", {})
 
+    def _stamp_price(self, symbol: str, price: float, ts: float | None = None) -> None:
+        """记下某品种的最新价与写入时刻（_last_prices 是页面读的唯一来源）。"""
+        sym = str(symbol).upper()
+        self._last_prices[sym] = float(price)
+        book = getattr(self, "_price_ts", None)
+        if book is None:      # 兼容用 object.__new__ 构造的测试实例
+            book = self._price_ts = {}
+        book[sym] = float(ts or time.time())
+
     def _mark_price(self, symbol: str, hint: float | None = None) -> float:
         """标记价：活跃品种用传入价，其余品种只用缓存。
 
-        这里**不发网络请求**——它会被 status() 每 3 秒调用一次，现场拉 K 线会把
-        HTTP 轮询拖死。非活跃品种的价格由守护线程（30 秒一轮）经 _quote_for 更新。
+        这里**不发网络请求**——它会被 status() 每 3 秒调用一次，现场拉行情会把
+        HTTP 轮询拖死。非活跃品种的价格由报价线程（4 秒一轮，走 /ticker/price）
+        与持仓管理轮询共同维护。
         """
         sym = str(symbol).upper()
         cur = str(self.cfg.market.symbol).upper()
         if sym == cur and hint and float(hint) > 0:
-            self._last_prices[sym] = float(hint)
+            self._stamp_price(sym, float(hint))
             return float(hint)
         return float(self._last_prices.get(sym) or 0.0)
 
@@ -1282,6 +1316,57 @@ class TradingEngine:
             except Exception as exc:  # noqa: BLE001 - 守护线程绝不能因单次异常退出
                 self.last_error = f"持仓守护异常：{type(exc).__name__}: {str(exc)[:120]}"
 
+    # ---- 持仓报价线程 --------------------------------------------------
+    def start_quote_guard(self, interval_sec: int = 4) -> None:
+        """启动/确认持仓报价线程。幂等，重复调用不会创建第二个线程。
+
+        存在的理由：页面每 3 秒拉一次 /api/status，但持仓管理 30 秒才跑一轮，
+        期间标记价、浮盈全是旧值，看起来像「行情卡住了」。这里用毫秒级的
+        /ticker/price 单独刷价，只刷「已持仓且不是当前品种」的，空仓时零请求。
+        """
+        self._quote_interval = max(2, int(interval_sec))
+        if getattr(self, "_quote_thread", None) and self._quote_thread.is_alive():
+            return
+        self._quote_stop.clear()
+        self._quote_thread = threading.Thread(
+            target=self._quote_loop, name="position-quote", daemon=True
+        )
+        self._quote_thread.start()
+
+    def stop_quote_guard(self) -> None:
+        self._quote_stop.set()
+
+    def _quote_loop(self) -> None:
+        while not self._quote_stop.wait(self._quote_interval):
+            try:
+                self.refresh_position_quotes()
+            except Exception:  # noqa: BLE001 - 报价线程绝不能因单次异常退出
+                pass
+
+    def refresh_position_quotes(self) -> dict[str, float]:
+        """把所有持仓品种的最新成交价刷进 _last_prices（毫秒级 ticker）。
+
+        当前品种由页面/实时价线程喂价，这里跳过；其余品种每轮一次轻量请求。
+        取价失败保持旧值不动，绝不清零——清掉会让页面从价格变成「—」。
+        """
+        cur = str(self.cfg.market.symbol).upper()
+        prefer = self.state.get("exchange", "binance")
+        out: dict[str, float] = {}
+        for sym in list(self._positions_map().keys()):
+            if sym == cur:
+                continue
+            try:
+                px, _src = fetch_live_price(sym, prefer=prefer)
+            except Exception:  # noqa: BLE001 - 单品种失败不影响其它品种
+                continue
+            px = float(px or 0.0)
+            if px <= 0:
+                continue
+            self._quote_cache[sym] = (px, time.time())
+            self._stamp_price(sym, px)
+            out[sym] = px
+        return out
+
     def _manage_open_position(self, pos: dict, price: float | None = None) -> dict:
         """包装：抢锁防重入（自动循环与守护线程可能同时进入）。"""
         lock = getattr(self, "_guard_lock", None)
@@ -1867,6 +1952,7 @@ class TradingEngine:
                     **raw,
                     "symbol": sym,
                     "mark": round(mark, 8) if mark > 0 else None,
+                    "mark_ts": (getattr(self, "_price_ts", None) or {}).get(sym),
                     "unrealized": round(unreal, 2) if unreal is not None else None,
                     "notional": round(qty * mark, 2) if mark > 0 else None,
                 })
@@ -1929,6 +2015,12 @@ class TradingEngine:
                     "running": bool(getattr(self, "_guard_thread", None)
                                     and self._guard_thread.is_alive()),
                     "interval_sec": int(getattr(self, "_guard_interval", 30)),
+                },
+                # 报价线程：标记价的新鲜度靠它，不是靠上面 30 秒一轮的管理轮询
+                "quote_guard": {
+                    "running": bool(getattr(self, "_quote_thread", None)
+                                    and self._quote_thread.is_alive()),
+                    "interval_sec": int(getattr(self, "_quote_interval", 4)),
                 },
                 "history": hist,
                 "last_error": self.last_error,

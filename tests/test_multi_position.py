@@ -265,10 +265,25 @@ class TestQuoteFetchUnpack(unittest.TestCase):
 
         e = _engine()
         df = pd.DataFrame({"close": [94.0, 95.5]})
-        with mock.patch("cryptoagent.engine.fetch_klines", return_value=(df, "network")):
+        with mock.patch("cryptoagent.engine.fetch_live_price", side_effect=RuntimeError("ticker down")), \
+                mock.patch("cryptoagent.engine.fetch_klines", return_value=(df, "network")):
             self.assertAlmostEqual(e._quote_for("SOLUSDT"), 95.5)
         # 顺带写进缓存，之后 status() 的 _mark_price 才有价可读
         self.assertAlmostEqual(e._last_prices["SOLUSDT"], 95.5)
+
+    def test_quote_for_prefers_ticker_over_klines(self):
+        """非活跃品种必须走毫秒级 ticker。
+
+        用 K 线最后一根收盘价顶替时，盘缓存有效期是「半个 bar」（5m → 150 秒），
+        页面上的标记价会像卡住一样两三分钟才跳一次。
+        """
+        from unittest import mock
+
+        e = _engine()
+        with mock.patch("cryptoagent.engine.fetch_live_price", return_value=(96.2, "binance")), \
+                mock.patch("cryptoagent.engine.fetch_klines", side_effect=AssertionError("不该走 K 线")):
+            self.assertAlmostEqual(e._quote_for("SOLUSDT"), 96.2)
+        self.assertIn("SOLUSDT", e._price_ts)
 
     def test_frame_for_returns_dataframe_not_tuple(self):
         from unittest import mock
@@ -286,8 +301,42 @@ class TestQuoteFetchUnpack(unittest.TestCase):
         from unittest import mock
 
         e = _engine()
-        with mock.patch("cryptoagent.engine.fetch_klines", side_effect=RuntimeError("boom")):
+        with mock.patch("cryptoagent.engine.fetch_live_price", side_effect=RuntimeError("boom")), \
+                mock.patch("cryptoagent.engine.fetch_klines", side_effect=RuntimeError("boom")):
             self.assertEqual(e._quote_for("SOLUSDT"), 0.0)
+
+    def test_refresh_position_quotes_only_inactive(self):
+        """报价线程只刷「非当前品种」：当前品种由页面实时价喂，不重复请求。"""
+        from unittest import mock
+
+        e = _engine(symbol="SOLUSDT")
+        e.state["positions"] = {
+            "SOLUSDT": {"symbol": "SOLUSDT", "side": "LONG", "qty": 10.0, "entry": 90.0},
+            "ETHUSDT": {"symbol": "ETHUSDT", "side": "LONG", "qty": 1.0, "entry": 3000.0},
+        }
+
+        def fake(sym, timeout=6, prefer="binance"):
+            return ({"ETHUSDT": 3050.0, "SOLUSDT": 99.0}[sym], "binance")
+
+        with mock.patch("cryptoagent.engine.fetch_live_price", side_effect=fake) as m:
+            got = e.refresh_position_quotes()
+        self.assertEqual(m.call_count, 1)
+        self.assertAlmostEqual(got["ETHUSDT"], 3050.0)
+        self.assertAlmostEqual(e._last_prices["ETHUSDT"], 3050.0)
+        self.assertNotIn("SOLUSDT", e._last_prices)
+        self.assertIn("ETHUSDT", e._price_ts)
+
+    def test_quote_guard_thread_alive(self):
+        e = _engine()
+        e._quote_stop = threading.Event()
+        e._quote_thread = None
+        e.start_quote_guard(interval_sec=2)
+        try:
+            self.assertTrue(e._quote_thread.is_alive())
+            self.assertEqual(e._quote_interval, 2)
+        finally:
+            e.stop_quote_guard()
+            e._quote_thread.join(timeout=3)
 
     def test_mark_price_reads_cached_quote_for_inactive_symbol(self):
         """切成别的品种后，原持仓的标记价只能来自 _last_prices。"""
