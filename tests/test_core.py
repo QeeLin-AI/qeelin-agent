@@ -617,6 +617,68 @@ class TestKlinePrewarm(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class TestUserAgentFallback(unittest.TestCase):
+    """Gate 的 WAF 会按 UA 指纹拉黑旧浏览器（Chrome/120 稳定 403），
+    _get 必须在 403 时换备用 UA 重试一次，其他状态码不许重试。"""
+
+    class _Resp:
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def read(self):
+            return self._body
+
+    def _fake(self, seen: list, fail_times: int, code: int = 403):
+        import io
+        import urllib.error
+
+        def _open(req, timeout=None, context=None):  # noqa: ARG001
+            seen.append(req.headers.get("User-agent"))
+            if len(seen) <= fail_times:
+                raise urllib.error.HTTPError(req.full_url, code, "nope", {}, io.BytesIO(b"{}"))
+            return self._Resp(b'{"ok": true}')
+
+        return _open
+
+    def test_403_retries_with_fallback_ua(self):
+        from unittest.mock import patch
+
+        from cryptoagent import data as d
+
+        seen: list = []
+        with patch.object(d.urllib.request, "urlopen", self._fake(seen, fail_times=1)):
+            out = d._get("https://example.invalid/x", {"a": 1})
+
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(len(seen), 2, "403 之后应该换 UA 再试一次")
+        self.assertIn("Chrome/", seen[0])
+        self.assertNotEqual(seen[0], seen[1], "重试必须换 UA，否则等于白试")
+
+    def test_non_403_is_raised_without_retry(self):
+        from unittest.mock import patch
+
+        from cryptoagent import data as d
+
+        seen: list = []
+        with patch.object(d.urllib.request, "urlopen", self._fake(seen, fail_times=9, code=429)):
+            with self.assertRaises(d.urllib.error.HTTPError):
+                d._get("https://example.invalid/x", {"a": 1})
+
+        self.assertEqual(len(seen), 1, "429 换 UA 没用，不该重试")
+
+    def test_ua_is_a_recent_chrome_version(self):
+        from cryptoagent import data as d
+
+        ver = int(d._UA.split("Chrome/")[1].split(".")[0])
+        self.assertGreaterEqual(ver, 131, f"UA 版本太旧会被 Gate 拦：{d._UA}")
+
+
 class TestBinancePrecision(unittest.TestCase):
     """下单精度：优先用 exchangeInfo 的 tickSize/stepSize，拿不到时退回默认值。"""
 

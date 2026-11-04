@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -168,21 +169,37 @@ def _mark_dead(host: str) -> None:
     _DEAD_UNTIL[host] = time.time() + DEAD_COOLDOWN
 
 
-# OKX 会拦非浏览器 UA（403），统一用浏览器 UA
+# OKX 会拦非浏览器 UA（403），统一用浏览器 UA。
+# 版本号必须是近期版本：Gate 的 WAF 按 UA 指纹拉黑旧浏览器，Chrome/120 稳定 403，
+# 换成 131 立即 200（2026-11 实测）。别为了「好看」往回改版本号。
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+
+# 兜底 UA：不带浏览器指纹，Gate / 币安实测都放行。只在主 UA 被 403 时补一次，
+# 这样 WAF 哪天把当前 Chrome 版本也拉黑了，备用源不会整体瘫掉。
+_UA_FALLBACK = "QeeLin-Agent (+https://github.com/QeeLin-AI/qeelin-agent)"
 
 
 def _get(url: str, params: dict, timeout: int = 6):
     q = urllib.parse.urlencode(params)
-    req = urllib.request.Request(
-        f"{url}?{q}",
-        headers={"User-Agent": _UA, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    last: Exception | None = None
+    for ua in (_UA, _UA_FALLBACK):
+        req = urllib.request.Request(
+            f"{url}?{q}",
+            headers={"User-Agent": ua, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # 只有 403 值得换 UA 重试：它通常是 WAF 按指纹拦的，不是接口本身出问题。
+            # 429/5xx/404 换 UA 也没用，直接抛给上层回退到下一个数据源。
+            if exc.code != 403:
+                raise
+            last = exc
+    raise last if last is not None else RuntimeError("请求失败")
 
 
 def _klines_frame(rows: list) -> pd.DataFrame:
