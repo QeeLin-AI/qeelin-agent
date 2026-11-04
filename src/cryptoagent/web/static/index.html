@@ -276,6 +276,8 @@
   <section id="tab-settings" class="panel">
     <div class="card">
       <div class="card-head"><h2>交易与交易所</h2><span id="exNow" class="muted"></span><span id="armState" class="badge paper">PAPER</span></div>
+    <div class="trade-split">
+    <div class="trade-main">
     <div class="set-group">
       <div class="set-group-title">运行模式</div>
       <div class="mode-row">
@@ -360,18 +362,23 @@
       </div>
     </div>
 
-    <div class="set-group">
-      <div class="set-group-title">连接状态</div>
-      <div class="set-stats">
-        <div class="set-stat"><span>API Key</span><b id="keysPresent">--</b></div>
-        <div class="set-stat"><span>连接状态</span><b id="connState">未连接</b></div>
-        <div class="set-stat"><span>账户余额</span><b id="liveBalance">--</b></div>
-        <div class="set-stat"><span>交易所持仓</span><b id="livePos">--</b></div>
+    </div>
+
+    <aside class="set-side">
+      <div class="set-group">
+        <div class="set-group-title">连接状态</div>
+        <div class="set-stats">
+          <div class="set-stat"><span>API Key</span><b id="keysPresent">--</b></div>
+          <div class="set-stat"><span>连接状态</span><b id="connState">未连接</b></div>
+          <div class="set-stat"><span>账户余额</span><b id="liveBalance">--</b></div>
+          <div class="set-stat"><span>交易所持仓</span><b id="livePos">--</b></div>
+        </div>
+        <div class="actions">
+          <button id="syncBtn" class="btn ghost">同步交易所账户</button>
+          <button id="selftestBtn" class="btn ghost">连接自检</button>
+        </div>
       </div>
-      <div class="actions">
-        <button id="syncBtn" class="btn ghost">同步交易所账户</button>
-        <button id="selftestBtn" class="btn ghost">连接自检</button>
-      </div>
+    </aside>
     </div>
     </div>
     <div class="card">

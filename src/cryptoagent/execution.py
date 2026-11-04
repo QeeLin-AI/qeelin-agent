@@ -436,6 +436,8 @@ class BinanceFuturesClient:
                         "id": str(t.get("id", "")),
                         "symbol": t.get("symbol") or symbol or "",
                         "ts": time.strftime("%m-%d %H:%M:%S", time.localtime(epoch / 1000)),
+                        # 毫秒时间戳：对账补记平仓时要判断「这笔成交在开仓之后」
+                        "ts_ms": epoch,
                         "action": "买入" if side == "LONG" else "卖出",
                         "side": side,
                         "qty": float(t.get("qty") or 0.0),
@@ -848,6 +850,7 @@ class OKXClient:
                         "id": f"{t.get('tradeId', i)}",
                         "symbol": from_okx_inst(t.get("instId") or (symbol or "")),
                         "ts": ts,
+                        "ts_ms": epoch,
                         "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
                         "side": side,
                         "qty": self._f(t.get("fillSz")),

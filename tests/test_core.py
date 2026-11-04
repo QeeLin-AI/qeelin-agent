@@ -792,6 +792,112 @@ class TestPositionReconcile(unittest.TestCase):
         self.assertEqual(e.saved, 0)
 
 
+class TestCloseBackfill(unittest.TestCase):
+    """交易所侧平仓（止损/止盈条件单成交、网页手动平仓）后回读 userTrades 补记流水。"""
+
+    def _engine(self, pos, trades):
+        import tempfile
+        import threading
+        import types
+
+        from cryptoagent.engine import TradingEngine
+
+        e = object.__new__(TradingEngine)
+        e.state = {
+            "position": pos,
+            "exchange": "binance",
+            "testnet": True,
+            "equity": 10000.0,
+            "fills": [],
+            "position_history": [],
+            "consecutive_losses": 0,
+        }
+        e.cfg = types.SimpleNamespace(
+            market=types.SimpleNamespace(symbol="DOGEUSDT"),
+            runs_dir=tempfile.mkdtemp(),
+        )
+        e.lock = threading.RLock()
+        e.saved = 0
+        e.notices = []
+        e._save = lambda: setattr(e, "saved", e.saved + 1)
+        e._notify = lambda *a, **k: e.notices.append(a)
+
+        class _Client:
+            def positions(self, symbol):
+                return []
+
+            def trades(self, symbol, limit=30):
+                return trades
+
+        e.live_client = _Client()
+        return e
+
+    def _pos(self, **kw):
+        pos = {
+            "side": "LONG", "qty": 10, "entry": 0.5, "leverage": 10,
+            "stop": 0.45, "tp": 0.6, "mode": "live",
+            "opened_at": "2026-11-04 10:00:00", "order_id": "OPEN1",
+        }
+        pos.update(kw)
+        return pos
+
+    @staticmethod
+    def _trade(action, qty, price, ts_ms, order_id, fee=0.0, pnl=0.0):
+        return {
+            "action": action, "side": "LONG", "qty": qty, "price": price,
+            "ts_ms": ts_ms, "order_id": order_id, "fee": fee, "pnl": pnl,
+            "symbol": "DOGEUSDT",
+        }
+
+    def test_backfills_close_fill_and_history(self):
+        trades = [
+            self._trade("卖出", 10, 0.6, 3000, "CLOSE1", fee=0.03, pnl=1.0),
+            self._trade("买入", 10, 0.5, 2000, "OPEN1"),
+        ]
+        e = self._engine(self._pos(), trades)
+        e._reconcile_position_with_exchange()
+
+        self.assertIsNone(e.state["position"])
+        fills = [f for f in e.state["fills"] if f["action"] == "CLOSE"]
+        self.assertEqual(len(fills), 1)
+        self.assertAlmostEqual(fills[0]["qty"], 10.0)
+        self.assertAlmostEqual(fills[0]["price"], 0.6)
+        self.assertAlmostEqual(fills[0]["pnl"], 0.97)        # 1.0 盈亏 - 0.03 手续费
+        self.assertTrue(fills[0]["backfilled"])
+        self.assertEqual(e.state["position_history"][0]["reason"], "exchange")
+        self.assertAlmostEqual(e.state["equity"], 10000.97, places=4)
+        self.assertTrue(e.notices)                           # 补记后发一条通知
+
+    def test_ignores_closes_before_open(self):
+        trades = [
+            self._trade("卖出", 10, 0.6, 3000, "CLOSE1", pnl=1.1),
+            self._trade("买入", 10, 0.5, 2000, "OPEN1"),
+            self._trade("卖出", 10, 0.2, 1000, "OLD9", pnl=-3.0),   # 上一笔仓位，不能算进来
+        ]
+        e = self._engine(self._pos(), trades)
+        e._reconcile_position_with_exchange()
+
+        fills = [f for f in e.state["fills"] if f["action"] == "CLOSE"]
+        self.assertEqual(len(fills), 1)
+        self.assertAlmostEqual(fills[0]["qty"], 10.0)
+        self.assertAlmostEqual(fills[0]["price"], 0.6)
+
+    def test_partial_qty_skips_backfill_but_clears_position(self):
+        trades = [self._trade("卖出", 4, 0.6, 3000, "CLOSE1", pnl=0.4)]
+        e = self._engine(self._pos(opened_at="", order_id=""), trades)
+        e._reconcile_position_with_exchange()
+
+        self.assertIsNone(e.state["position"])               # 幽灵仓位照样清掉
+        self.assertEqual(e.state["fills"], [])               # 成交量对不上就不记流水
+
+    def test_no_trades_still_clears_position(self):
+        e = self._engine(self._pos(), [])
+        e._reconcile_position_with_exchange()
+
+        self.assertIsNone(e.state["position"])
+        self.assertEqual(e.state["fills"], [])
+
+
 class TestHoldingPausesDecisions(unittest.TestCase):
     """持仓期间不再跑开仓决策：不烧 LLM，也不会每轮刷同一条风控拦截通知。"""
 

@@ -28,6 +28,17 @@ def _today() -> str:
     return time.strftime("%Y-%m-%d")
 
 
+def _parse_ts_ms(value: object) -> int:
+    """把本地时间字符串（"%Y-%m-%d %H:%M:%S"）转成毫秒时间戳；解析不了返回 0。"""
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(time.mktime(time.strptime(text, "%Y-%m-%d %H:%M:%S")) * 1000)
+    except (ValueError, OverflowError, OSError):
+        return 0
+
+
 class TradingEngine:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -474,6 +485,112 @@ class TradingEngine:
             self.reload_for_exchange()
         return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
+    def _backfill_closed_from_exchange(self, pos: dict) -> dict | None:
+        """交易所侧已平仓时，回读 userTrades 把这次平仓补记进 fills / 持仓历史。
+
+        实盘开仓有本地回执，平仓却常常发生在交易所侧：止损 / 止盈是挂上去的条件单，
+        成交后本地收不到任何回调。只清 state["position"] 会让「最近成交」缺一笔平仓、
+        「持仓历史」缺记录，已实现盈亏和每日盈亏统计也跟着少记。
+
+        做法：以开仓成交（orderId 命中）为时间下界，取之后的反向成交，从最新往回
+        累计到本地持仓量，聚合出真实平仓价 / 手续费 / 已实现盈亏。
+        只补记账、绝不主动下单；取不到可信成交时返回 None，让调用方直接清缓存。
+        """
+        if self.live_client is None:
+            return None
+        symbol = str(pos.get("symbol") or self.cfg.market.symbol)
+        try:
+            rows = self.live_client.trades(symbol, limit=100)
+        except Exception:  # noqa: BLE001 - 回读失败只是不补记，不影响清缓存
+            return None
+        if not rows:
+            return None
+        # 平仓方向：多头平仓是「卖出」，空头平仓是「买入」。
+        # 这里必须用 action 而不是 side —— OKX 的 side 表示持仓方向（posSide），
+        # 币安的 side 表示成交方向，两者语义不一致。
+        close_action = "卖出" if str(pos.get("side")) == "LONG" else "买入"
+        closes = [r for r in rows if r.get("action") == close_action]
+        if not closes:
+            return None
+        # 只有开仓之后的成交才算本次平仓；开仓回执超出回看窗口时退回本地开仓时间
+        open_ts = 0
+        open_oid = str(pos.get("order_id") or "")
+        if open_oid:
+            hits = [r for r in rows if str(r.get("order_id")) == open_oid]
+            if hits:
+                open_ts = max(int(r.get("ts_ms") or 0) for r in hits)
+        if not open_ts:
+            open_ts = _parse_ts_ms(pos.get("opened_at"))
+        closes = [r for r in closes if int(r.get("ts_ms") or 0) >= open_ts]
+        if not closes:
+            return None
+        closes.sort(key=lambda r: -int(r.get("ts_ms") or 0))   # 最新在前，便于从后往前累计
+        # 从最新往回累计到本地持仓量：更早那几笔仓位的平仓不会被误算进这一笔
+        pos_qty = abs(float(pos.get("qty") or 0.0))
+        picked: list[dict] = []
+        total = 0.0
+        for row in closes:                     # closes 按时间倒序
+            picked.append(row)
+            total += abs(float(row.get("qty") or 0.0))
+            if pos_qty <= 0 or total >= pos_qty * 0.999:
+                break
+        qty = sum(abs(float(r.get("qty") or 0.0)) for r in picked)
+        if qty <= 0:
+            return None
+        if pos_qty > 0 and qty < pos_qty * 0.98:
+            return None                        # 成交量凑不齐，宁可空着也不记错账
+        notional = sum(
+            abs(float(r.get("qty") or 0.0)) * float(r.get("price") or 0.0) for r in picked
+        )
+        exit_px = notional / qty
+        fee = sum(float(r.get("fee") or 0.0) for r in picked)
+        gross = sum(float(r.get("pnl") or 0.0) for r in picked)
+        if not gross:
+            # OKX 部分场景 pnl 为空：退回按开仓价自己算价格差
+            direction = 1.0 if str(pos.get("side")) == "LONG" else -1.0
+            gross = (exit_px - float(pos.get("entry") or 0.0)) * qty * direction
+        pnl = gross - fee
+        ts_ms = max(int(r.get("ts_ms") or 0) for r in picked)
+        ts = (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_ms / 1000))
+            if ts_ms
+            else time.strftime("%Y-%m-%d %H:%M:%S")
+        )
+        order_id = str(picked[0].get("order_id") or "")
+        with self.lock:
+            self.state["fills"].append(
+                {
+                    "ts": ts,
+                    "action": "CLOSE",
+                    "side": pos.get("side"),
+                    "symbol": symbol,
+                    "qty": round(qty, 6),
+                    "price": round_price(exit_px),
+                    "fee": round(fee, 6),
+                    "pnl": round(pnl, 4),
+                    "reason": "exchange",
+                    "order_id": order_id,
+                    "backfilled": True,
+                }
+            )
+            self.state["fills"] = self.state["fills"][-500:]
+            self.state["equity"] = float(self.state.get("equity") or 0.0) + pnl
+            self.state["consecutive_losses"] = (
+                int(self.state.get("consecutive_losses") or 0) + 1
+                if pnl < 0
+                else 0
+            )
+            self._record_close(pos, exit_px, pnl, "exchange", "live")
+            self._save()
+        self._log_live("CLOSE", str(pos.get("side")), qty, exit_px, order_id)
+        self._notify(
+            "info" if pnl >= 0 else "critical",
+            f"{pos.get('side')} 已由交易所平仓（补记）",
+            f"成交价 {round_price(exit_px)}，已实现盈亏 {pnl:+,.2f} U（止损/止盈或手动平仓）",
+            {"symbol": symbol, "pnl": round(pnl, 2), "reason": "exchange"},
+        )
+        return {"qty": qty, "price": exit_px, "fee": fee, "pnl": pnl}
+
     def _reconcile_position_with_exchange(self) -> None:
         """核对本地实盘持仓与交易所真实持仓，清理「幽灵仓位」。
 
@@ -487,13 +604,21 @@ class TradingEngine:
             return
         exchange = self.state.get("exchange", "binance")
         testnet = bool(self.state.get("testnet", True))
-        symbol = self.cfg.market.symbol
+        # 用仓位自己的品种去查：auto_rotate 换过品种后，拿当前品种去查只会得到空仓位，
+        # 会把「另一个品种还在持仓」误判成幽灵仓位。
+        symbol = str(pos.get("symbol") or self.cfg.market.symbol)
         try:
             client = self.live_client or self.connect(testnet=testnet, exchange=exchange)
             real = client.positions(symbol)
         except Exception:  # noqa: BLE001 - 拿不到交易所数据就保守不动
             return
         if not real:
+            # 交易所已无持仓：先把这次平仓的成交补记下来，再清缓存。
+            # 补记失败也只是少了流水，不能因此留下幽灵仓位。
+            try:
+                self._backfill_closed_from_exchange(pos)
+            except Exception as exc:  # noqa: BLE001 - 补记是尽力而为
+                self.last_error = f"平仓补记失败：{type(exc).__name__}: {exc}"[:200]
             with self.lock:
                 self.state["position"] = None
                 self._save()
