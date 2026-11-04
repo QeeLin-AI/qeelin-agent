@@ -20,17 +20,17 @@
   --muted: #7f889b;
   --faint: #5c6577;
 
-  /* 强调与语义 */
-  --accent: #7d7df6;
-  --accent-hover: #9494ff;
-  --accent-soft: rgba(125, 125, 246, .13);
-  --accent-line: rgba(125, 125, 246, .40);
+  /* 强调与语义：强调色 = 蒂芙尼蓝 (Tiffany Blue) */
+  --accent: #0ABAB5;
+  --accent-hover: #1ec9c4;
+  --accent-soft: rgba(10, 186, 181, .14);
+  --accent-line: rgba(10, 186, 181, .42);
   --up: #f2636f;          /* 涨 / 多方 / 危险 */
   --down: #2fc08a;        /* 跌 / 空方 / 正常 */
   --ok: #2fc08a;
   --amber: #e9a23b;
   --blue: #5b8cff;
-  --purple: #a78bfa;
+  --purple: #a78bfa;      /* 历史兼容占位，当前未使用 */
 
   /* 兼容旧变量别名（防止遗漏规则） */
   --panel: var(--surface);
@@ -65,10 +65,10 @@ html[data-theme="light"] {
   --text-2: #3d4658;
   --muted: #6c768a;
   --faint: #98a2b3;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: rgba(79, 70, 229, .085);
-  --accent-line: rgba(79, 70, 229, .32);
+  --accent: #0b8f8b;
+  --accent-hover: #0a7d79;
+  --accent-soft: rgba(11, 143, 139, .10);
+  --accent-line: rgba(11, 143, 139, .34);
   --up: #d63846;
   --down: #0f8a5f;
   --ok: #0f8a5f;
@@ -280,7 +280,7 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 .btn:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 .btn.primary {
   background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650;
-  box-shadow: 0 4px 14px rgba(79, 70, 229, .22);
+  box-shadow: 0 4px 14px rgba(10, 186, 181, .26);
 }
 .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
 .btn.ghost { background: transparent; }
@@ -298,7 +298,7 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 .btn.warn { background: var(--amber); border-color: var(--amber); color: #1b1204; }
 .btn.cyan { background: var(--accent); border-color: var(--accent); color: #fff; }
 html[data-theme="light"] .btn.start.active { color: #fff; }
-html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(79, 70, 229, .18); }
+html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139, .20); }
 /* 亮色主题下顶栏与侧栏同为纯白 surface，靠清晰分隔线 + 柔和投影与浅灰页面拉开层次 */
 html[data-theme="light"] .topbar {
   background: var(--surface);
@@ -399,14 +399,21 @@ label.field > input, label.field > select { max-width: 420px; }
 .stat label { font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
 .stat b { font-size: 24px; font-weight: 700; letter-spacing: -.035em; }
 .stat small { font-size: 11.5px; color: var(--faint); }
-.stat-primary {
-  background: linear-gradient(135deg, #1fc8e6 0%, #0ea5e9 100%);
-  border-color: transparent; color: #fff;
-  box-shadow: 0 12px 30px rgba(14, 165, 233, .28);
+/* 总览 4 张指标卡：各一种深色彩色（纯 CSS，不依赖额外 class，不碰 index.html / app.js） */
+.stat-row > .stat {
+  color: #fff; border-color: rgba(255, 255, 255, .08);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
 }
-.stat-primary label, .stat-primary small { color: rgba(255, 255, 255, .8); }
-.stat-primary b { font-size: 30px; }
-.stat-primary .src-chip { background: rgba(255, 255, 255, .18); color: #fff; border-color: rgba(255, 255, 255, .25); }
+.stat-row > .stat label { color: rgba(255, 255, 255, .82); }
+.stat-row > .stat small { color: rgba(255, 255, 255, .62); }
+.stat-row > .stat b { color: #fff; font-size: 26px; }
+.stat-row > .stat .up, .stat-row > .stat .down,
+.stat-row > .stat .long, .stat-row > .stat .short { color: #fff; }
+.stat-row > .stat .src-chip { background: rgba(255, 255, 255, .18); color: #fff; border-color: rgba(255, 255, 255, .25); }
+.stat-row > .stat:nth-child(1) { background: linear-gradient(155deg, #0e8a85 0%, #0b6c68 100%); } /* 账户权益 — 深青 */
+.stat-row > .stat:nth-child(2) { background: linear-gradient(155deg, #2a57e0 0%, #1d3ca8 100%); } /* 当日盈亏 — 深蓝 */
+.stat-row > .stat:nth-child(3) { background: linear-gradient(155deg, #c2620a 0%, #954807 100%); } /* 回撤 — 深琥珀 */
+.stat-row > .stat:nth-child(4) { background: linear-gradient(155deg, #0f9d57 0%, #0a753f 100%); } /* 持仓 — 深绿 */
 .src-chip {
   display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px;
   font-size: 10px; font-weight: 600; letter-spacing: .02em; vertical-align: middle;
@@ -491,7 +498,7 @@ label.field > input, label.field > select { max-width: 420px; }
 .opp-bar-track { grid-area: bar; height: 5px; border-radius: 99px; background: var(--surface-3); overflow: hidden; min-width: 0; }
 .opp-bar { height: 100%; border-radius: 99px; background: var(--accent); transition: width .4s ease; }
 .opp-row.active .opp-sym { color: var(--accent); }
-.opp-row.active .opp-bar { background: linear-gradient(90deg, var(--accent), var(--purple)); }
+.opp-row.active .opp-bar { background: linear-gradient(90deg, var(--accent), var(--brand)); }
 .pnl-split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
 .cal-block, .opp-panel { min-width: 0; }
 .cal-block { padding-bottom: 4px; }
@@ -863,7 +870,7 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .page-head h1 { font-size: 24px; }
   .stat-row { grid-template-columns: 1fr 1fr; }
   .stat b { font-size: 21px; }
-  .stat-primary b { font-size: 26px; }
+  .stat-row > .stat b { font-size: 22px; }
   .card { padding: 16px; }
   .st-row { grid-template-columns: 76px 68px minmax(0, 1fr); font-size: 11px; }
   .fb-row { grid-template-columns: 100px minmax(0, 1fr) 56px; }
