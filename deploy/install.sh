@@ -9,6 +9,9 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/crypto-agent}"
 SERVICE_USER="${SERVICE_USER:-cryptotrader}"
+# 服务账号是 nologin 的（不需要、也不允许 SSH 登录），
+# 开隧道要用你自己的 sudo 账号或 root，否则 ssh 会直接被 nologin 拒掉。
+OPS_USER="${OPS_USER:-${SUDO_USER:-root}}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${APP_DIR}/.env"
 
@@ -79,13 +82,17 @@ systemctl --no-pager --lines=8 status cryptoagent || true
 TOKEN_VAL="$(grep CRYPTOAGENT_WEB_TOKEN "$ENV_FILE" | cut -d= -f2)"
 cat <<EOF
 
-部署完成。控制台只监听 127.0.0.1，从你的电脑开隧道访问：
+部署完成。控制台只监听 127.0.0.1，在你自己电脑上开隧道访问：
 
-  ssh -N -L 8000:127.0.0.1:8000 ${SERVICE_USER}@<VPS_IP>
+  ssh -N -L 8000:127.0.0.1:8000 ${OPS_USER}@<VPS_IP>
 
-然后本机浏览器打开：
+然后本机浏览器（Windows/Mac 都行，不需要服务器有桌面）：
 
   http://127.0.0.1:8000/?token=${TOKEN_VAL}
+
+注意：${SERVICE_USER} 是 nologin 服务账号，只能 sudo -u 运行程序，不能用来 SSH。
+想直接公网访问（和原来一样开浏览器输网址）：把 unit 里的 --host 改成 0.0.0.0，
+再到轻量控制台放行 8000 端口即可；令牌已生成，代码会强制校验。
 
 常用命令：
   systemctl status cryptoagent        # 看状态
