@@ -16,9 +16,7 @@
 <body>
 <aside class="sidebar">
   <div class="side-brand">
-    <span class="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 32 32" fill="none"><rect x="1" y="1" width="30" height="30" rx="9" fill="url(#bmg)"/><path d="M9 20.5L16 8l7 12.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 17h8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><defs><linearGradient id="bmg" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#8b8cf9"/><stop offset="1" stop-color="#4f46e5"/></linearGradient></defs></svg>
-    </span>
+    <span class="brand-mark" aria-hidden="true"><span class="brand-diamond"></span></span>
     <div class="side-brand-text">
       <span class="brand-name">QeeLin<span class="brand-suffix">Agent</span></span>
       <span class="ver" id="verTag">--</span>
@@ -363,17 +361,15 @@
       </div>
     </div>
 
-        <div class="settings-layout">
-      <nav class="set-nav" aria-label="设置分区">
-        <span class="set-nav-label">分区</span>
-        <button type="button" class="set-nav-item" onclick="document.getElementById('set-exchange').scrollIntoView({behavior:'smooth',block:'start'})">交易所与连接</button>
-        <button type="button" class="set-nav-item" onclick="document.getElementById('set-params').scrollIntoView({behavior:'smooth',block:'start'})">交易参数</button>
-        <button type="button" class="set-nav-item" onclick="document.getElementById('set-llm').scrollIntoView({behavior:'smooth',block:'start'})">模型设置</button>
-        <button type="button" class="set-nav-item" onclick="document.getElementById('set-sentiment').scrollIntoView({behavior:'smooth',block:'start'})">情绪 / 新闻源</button>
-        <button type="button" class="set-nav-item" onclick="document.getElementById('set-notify').scrollIntoView({behavior:'smooth',block:'start'})">通知 / 告警</button>
-      </nav>
-      <div class="set-content">
-<div class="card" id="set-exchange">
+        <div class="settings-tabs" role="tablist" aria-label="设置分区">
+          <button type="button" class="set-tab active" role="tab" aria-selected="true" data-set-tab="set-exchange">交易所与连接</button>
+          <button type="button" class="set-tab" role="tab" aria-selected="false" data-set-tab="set-params">交易参数</button>
+          <button type="button" class="set-tab" role="tab" aria-selected="false" data-set-tab="set-llm">模型设置</button>
+          <button type="button" class="set-tab" role="tab" aria-selected="false" data-set-tab="set-sentiment">情绪 / 新闻源</button>
+          <button type="button" class="set-tab" role="tab" aria-selected="false" data-set-tab="set-notify">通知 / 告警</button>
+        </div>
+      <div class="settings-content">
+<div class="card active" id="set-exchange">
       <div class="card-head"><h2>交易与交易所</h2><span id="exNow" class="muted"></span><span id="armState" class="badge paper">PAPER</span></div>
     <div class="trade-split">
     <div class="trade-main">
@@ -735,7 +731,6 @@
       </div>
     </div>
         </div>
-    </div>
 </section>
 </main>
 
@@ -770,6 +765,24 @@
 </div>
 
 <div id="toast" class="toast"></div>
+<script>
+/* 设置页横版标签页切换（纯 UI，不改 app.js / 业务 / 接口） */
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.set-tab'));
+  var panels = Array.prototype.slice.call(document.querySelectorAll('.settings-content > .card'));
+  function activate(id) {
+    tabs.forEach(function (t) {
+      var on = t.getAttribute('data-set-tab') === id;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    panels.forEach(function (p) { p.classList.toggle('active', p.id === id); });
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { activate(t.getAttribute('data-set-tab')); });
+  });
+})();
+</script>
 <script src="/static/app.js"></script>
 </body>
 </html>
