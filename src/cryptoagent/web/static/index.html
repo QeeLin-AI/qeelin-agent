@@ -362,20 +362,32 @@
       </div>
     </div>
 
+    <div class="set-group">
+      <div class="set-group-title">账户状态</div>
+      <div class="set-stats three">
+        <div class="set-stat"><span>API Key</span><b id="keysPresent">--</b></div>
+        <div class="set-stat"><span>账户余额</span><b id="liveBalance">--</b></div>
+        <div class="set-stat"><span>交易所持仓</span><b id="livePos">--</b></div>
+      </div>
+      <div class="actions">
+        <button id="syncBtn" class="btn ghost">同步交易所账户</button>
+        <button id="selftestBtn" class="btn ghost">连接自检</button>
+      </div>
+    </div>
     </div>
 
     <aside class="set-side">
-      <div class="set-group">
-        <div class="set-group-title">连接状态</div>
-        <div class="set-stats">
-          <div class="set-stat"><span>API Key</span><b id="keysPresent">--</b></div>
-          <div class="set-stat"><span>连接状态</span><b id="connState">未连接</b></div>
-          <div class="set-stat"><span>账户余额</span><b id="liveBalance">--</b></div>
-          <div class="set-stat"><span>交易所持仓</span><b id="livePos">--</b></div>
+      <div class="conn-panel" id="setConnPanel">
+        <div class="conn-head">
+          <span id="setConnDot" class="conn-dot"></span>
+          <span id="setConnState" class="conn-state">未连接</span>
+          <span id="setConnTag" class="conn-tag">本地模拟</span>
         </div>
-        <div class="actions">
-          <button id="syncBtn" class="btn ghost">同步交易所账户</button>
-          <button id="selftestBtn" class="btn ghost">连接自检</button>
+        <div class="conn-main" id="setConnMain">本地模拟</div>
+        <div class="conn-sub" id="setConnSub">未接交易所，下单只在本地撮合</div>
+        <div class="conn-actions">
+          <button id="setConnSwitch" class="btn ghost sm">去连接交易所</button>
+          <button id="setConnDisarm" class="btn ghost sm hidden">断开</button>
         </div>
       </div>
     </aside>

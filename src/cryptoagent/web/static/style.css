@@ -840,18 +840,15 @@ html[data-theme="light"] .set-field .input-suffix input[type="number"] { border-
 }
 .set-stat > span { color: var(--muted); }
 .set-stat > b { font-size: 14px; font-weight: 600; color: var(--text); word-break: break-all; }
+.set-stats.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 720px) { .set-stats.three { grid-template-columns: 1fr; } }
 
-/* 设置页右栏：连接状态（与「交易」页右栏同构，避免运行模式右侧大片留白） */
+/* 设置页右栏：只放连接状态卡（复用交易页 .conn-panel 样式） */
 .set-side { min-width: 0; }
-.set-side .set-group { margin-top: 0; }
-.set-side .set-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.set-side .set-stat { min-height: 72px; padding: 10px 12px; }
-.set-side .set-stat > b { font-size: 13px; }
-.set-side .actions { margin-left: 0; margin-top: 14px; gap: 8px; }
-.set-side .actions .btn { flex: 1 1 auto; }
 @media (max-width: 1080px) {
-  /* 窄屏下右栏落回下方，和上面的凭据框拉开距离 */
-  .set-side .set-group { margin-top: 18px; }
+  /* 窄屏下右栏落回下方，和上面的账户状态拉开距离 */
+  .set-side { margin-top: 18px; }
+  .set-side .conn-panel { max-width: 420px; }
 }
 
 /* 卡片内的开关列表 */

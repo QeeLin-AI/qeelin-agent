@@ -152,7 +152,7 @@ async function loadLlmSettings() {
     const op = d.offpeak || {};
     $('llmOffpeak').textContent = op.label || '--';
     $('llmPeakHint').textContent = op.peak_windows || '';
-    $('llmStatus').textContent = `当前 ${d.provider} · ${d.model} · ${op.label || ''}${d.api_key_set ? '（Key 已配置）' : '（未配 Key）'}`;
+    $('llmStatus').textContent = d.api_key_set ? '（Key 已配置）' : '（未配 Key）';
   } catch (e) { console.error(e); }
 }
 
@@ -1097,20 +1097,26 @@ function renderStatus(s) {
       ? `${exName} · ${s.testnet ? '模拟盘' : '主网实盘'}${s.armed ? '' : '（未连接）'}`
       : '';
   }
-  // 交易页右侧连接状态卡
-  if ($('connBar')) {
-    const on = s.mode === 'live' && s.armed;
-    const tag = on ? (s.testnet ? '模拟盘' : '主网实盘') : '本地模拟';
-    $('connBar').classList.toggle('on', on);
-    $('connDot').classList.toggle('on', on);
-    $('connStateText').textContent = on ? '已连接' : '未连接';
-    $('connModeTag').textContent = tag;
-    $('connBarText').textContent = on ? `${exName} · ${tag}` : '本地模拟';
-    $('connBarSub').textContent = on
+  // 连接状态卡：交易页右侧 + 设置页右侧共用同一份渲染，避免两处文案打架
+  const connOn = s.mode === 'live' && s.armed;
+  const connTag = connOn ? (s.testnet ? '模拟盘' : '主网实盘') : '本地模拟';
+  const connCards = [
+    ['connBar', 'connDot', 'connStateText', 'connModeTag', 'connBarText', 'connBarSub', 'connDisarmBtn', 'connSwitchBtn'],
+    ['setConnPanel', 'setConnDot', 'setConnState', 'setConnTag', 'setConnMain', 'setConnSub', 'setConnDisarm', 'setConnSwitch'],
+  ];
+  for (const [panelId, dotId, stateId, tagId, mainId, subId, disarmId, switchId] of connCards) {
+    const panel = $(panelId);
+    if (!panel) continue;
+    panel.classList.toggle('on', connOn);
+    $(dotId).classList.toggle('on', connOn);
+    $(stateId).textContent = connOn ? '已连接' : '未连接';
+    $(tagId).textContent = connTag;
+    $(mainId).textContent = connOn ? `${exName} · ${connTag}` : '本地模拟';
+    $(subId).textContent = connOn
       ? `${s.testnet ? 'Demo 假钱' : '真钱'} · 权益 ${fmt(s.equity)} USDT`
       : '未接交易所，下单只在本地撮合';
-    $('connDisarmBtn').classList.toggle('hidden', !on);
-    $('connSwitchBtn').textContent = on ? '切换交易所' : '去连接交易所';
+    $(disarmId).classList.toggle('hidden', !connOn);
+    $(switchId).textContent = connOn ? '切换交易所' : '去连接交易所';
   }
   // 三个模式按钮的高亮跟着真实状态走
   const connected = s.mode === 'live' && s.armed;
@@ -1144,17 +1150,13 @@ function renderStatus(s) {
   }
   renderRisk(s.risk);
   renderResearchAuto(s.research_auto);
-  // 交易页的四项状态跟总览页保持一致，别一个说已连接一个说未连接
+  // 设置页「账户状态」里的余额与持仓
   if (connected) {
-    $('connState').textContent = s.testnet ? `已连接（模拟盘·${exName}）` : `已连接（主网实盘·${exName}）`;
-    $('connState').className = 'up';
     $('liveBalance').textContent = `${fmt(s.equity)} USDT`;
     $('livePos').textContent = s.position
       ? `${sideCn(s.position.side)} ${fmt(s.position.qty, 4)} @ ${fmt(s.position.entry)}`
       : '无';
   } else {
-    $('connState').textContent = '未连接';
-    $('connState').className = '';
     $('liveBalance').textContent = '--';
     $('livePos').textContent = '--';
   }
@@ -1690,6 +1692,33 @@ $('connDisarmBtn').addEventListener('click', async () => {
   } catch (e) { toast(e.message, 'err'); }
 });
 
+// 设置页连接状态卡：切换交易所 = 展开当前模式的凭据面板
+const setConnSwitch = $('setConnSwitch');
+if (setConnSwitch) {
+  setConnSwitch.addEventListener('click', () => {
+    const scope = (lastStatus && lastStatus.mode === 'live' && !lastStatus.testnet) ? 'live' : 'testnet';
+    const boxId = scope === 'live' ? 'liveBox' : 'testnetBox';
+    openPanel(boxId, scope === 'live' ? 'liveBtn' : 'testnetBtn');
+    selectExchange(scope, (lastStatus && lastStatus.exchange) || 'binance');
+    renderExchangePanel(scope);
+    $(boxId).scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+// 设置页连接状态卡：断开
+const setConnDisarm = $('setConnDisarm');
+if (setConnDisarm) {
+  setConnDisarm.addEventListener('click', async () => {
+    if (blockIfAutoRunning('断开连接')) return;
+    try {
+      await api('/api/trading/disarm', 'POST', {});
+      closeModePanels();
+      toast('已断开交易所，回到本地模拟', 'ok');
+      poll();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
 // 保存模拟盘 Key → 写 .env → 立刻自检
 $('tnSaveBtn').addEventListener('click', async () => {
   const btn = $('tnSaveBtn');
@@ -1738,7 +1767,7 @@ async function runSelftest(el, exchange, mode) {
     el.textContent = formatSelftest(d);
     toast(d.ok ? '连接自检通过' : `自检失败：${d.error}`, d.ok ? 'ok' : 'err');
     if (d.ok) {
-      $('connState').textContent = '已连接（' + (mode === 'live' ? '主网' : '测试网') + '）';
+      if ($('setConnState')) $('setConnState').textContent = '已连接';
       $('liveBalance').textContent = `${fmt(d.balance)} USDT`;
     }
   } catch (e) {
@@ -1774,7 +1803,7 @@ $('armBtn').addEventListener('click', async () => {
 $('syncBtn').addEventListener('click', async () => {
   try {
     const d = await api('/api/exchange/sync', 'POST', {});
-    $('connState').textContent = d.connected ? '已连接' : `未连接${d.error ? '：' + d.error : ''}`;
+    if ($('setConnState')) $('setConnState').textContent = d.connected ? '已连接' : `未连接${d.error ? '：' + d.error : ''}`;
     if (d.account) $('liveBalance').textContent = `${fmt(d.account.balance)} USDT`;
     $('livePos').textContent = d.positions.length ? d.positions.map((p) => `${sideCn(p.side)} ${p.qty}`).join(' / ') : '无';
     toast(d.connected ? '同步成功' : `同步失败：${d.error}`, d.connected ? 'ok' : 'err');
