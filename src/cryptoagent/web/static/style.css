@@ -191,6 +191,8 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
   transition: background .15s ease, color .15s ease;
 }
 .nav-ico { width: 17px; height: 17px; flex: none; opacity: .72; }
+/* 「因子研究」四个字在手机端挤，窄屏换成两字缩写「因子」，完整名称保留在 title 里 */
+.lbl-short { display: none; }
 .tab:hover { background: var(--surface-2); color: var(--text); }
 .tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
 .tab.active .nav-ico { opacity: 1; }
@@ -554,6 +556,8 @@ label.field > input, label.field > select { max-width: 420px; }
 .cal-key.up { color: var(--up); }
 .cal-key.down { color: var(--down); margin-left: 10px; }
 .cal-key.today { margin-left: 10px; padding: 1px 7px; border: 1px solid var(--accent-line); border-radius: 5px; color: var(--accent); }
+/* 这句只是解释「悬停」这个动作，触屏设备上做不到，留着反而误导 */
+@media (hover: none) { .cal-hint { display: none; } }
 
 /* 机会榜 */
 .opp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
@@ -1031,6 +1035,8 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
     padding: 5px 8px; text-align: center; line-height: 1.15;
   }
   .tab .nav-ico { display: block; width: 15px; height: 15px; }
+  .tab .lbl-long { display: none; }
+  .tab .lbl-short { display: inline; }
   .side-foot { padding-left: 8px; }
 }
 @media (max-width: 380px) {
