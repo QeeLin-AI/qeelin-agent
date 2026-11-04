@@ -299,5 +299,40 @@ class TestQuoteFetchUnpack(unittest.TestCase):
         self.assertEqual(e._mark_price("XRPUSDT"), 0.0)
 
 
+class TestManagementHeartbeat(unittest.TestCase):
+    """心跳行的时间戳来源。
+
+    只认「当前品种」那份的话，一切到别的品种、当前品种又恰好空仓，时间戳就冻住，
+    页面上看着像守护线程挂了——实际上它正在管别的仓。
+    """
+
+    def test_prefers_current_symbol(self):
+        e = _engine()
+        e.last_management = {"ts": 1.0, "action": "hold"}
+        e.last_management_by_symbol = {
+            "SOLUSDT": {"ts": 30.0, "symbol": "SOLUSDT", "action": "hold"},
+            "ETHUSDT": {"ts": 20.0, "symbol": "ETHUSDT", "action": "hold"},
+        }
+        self.assertEqual(e._latest_management("ETHUSDT")["symbol"], "ETHUSDT")
+
+    def test_falls_back_to_newest_when_current_has_no_position(self):
+        e = _engine()
+        e.cfg.market.symbol = "BTCUSDT"          # 当前品种没有持仓
+        e.last_management = {"ts": 1.0, "action": "hold"}
+        e.last_management_by_symbol = {
+            "SOLUSDT": {"ts": 30.0, "symbol": "SOLUSDT", "action": "hold"},
+            "ETHUSDT": {"ts": 20.0, "symbol": "ETHUSDT", "action": "hold"},
+        }
+        got = e._latest_management("BTCUSDT")
+        self.assertEqual(got["symbol"], "SOLUSDT")
+        self.assertAlmostEqual(got["ts"], 30.0)
+
+    def test_empty_managements_returns_last(self):
+        e = _engine()
+        e.last_management = {"ts": 5.0}
+        e.last_management_by_symbol = {}
+        self.assertEqual(e._latest_management("BTCUSDT"), {"ts": 5.0})
+
+
 if __name__ == "__main__":
     unittest.main()

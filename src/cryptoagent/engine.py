@@ -512,6 +512,22 @@ class TradingEngine:
             total += (px - float(pos.get("entry") or 0.0)) * float(pos.get("qty") or 0.0) * direction
         return total
 
+    def _latest_management(self, cur_sym: str = "") -> dict:
+        """心跳行用的「最近一次巡检」。
+
+        优先当前品种那份（有仓时它就是用户最关心的）；当前品种没仓时取所有持仓
+        里 ts 最新的一条。之前这里只认当前品种，一旦切到别的品种，心跳时间戳就
+        冻在上一次不动了，看起来像守护线程挂了——实际上它在管别的仓。
+        """
+        m = getattr(self, "last_management_by_symbol", None) or {}
+        cur = str(cur_sym or self.cfg.market.symbol).upper()
+        hit = m.get(cur)
+        if hit:
+            return hit
+        if m:
+            return max(m.values(), key=lambda x: float(x.get("ts") or 0.0))
+        return getattr(self, "last_management", {})
+
     def _mark_price(self, symbol: str, hint: float | None = None) -> float:
         """标记价：活跃品种用传入价，其余品种只用缓存。
 
@@ -1907,8 +1923,7 @@ class TradingEngine:
                 "analyst_calibration": calibration_summary(self.state.get("analyst_accuracy")),
                 # 持仓管理员最近一次判断 + 守护线程状态（手动模式下也能看到退出决策）
                 # position_management 只给「当前品种」，全量在 position_managements
-                "position_management": (self.last_management_by_symbol.get(cur_sym)
-                                        or getattr(self, "last_management", {})),
+                "position_management": self._latest_management(cur_sym),
                 "position_managements": dict(self.last_management_by_symbol),
                 "position_guard": {
                     "running": bool(getattr(self, "_guard_thread", None)

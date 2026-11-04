@@ -1287,7 +1287,10 @@ function renderStatus(s) {
       if (r != null) {
         tail += ` · <span class="pm-r">${Number(r) >= 0 ? '+' : ''}${Number(r).toFixed(2)}R</span>`;
       }
-      guardLine = `<span class="pm-line ${state}" title="持仓管理员每 30 秒巡检一次">`
+      // 多仓时心跳行可能来自「别的品种」那一轮（当前品种空仓时取全场最新），
+      // 把品种塞进 title，避免看到 hold/+0.55R 却不知道说的是哪个仓
+      const who = pm.symbol && posAll.length > 1 ? ` · 最近巡检 ${esc(pm.symbol)}` : '';
+      guardLine = `<span class="pm-line ${state}" title="持仓管理员每 30 秒巡检一次${who}">`
         + `<i class="pm-dot"></i>巡检 <span class="pm-time">${esc(at)}</span>`
         + ` <span class="pm-age">${age}s 前</span> · ${tail}</span>`;
     }
