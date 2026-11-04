@@ -1021,18 +1021,23 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .tb-context, .tb-sep { display: none; }
   .price { font-size: 17px; }
   .top-right .tag { display: none; }
-  /* 手机竖屏宽度全给导航：品牌只留 LOGO，导航去掉装饰图标，5 个入口一屏放完 */
+  /* 手机竖屏宽度全给导航：品牌只留 LOGO；图标改到文字上方，
+     宽度仍由文字决定，5 个带图标的入口照样一屏放完 */
   .side-brand { padding-right: 10px; }
   .side-brand .side-brand-text { display: none; }
   .side-scroll { gap: 6px; }
-  .tab { padding: 7px 8px; gap: 0; }
-  .tab .nav-ico { display: none; }
+  .tab {
+    flex-direction: column; gap: 2px; width: auto;
+    padding: 5px 8px; text-align: center; line-height: 1.15;
+  }
+  .tab .nav-ico { display: block; width: 15px; height: 15px; }
   .side-foot { padding-left: 8px; }
 }
 @media (max-width: 380px) {
   /* 360px 级别的窄屏：再把标签内边距和字号压一档，保证 5 个入口不出现横向滚动 */
   .side-brand { padding-right: 8px; }
-  .tab { padding: 7px 6px; font-size: 12.5px; }
+  .tab { padding: 5px 6px; font-size: 12.5px; }
+  .tab .nav-ico { width: 14px; height: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
