@@ -101,6 +101,15 @@ class RiskConfig:
     leverage_override: float = 0.0
     max_position_pct: float = 0.30       # 单策略最大保证金占用（占权益）
     max_loss_per_trade_pct: float = 0.01
+    # —— 多品种并发持仓 ——
+    # 同时持仓的品种数上限。**默认 1 = 单仓，升级后行为不变**；
+    # 想开多仓必须在设置页手动调大，并同步收紧 max_loss_per_trade_pct
+    # （N 笔同时打满止损 = N 倍单笔风险）。
+    max_concurrent_positions: int = 1
+    # 全部持仓的保证金占用上限（占权益）。交易所真正拒绝的是这个，不是名义敞口：
+    # 名义 27x 在 5x 杠杆下只占 5.4 倍权益保证金，早就超过账户余额了。
+    # 默认 95% 只做「别加到爆仓」的兜底；开多仓时建议降到 60%~80%。
+    max_margin_usage_pct: float = 0.95
     # —— 仓位怎么定 ——
     # llm  = 用交易员给的 size_pct（模型保守时仓位会很小）
     # risk = 按单笔风险上限反推：名义敞口 = max_loss_per_trade_pct / 止损幅度

@@ -204,12 +204,19 @@ class TestWebApi(unittest.TestCase):
         # 切回去，别影响后面的用例
         self._post("/api/symbol", {"symbol": original})
 
-    def test_symbol_switch_blocked_with_position(self):
+    def test_symbol_switch_allowed_with_position(self):
+        """多品种持仓后不再阻塞切品种：仓位自带 symbol，切走不会失管。"""
+        original = json.loads(self._get("/api/status")[1])["data"]["symbol"]
         self.app.engine.last_decision = _fake_decision()
         self._post("/api/trading/execute", {})
         status, body = self._post("/api/symbol", {"symbol": "SOLUSDT"})
-        self.assertEqual(status, 409)
-        self.assertIn("平仓", body["error"])
+        self.assertEqual(status, 200)
+        self.assertEqual(body["data"]["symbol"], "SOLUSDT")
+        # 原来那个仓位必须还在（只是不再显示为「当前持仓」）
+        st = json.loads(self._get("/api/status")[1])["data"]
+        self.assertEqual(len(st["positions"]), 1)
+        self.assertEqual(st["positions"][0]["symbol"], original)
+        self._post("/api/symbol", {"symbol": original})
         self._post("/api/trading/close", {})
 
     def test_scan_returns_all_symbols(self):
@@ -360,6 +367,7 @@ class TestWebApi(unittest.TestCase):
 
         eng = self.app.engine
         with eng.lock:
+            eng.state["positions"] = {}
             eng.state["position"] = None
             eng.state["last_decision"] = {
                 "ts": "2026-01-01 00:00:00",

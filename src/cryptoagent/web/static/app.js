@@ -786,6 +786,13 @@ function renderRisk(r) {
   if (rport && document.activeElement !== rport) rport.value = Number(r.max_portfolio_notional_pct || 1.2).toFixed(1);
   const rcorr = $('riskCorrCap');
   if (rcorr && document.activeElement !== rcorr) rcorr.value = Number(r.correlated_exposure_pct || 0.9).toFixed(1);
+  // 多品种并发：品种数上限 + 保证金占用上限
+  const rmp = $('riskMaxPos');
+  if (rmp && document.activeElement !== rmp) rmp.value = String(Number(r.max_concurrent_positions || 1));
+  const rmc = $('riskMarginCap');
+  if (rmc && document.activeElement !== rmc) {
+    rmc.value = String(Math.round(Number(r.max_margin_usage_pct || 1) * 100));
+  }
 }
 
 // 风控保存后的非阻塞提醒：硬顶由用户自主设定，系统只提示、不改值
@@ -826,6 +833,26 @@ $('riskPosCapInput').addEventListener('change', async () => {
     const d = await api('/api/risk', 'POST', { max_position_pct: v / 100 });
     renderRisk(d.risk); riskWarn(d);
     toast(`仓位持仓上限已设为 ${v}%`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskMaxPos').addEventListener('change', async () => {
+  const v = Math.round(Number($('riskMaxPos').value));
+  if (!v || v < 1 || v > 20) { toast('同时持仓品种数需在 1 ~ 20 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { max_concurrent_positions: v });
+    renderRisk(d.risk); riskWarn(d);
+    toast(v === 1 ? '已设为单品种持仓' : `最多同时持有 ${v} 个品种`, 'ok');
+  } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
+});
+
+$('riskMarginCap').addEventListener('change', async () => {
+  const v = Number($('riskMarginCap').value);
+  if (!v || v < 1 || v > 100) { toast('保证金占用上限需在 1% ~ 100% 之间', 'err'); poll(); return; }
+  try {
+    const d = await api('/api/risk', 'POST', { max_margin_usage_pct: v / 100 });
+    renderRisk(d.risk); riskWarn(d);
+    toast(`保证金占用上限已设为 ${v}% 权益`, 'ok');
   } catch (e) { toast(`设置失败：${e.message}`, 'err'); poll(); }
 });
 
@@ -1134,28 +1161,49 @@ function renderStatus(s) {
   posChip.classList.toggle('hidden', !exOk);
   if (exOk) posChip.textContent = '交易所';
 
-  if (s.position) {
-    const p = s.position;
-    $('position').textContent = `${sideCn(p.side)} ${fmt(p.qty, 4)}`;
-    $('position').className = p.side === 'LONG' ? 'up' : 'down';
+  // 多品种：总览卡只显示「当前品种」或「N 个持仓」的汇总，明细在持仓页
+  const posAll = Array.isArray(s.positions) ? s.positions : (s.position ? [s.position] : []);
+  if (posAll.length) {
+    const p = s.position || posAll[0];
+    const totalUnreal = posAll.reduce(
+      (a, x) => a + (x.unrealized == null ? 0 : Number(x.unrealized)), 0);
+    if (posAll.length === 1) {
+      $('position').textContent = `${sideCn(p.side)} ${fmt(p.qty, 4)}`;
+      $('position').className = p.side === 'LONG' ? 'up' : 'down';
+    } else {
+      $('position').textContent = `${posAll.length} 个持仓`;
+      $('position').className = '';
+    }
     // 持仓管理员的常态是 hold——不产生任何动作，而「持仓管理员」卡片只在真改止损/
     // 平仓时才出现，于是页面上长期看不到它在工作。这里把「上一轮巡检」常态化显示：
-    // 时间戳每 30 秒刷新一次，停了就不再变，一眼能看出是否还活着。
+    // 状态点 + 高亮时间戳徽标 + 距今秒数。守护线程 30 秒一轮，秒数不涨即说明停了。
     const pm = s.position_management || {};
     const gd = s.position_guard || {};
     const ts = Number(pm.ts) || 0;
-    const at = ts ? new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '';
     let guardLine;
-    if (!gd.running) guardLine = '持仓管理员未运行';
-    else if (!ts) guardLine = '持仓管理员运行中 · 等待首轮巡检';
-    else {
-      const bits = [`管理员 ${at} 巡检`, pm.action || 'hold'];
+    if (!gd.running) {
+      guardLine = '<span class="pm-line off"><i class="pm-dot"></i>持仓管理员未运行</span>';
+    } else if (!ts) {
+      guardLine = '<span class="pm-line warn"><i class="pm-dot"></i>运行中 · 等待首轮巡检</span>';
+    } else {
+      const at = new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour12: false });
+      const age = Math.max(0, Math.round(Date.now() / 1000 - ts));
+      // 正常一轮 30 秒，超过 90 秒没更新基本可判定线程卡住
+      const state = age > 90 ? 'warn' : 'live';
       const r = pm.details && pm.details.floating_r;
-      if (r != null) bits.push(`${Number(r) >= 0 ? '+' : ''}${Number(r).toFixed(2)}R`);
-      guardLine = bits.join(' · ');
+      let tail = `<span class="pm-act">${esc(pm.action || 'hold')}</span>`;
+      if (r != null) {
+        tail += ` · <span class="pm-r">${Number(r) >= 0 ? '+' : ''}${Number(r).toFixed(2)}R</span>`;
+      }
+      guardLine = `<span class="pm-line ${state}" title="持仓管理员每 30 秒巡检一次">`
+        + `<i class="pm-dot"></i>巡检 <span class="pm-time">${esc(at)}</span>`
+        + ` <span class="pm-age">${age}s 前</span> · ${tail}</span>`;
     }
-    $('posSub').innerHTML = `开仓 ${esc(fmtPx(p.entry))} · 浮盈亏 ${esc(fmt(p.unrealized))}`
-      + `<br>${esc(guardLine)}`;
+    const head = posAll.length === 1
+      ? `开仓 ${esc(fmtPx(p.entry))} · 浮盈亏 ${esc(fmt(p.unrealized))}`
+      : `${esc(posAll.map((x) => String(x.symbol || '').replace(/USDT$/, '')).join(' / '))}`
+        + ` · 合计 ${esc(fmt(totalUnreal))}`;
+    $('posSub').innerHTML = `${head}<br>${guardLine}`;
   } else {
     $('position').textContent = '空仓';
     $('position').className = '';
@@ -1196,21 +1244,31 @@ function renderStatus(s) {
     tb.innerHTML = '<tr><td colspan="10" class="muted center">暂无成交</td></tr>';
   }
 
-  // 持仓表
+  // 持仓表：多品种逐行渲染，每行一个独立的平仓按钮（多仓时不能只给「平当前」）
   const pt = $('posTable').querySelector('tbody');
-  if (s.position) {
-    const p = s.position;
-    pt.innerHTML = `<tr>
-      <td class="mono">${esc(p.symbol || s.symbol)}<span class="cell-tag">${esc(p.mode || (exOk ? '交易所' : 'paper'))}</span></td>
+  const posList = posAll;
+  if (posList.length) {
+    pt.innerHTML = posList.map((p) => {
+      const sym = p.symbol || s.symbol;
+      const unreal = p.unrealized;
+      const cls = unreal == null ? 'muted' : (unreal >= 0 ? 'up' : 'down');
+      return `<tr>
+      <td class="mono">${esc(sym)}<span class="cell-tag">${esc(p.mode || (exOk ? '交易所' : 'paper'))}</span></td>
       <td class="${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</td>
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
       <td>${fmt(p.leverage, 1)}x</td>
       <td class="col-2line"><span class="up">${fmtPx(p.stop)}</span><span class="down">${fmtPx(p.tp)}</span></td>
-      <td class="${p.unrealized >= 0 ? 'up' : 'down'}">${fmt(p.unrealized)}</td></tr>`;
+      <td class="${cls}">${unreal == null ? '--' : fmt(unreal)}</td>
+      <td><button class="btn ghost danger xs" data-close-pos="${esc(sym)}">平仓</button></td></tr>`;
+    }).join('');
   } else {
-    pt.innerHTML = '<tr><td colspan="8" class="muted center">空仓</td></tr>';
+    pt.innerHTML = '<tr><td colspan="9" class="muted center">空仓</td></tr>';
   }
-  if ($('posMeta')) $('posMeta').textContent = s.position ? '1 个' : '空仓';
+  if ($('posMeta')) {
+    $('posMeta').textContent = posList.length
+      ? `${posList.length}/${Number(s.position_limit) || posList.length} 个`
+      : '空仓';
+  }
 
   // 交易页状态
   $('armState').textContent = modeLabel;
@@ -1961,13 +2019,50 @@ $('execBtn').addEventListener('click', async () => {
   } catch (e) { toast(e.message, 'err'); }
 });
 
-$('closeBtn').addEventListener('click', async () => {
-  if (!confirm('确认平掉当前持仓？')) return;
+// 持仓表行内平仓：多品种时逐个平，避免一不留神把全部仓位平掉
+$('posTable').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-close-pos]');
+  if (!btn) return;
+  const sym = btn.dataset.closePos;
+  if (!confirm(`确认平掉 ${sym} 这笔持仓？`)) return;
+  btn.disabled = true;
   try {
-    const d = await api('/api/trading/close', 'POST', {});
-    toast(d.ok ? '已平仓' : `平仓失败：${d.error}`, d.ok ? 'ok' : 'err');
+    const d = await api('/api/trading/close', 'POST', { symbol: sym });
+    toast(d.ok ? `${sym} 已平仓` : `平仓失败：${d.error}`, d.ok ? 'ok' : 'err');
     poll();
-  } catch (e) { toast(e.message, 'err'); }
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('closeBtn').addEventListener('click', async () => {
+  const list = (lastStatus
+    && (Array.isArray(lastStatus.positions)
+      ? lastStatus.positions
+      : (lastStatus.position ? [lastStatus.position] : []))) || [];
+  if (!list.length) { toast('当前没有持仓', 'err'); return; }
+  const names = list.map((p) => p.symbol).join('、');
+  const ask = list.length > 1
+    ? `确认平掉全部 ${list.length} 笔持仓（${names}）？`
+    : `确认平掉 ${names}？`;
+  if (!confirm(ask)) return;
+  let ok = 0;
+  const errs = [];
+  for (const p of list) {
+    try {
+      const d = await api('/api/trading/close', 'POST', { symbol: p.symbol });
+      if (d.ok) ok += 1;
+      else errs.push(`${p.symbol}: ${d.error}`);
+    } catch (e) {
+      errs.push(`${p.symbol}: ${e.message}`);
+    }
+  }
+  toast(errs.length
+    ? `平仓 ${ok} 笔，失败 ${errs.length} 笔（${errs[0]}）`
+    : `已平仓 ${ok} 笔`, errs.length ? 'err' : 'ok');
+  poll();
 });
 
 $('haltBtn').addEventListener('click', async () => {

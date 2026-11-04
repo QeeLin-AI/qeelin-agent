@@ -196,6 +196,34 @@ class RiskEngine:
         proposed_notional = size * lev * equity
         existing_notional = float(sum(float(p.get("notional", 0.0)) for p in positions))
         total_notional = existing_notional + proposed_notional
+
+        # 11a. 并发持仓数量上限。数量闸必须在敞口闸之前：敞口再宽松，
+        # 也不允许无限铺品种——每个品种都是一份独立的尾 risk。
+        cap_n = max(1, int(getattr(cfg, "max_concurrent_positions", 1) or 1))
+        if not self._record(checks, "concurrent_positions", len(positions) < cap_n,
+                            f"当前持仓 {len(positions)} / 上限 {cap_n} 个品种"):
+            return RiskDecision(False, "flat", 0.0, 0.0,
+                                [f"同时持仓已达上限 {cap_n} 个品种，先平掉一个再开新仓"
+                                 "（可在 设置→风险控制→同时持仓品种数 调整）"], checks)
+
+        # 11b. 保证金占用。交易所拒单看的是「保证金够不够」，不是名义敞口：
+        # 名义 10x 权益在 5x 杠杆下只要 2 倍权益保证金，名义上限却可能还有余量。
+        # 旧版本没有这道闸，多仓时会一路加到余额不足 -2019 才失败。
+        proposed_margin = size * equity
+        existing_margin = float(sum(
+            float(p.get("margin") or 0.0) if p.get("margin") is not None
+            else float(p.get("notional", 0.0)) / max(float(p.get("leverage") or 1.0), 1e-9)
+            for p in positions
+        ))
+        total_margin = existing_margin + proposed_margin
+        cap_margin = float(getattr(cfg, "max_margin_usage_pct", 1.0) or 1.0) * equity
+        if not self._record(checks, "margin_usage", total_margin <= cap_margin,
+                            f"保证金占用 {total_margin:,.0f} / 上限 {cap_margin:,.0f}"):
+            return RiskDecision(False, "flat", 0.0, 0.0,
+                                [f"保证金占用 {total_margin:,.0f} 超过上限 {cap_margin:,.0f}"
+                                 f"（当前 {float(getattr(cfg, 'max_margin_usage_pct', 1.0)):.0%} 权益，"
+                                 "可在 设置→风险控制→保证金占用上限 调整），本次不开仓"], checks)
+
         cap_total = cfg.max_portfolio_notional_pct * equity
         if not self._record(checks, "portfolio_notional", total_notional <= cap_total,
                             f"组合名义敞口 {total_notional:,.0f} / 上限 {cap_total:,.0f}"):

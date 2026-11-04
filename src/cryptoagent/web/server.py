@@ -1095,8 +1095,8 @@ class WebApp:
             raise ApiError("这是当前正在用的品种，先切到别的品种再删", 409)
         # 先与交易所核对，清理幽灵仓位，避免误拦截删除
         self.engine._reconcile_position_with_exchange()
-        pos = self.engine.state.get("position") or {}
-        if str(pos.get("symbol", "")).upper() == sym:
+        # 多品种：只要 dict 里有这个品种就不能删（以前只比对了单个仓位）
+        if self.engine._get_position(sym):
             raise ApiError("该品种还有未平仓位，先平仓再删", 409)
         self.cfg.market.symbols.remove(sym)
         self.cfg.market.pinned = [x for x in (self.cfg.market.pinned or []) if x != sym]
@@ -1276,6 +1276,9 @@ class WebApp:
             "min_leverage": r.min_leverage,
             "max_portfolio_notional_pct": r.max_portfolio_notional_pct,
             "correlated_exposure_pct": r.correlated_exposure_pct,
+            # 多品种并发：品种数上限 + 保证金占用上限（交易所真正卡的那道闸）
+            "max_concurrent_positions": int(getattr(r, "max_concurrent_positions", 1) or 1),
+            "max_margin_usage_pct": float(getattr(r, "max_margin_usage_pct", 1.0) or 1.0),
         }
 
     def set_risk(self, payload: dict) -> dict:
@@ -1317,6 +1320,22 @@ class WebApp:
             if not (0.001 <= v <= 1.0):
                 raise ApiError("仓位上限只能在 0.1% ~ 100% 之间", 400)
             r.max_position_pct = v
+        if "max_concurrent_positions" in payload:
+            try:
+                v = int(float(payload["max_concurrent_positions"]))
+            except (TypeError, ValueError) as exc:
+                raise ApiError("max_concurrent_positions 必须是整数", 400) from exc
+            if not (1 <= v <= 20):
+                raise ApiError("同时持仓品种数只能在 1 ~ 20 之间", 400)
+            r.max_concurrent_positions = v
+        if "max_margin_usage_pct" in payload:
+            try:
+                v = float(payload["max_margin_usage_pct"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("max_margin_usage_pct 必须是数字", 400) from exc
+            if not (0.01 <= v <= 1.0):
+                raise ApiError("保证金占用上限只能在 1% ~ 100% 之间", 400)
+            r.max_margin_usage_pct = v
         if "daily_loss_limit_pct" in payload:
             try:
                 v = float(payload["daily_loss_limit_pct"])
@@ -1958,7 +1977,9 @@ class Handler(BaseHTTPRequestHandler):
             app.invalidate_exchange_cache()
             return self._json({"ok": True, "data": res})
         if path == "/api/trading/close":
-            res = eng.close(price=app.live_price, reason="web")
+            # 多品种：不传 symbol 时平「当前品种」（单仓时自动落到唯一那笔）
+            res = eng.close(price=app.live_price, reason="web",
+                            symbol=(payload.get("symbol") or None))
             app.invalidate_exchange_cache()
             return self._json({"ok": True, "data": res})
         if path == "/api/risk":

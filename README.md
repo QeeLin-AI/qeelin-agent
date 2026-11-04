@@ -221,8 +221,14 @@ python run.py web --host 127.0.0.1 --port 8000
 | `min_confidence` | 0.45 | 低于该置信度直接放弃 |
 | `max_portfolio_notional_pct` | 16.0 | 全部持仓名义敞口上限（占权益）；须 ≥ `max_position_pct × max_leverage`（单笔最大名义） |
 | `correlated_exposure_pct` | 16.0 | 同相关性组内同向敞口上限；同上须 ≥ 单笔最大名义 |
+| `max_concurrent_positions` | 1 | 同时持仓的品种数上限；`1` = 单仓（升级后默认不变，多仓需手动打开） |
+| `max_margin_usage_pct` | 0.95 | 全部持仓的保证金占用上限（占权益）。交易所拒单看的是这个，不是名义敞口；多仓建议降到 60%~80% |
 
-> 上表是 `config/default.json` 的出厂值；代码内 dataclass 兜底更保守（3x / 30% / 1% / 3% / 15% / 0.55），配置文件缺失时以代码为准。4 项硬顶（单笔风险 / 仓位 / 当日亏损 / 最大回撤）在控制台都可在 **0.1%–100%** 自由设置；组合层两项（`max_portfolio_notional_pct` / `correlated_exposure_pct`）单位为**倍权益**，可在 **0.1–100x** 设置。设得大只是放宽允许范围，不代表实际会用满。
+> 上表是 `config/default.json` 的出厂值；代码内 dataclass 兜底更保守（3x / 30% / 1% / 3% / 15% / 0.55），配置文件缺失时以代码为准。6 项硬顶（单笔风险 / 仓位 / 同时持仓品种数 / 保证金占用 / 当日亏损 / 最大回撤）在控制台都可自由设置；组合层两项（`max_portfolio_notional_pct` / `correlated_exposure_pct`）单位为**倍权益**，可在 **0.1–100x** 设置。设得大只是放宽允许范围，不代表实际会用满。
+
+**多品种并发持仓**：`max_concurrent_positions > 1` 时，持仓存在 `state["positions"]`（按品种索引），同一个品种只允许一笔。开新仓受三道闸约束——品种数上限、保证金占用上限、组合名义敞口上限。**多仓时务必同步下调 `max_loss_per_trade_pct`**：单笔 5% 风险在 3 个品种同时打满止损时就是 15%，`portfolio_risk ≈ 单笔风险 × 品种数`。
+
+> 名义 = 数量 × 开仓价，与杠杆无关；保证金 = 名义 ÷ 杠杆。旧版本 `_positions_for_risk()` 把名义算成 `数量 × 开仓价 × 杠杆`，把敞口放大了 lev 倍（30x 下几乎每笔都撞组合上限），已修正。
 
 除 `risk` 外，还有两组可选配置（缺字段时用代码默认值，旧配置文件无需改动即可升级）：
 

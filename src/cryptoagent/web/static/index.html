@@ -325,7 +325,7 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>持仓</h2><div class="actions" id="posActions"><button id="closeBtn" class="btn ghost danger">一键平仓</button></div></div>
+      <div class="card-head"><h2>持仓</h2><div class="actions" id="posActions"><button id="closeBtn" class="btn ghost danger">全部平仓</button></div></div>
       <div class="pos-tabs" id="posTabs">
         <button class="seg sel" data-pos-tab="cur">当前持仓<span id="posMeta" class="tab-count"></span></button>
         <button class="seg" data-pos-tab="hist">持仓历史<span id="histMeta" class="tab-count"></span></button>
@@ -333,8 +333,8 @@
       <div class="pos-pane" id="posPaneCur">
         <div class="table-scroll">
           <table class="table compact" id="posTable">
-            <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损 / 止盈</th><th>浮盈亏</th></tr></thead>
-            <tbody><tr><td colspan="8" class="muted center">空仓</td></tr></tbody>
+            <thead><tr><th>品种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>止损 / 止盈</th><th>浮盈亏</th><th>操作</th></tr></thead>
+            <tbody><tr><td colspan="9" class="muted center">空仓</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -564,6 +564,20 @@
             </span>
           </label>
           <label class="set-field">
+            <span class="set-label">同时持仓品种数</span>
+            <span class="input-suffix">
+              <input id="riskMaxPos" type="number" min="1" max="20" step="1" />
+              <span class="suffix">个</span>
+            </span>
+          </label>
+          <label class="set-field">
+            <span class="set-label">保证金占用上限</span>
+            <span class="input-suffix">
+              <input id="riskMarginCap" type="number" min="1" max="100" step="1" />
+              <span class="suffix">% 权益</span>
+            </span>
+          </label>
+          <label class="set-field">
             <span class="set-label">当日亏损上限</span>
             <span class="input-suffix">
               <input id="riskDaily" type="number" min="0.1" max="100" step="0.1" />
@@ -593,8 +607,10 @@
           </label>
         </div>
         <p class="set-hint">
-          前 4 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围。
+          前 6 项都是<b>硬顶（允许的上限）</b>，不代表实际会用满：设大只是放宽允许范围。
           实际仓位由上方「仓位大小」决定：听交易员时用模型给的 size，按风险上限反推时才用 上限 ÷ 止损。<br />
+          <b>同时持仓品种数</b>限制能同时开几个仓；<b>保证金占用上限</b>是交易所真正卡你的那道闸
+          （名义敞口再宽松，保证金不够一样拒单），多品种时通常先撞这个。<br />
           后 2 项是<b>组合层敞口</b>（单位：倍权益），约束多笔/多品种<b>同向叠加</b>的名义敞口；
           设得小于「仓位上限 × 杠杆上限」时，单笔满仓单也会被组合层拒绝。拦截告警会带上当前上限值。
         </p>

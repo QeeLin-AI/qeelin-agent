@@ -95,7 +95,16 @@ class TradingEngine:
             self.state.setdefault("alert_dedupe", {}) or {}
         )
         self._stop_adjust_at = float(self.state.get("last_stop_adjust_at", 0.0) or 0.0)
+        # 多品种：移动止损的节流必须按品种独立，否则两个仓位会互相压制
+        self._stop_adjust_at_by_symbol: dict[str, float] = dict(
+            self.state.setdefault("last_stop_adjust_by_symbol", {}) or {}
+        )
         self.last_management: dict = {}
+        self.last_management_by_symbol: dict[str, dict] = {}
+        # 各品种最新价（非活跃品种没有 self.df，靠短周期 K 线取，带 10s 缓存）
+        self._last_prices: dict[str, float] = {}
+        self._quote_cache: dict[str, tuple[float, float]] = {}
+        self._frame_cache: dict[str, tuple[pd.DataFrame, float]] = {}
         # 持仓管理守护线程：不依赖「启动自动循环」，手动/半自动模式下开仓后
         # 也能做移动止损、时间止损与趋势反转退出。
         self._guard_lock = threading.Lock()
@@ -116,6 +125,9 @@ class TradingEngine:
             "peak_equity": eq,
             "day_start_equity": eq,
             "day": _today(),
+            # positions 是唯一真相（key = 品种）；position 只是「当前品种」的兼容视图，
+            # 老前端 / 老存档 / 单仓调用方都还在读它。
+            "positions": {},
             "position": None,
             "fills": [],
             "position_history": [],
@@ -133,6 +145,17 @@ class TradingEngine:
                 self.state.update(saved)
             except Exception:  # noqa: BLE001 - 状态文件损坏时重建，不阻塞启动
                 pass
+        # 旧存档只有单仓 state["position"]：迁进 positions 字典（多品种的唯一真相）。
+        # 不迁移的话，升级后重启会把已有仓位当成空仓，等于凭空多出一张裸单。
+        if not isinstance(self.state.get("positions"), dict):
+            self.state["positions"] = {}
+        legacy = self.state.get("position")
+        if isinstance(legacy, dict) and not self.state["positions"]:
+            sym = str(legacy.get("symbol") or self.cfg.market.symbol).upper()
+            self.state["positions"][sym] = legacy
+        # 视图不能是 None：有仓位时 `position` 为 None 会让老前端显示「空仓」
+        if self.state["positions"] and not self.state.get("position"):
+            self.state["position"] = next(iter(self.state["positions"].values()))
 
     def _save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,25 +303,160 @@ class TradingEngine:
         except Exception:  # noqa: BLE001 - 通知是旁路，任何异常都不应影响主流程
             pass
 
+    # ------------------------------------------------------------------
+    # 多品种持仓
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _pos_symbol(pos: dict | None, fallback: str = "") -> str:
+        return str((pos or {}).get("symbol") or fallback or "").upper()
+
+    def _positions_map(self) -> dict[str, dict]:
+        """全部持仓（key = 品种）。`state["positions"]` 是唯一真相。
+
+        只做一件兼容：老存档（只有 `state["position"]`、没有 positions）首次读取时
+        迁移进字典。**不做「视图被置空就删仓位」的猜测**——那是多线程下的竞态，
+        一次误判就会把真实仓位从状态里抹掉。清仓一律走 `_drop_position()`。
+        """
+        m = self.state.get("positions")
+        if not isinstance(m, dict):
+            m = {}
+            self.state["positions"] = m
+        single = self.state.get("position")
+        if not m and isinstance(single, dict):
+            m[self._pos_symbol(single, self.cfg.market.symbol)] = single
+        return m
+
+    def _sync_position_view(self) -> None:
+        """把 `state["position"]` 同步成「当前品种」的仓（老前端只认单个）。"""
+        m = self.state.get("positions")
+        if not isinstance(m, dict):
+            m = {}
+            self.state["positions"] = m
+        cur = m.get(str(self.cfg.market.symbol).upper())
+        if cur is None and m:
+            cur = next(iter(m.values()))
+        self.state["position"] = cur
+
+    def _get_position(self, symbol: str | None = None) -> dict | None:
+        return self._positions_map().get(str(symbol or self.cfg.market.symbol).upper())
+
+    def _resolve_position(self, symbol: str | None = None) -> dict | None:
+        """定位要操作的仓位：显式品种优先；否则当前品种；再否则「只有一个仓」时用它。
+
+        单仓时代 `/api/close` 不带 symbol，auto_rotate 换过品种后仍要能平掉唯一那笔。
+        """
+        m = self._positions_map()
+        if symbol:
+            return m.get(str(symbol).upper())
+        cur = m.get(str(self.cfg.market.symbol).upper())
+        if cur is not None:
+            return cur
+        return next(iter(m.values()), None) if len(m) == 1 else None
+
+    def _put_position(self, pos: dict) -> None:
+        m = self._positions_map()
+        sym = self._pos_symbol(pos, self.cfg.market.symbol)
+        pos["symbol"] = sym
+        m[sym] = pos
+        self._sync_position_view()
+
+    def _drop_position(self, symbol: str | None = None) -> dict | None:
+        m = self._positions_map()
+        sym = str(symbol or self.cfg.market.symbol).upper()
+        old = m.pop(sym, None)
+        self._sync_position_view()
+        return old
+
+    def position_limit(self) -> int:
+        """同时持仓的品种数上限（配置异常时退回单仓，绝不放开）。"""
+        risk = getattr(self.cfg, "risk", None)
+        try:
+            n = int(getattr(risk, "max_concurrent_positions", 1) or 1)
+        except (TypeError, ValueError):
+            n = 1
+        return max(1, n)
+
+    def _quote_for(self, symbol: str, ttl: float = 10.0) -> float:
+        """取某个品种的最新价。活跃品种直接读 self.df，其余读短周期 K 线（带缓存）。
+
+        多品种止损检查不能都拿「当前品种的价格」：BTC 的价套到 SOL 仓位上，
+        止损/止盈会瞬间误触发。取不到价就返回 0，调用方跳过该品种本轮检查。
+        """
+        sym = str(symbol).upper()
+        cur = str(self.cfg.market.symbol).upper()
+        if sym == cur and self.df is not None:
+            try:
+                px = float(self.df["close"].iloc[-1])
+                if px > 0:
+                    self._last_prices[sym] = px
+                    return px
+            except Exception:  # noqa: BLE001
+                pass
+        now = time.time()
+        cached = self._quote_cache.get(sym)
+        if cached and (now - cached[1]) < ttl:
+            return cached[0]
+        try:
+            interval = str(getattr(self.cfg.market, "short_interval", "5m") or "5m")
+            df = fetch_klines(sym, interval, 5, prefer=self.state.get("exchange", "binance"))
+            px = float(df["close"].iloc[-1])
+        except Exception:  # noqa: BLE001 - 单个品种取价失败不影响其它仓位
+            return 0.0
+        if px <= 0:
+            return 0.0
+        self._quote_cache[sym] = (px, now)
+        self._last_prices[sym] = px
+        return px
+
+    def _frame_for(self, symbol: str, ttl: float = 60.0) -> pd.DataFrame | None:
+        """取某个品种的 K 线，供持仓管理员算 ATR / 均线 / 持有根数。
+
+        活跃品种用 self.df；其余品种走短周期 K 线并按品种缓存 60 秒——
+        持仓管理 30 秒一轮，每轮重拉一遍全部品种纯属浪费。
+        """
+        sym = str(symbol).upper()
+        if sym == str(self.cfg.market.symbol).upper() and self.df is not None:
+            return self.df
+        now = time.time()
+        cached = self._frame_cache.get(sym)
+        if cached and (now - cached[1]) < ttl:
+            return cached[0]
+        try:
+            interval = str(getattr(self.cfg.market, "short_interval", "5m") or "5m")
+            df = fetch_klines(sym, interval, 200, prefer=self.state.get("exchange", "binance"))
+        except Exception:  # noqa: BLE001 - 拿不到就退化成「本轮不管理」
+            return None
+        if df is not None and len(df):
+            self._frame_cache[sym] = (df, now)
+        return df
+
     def _positions_for_risk(self, price: float) -> list[dict]:
-        """把当前持仓整理成风险引擎需要的格式（A3 组合层风控使用）。"""
-        pos = self.state.get("position")
-        if not pos:
-            return []
-        entry = float(pos.get("entry") or price)
-        qty = float(pos.get("qty") or 0.0)
-        lev = float(pos.get("leverage") or 1.0)
-        return [{
-            "symbol": self.cfg.market.symbol,
-            "side": pos.get("side"),
-            "notional": qty * entry * lev,
-        }]
+        """把全部持仓整理成风险引擎需要的格式（A3 组合层风控使用）。
+
+        ⚠️ 名义 = 数量 × 开仓价，与杠杆无关（永续的名义就是币数×价格）。
+        旧代码写成 `qty × entry × lev`，多乘了一次杠杆，导致组合敞口被放大 lev 倍
+        ——30x 下几乎每笔都会被组合上限挡住，所以历史上才把上限一路抬到 27x。
+        保证金 = 名义 / 杠杆，这才是交易所拒单时看的量。
+        """
+        rows: list[dict] = []
+        for pos in self._positions_map().values():
+            entry = float(pos.get("entry") or price)
+            qty = float(pos.get("qty") or 0.0)
+            lev = float(pos.get("leverage") or 1.0) or 1.0
+            notional = qty * entry
+            rows.append({
+                "symbol": self._pos_symbol(pos, self.cfg.market.symbol),
+                "side": pos.get("side"),
+                "notional": notional,
+                "margin": notional / lev,
+                "leverage": lev,
+            })
+        return rows
 
     def _roll_day(self) -> None:
         if self.state["day"] != _today():
             self.state["day"] = _today()
             self.state["day_start_equity"] = self.state["equity"]
-            self.state["position"] = self.state.get("position")
 
     def account_state(self, price: float | None = None) -> AccountState:
         price = price if price is not None else self.price()
@@ -322,16 +480,51 @@ class TradingEngine:
             consecutive_losses=self.state["consecutive_losses"],
         )
 
-    def _position_pnl(self, price: float) -> float:
-        pos = self.state.get("position")
-        if not pos:
-            return 0.0
-        direction = 1.0 if pos["side"] == "LONG" else -1.0
-        return (price - pos["entry"]) * pos["qty"] * direction
+    def _position_pnl(self, price: float | None = None, symbol: str | None = None) -> float:
+        """全部持仓的浮动盈亏。多品种按各自的最新价算，绝不共用当前品种的价。
+
+        没有报价的品种（刚开仓、K 线还没拉到）按 0 计入——宁可少算浮盈，
+        也不能拿别的品种的价格算出巨额假盈亏。
+        """
+        if symbol:
+            pos = self._get_position(symbol)
+            if not pos:
+                return 0.0
+            px = self._mark_price(symbol, price)
+            if px <= 0:
+                return 0.0
+            direction = 1.0 if pos["side"] == "LONG" else -1.0
+            return (px - float(pos["entry"])) * float(pos["qty"]) * direction
+        total = 0.0
+        for sym, pos in self._positions_map().items():
+            px = self._mark_price(sym, price)
+            if px <= 0:
+                continue
+            direction = 1.0 if pos.get("side") == "LONG" else -1.0
+            total += (px - float(pos.get("entry") or 0.0)) * float(pos.get("qty") or 0.0) * direction
+        return total
+
+    def _mark_price(self, symbol: str, hint: float | None = None) -> float:
+        """标记价：活跃品种用传入价，其余品种只用缓存。
+
+        这里**不发网络请求**——它会被 status() 每 3 秒调用一次，现场拉 K 线会把
+        HTTP 轮询拖死。非活跃品种的价格由守护线程（30 秒一轮）经 _quote_for 更新。
+        """
+        sym = str(symbol).upper()
+        cur = str(self.cfg.market.symbol).upper()
+        if sym == cur and hint and float(hint) > 0:
+            self._last_prices[sym] = float(hint)
+            return float(hint)
+        return float(self._last_prices.get(sym) or 0.0)
 
     def _position_notional(self, price: float) -> float:
-        pos = self.state.get("position")
-        return pos["qty"] * price if pos else 0.0
+        """全部持仓的名义价值（币数 × 当前价），与杠杆无关。"""
+        total = 0.0
+        for sym, pos in self._positions_map().items():
+            px = self._mark_price(sym, price)
+            if px > 0:
+                total += float(pos.get("qty") or 0.0) * px
+        return total
 
     def _equity(self, price: float) -> float:
         return float(self.state["equity"] + self._position_pnl(price))
@@ -430,7 +623,8 @@ class TradingEngine:
         fill = price * (1 + slip) if side == "LONG" else price * (1 - slip)
         fee = qty * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
         self.state["equity"] -= fee
-        self.state["position"] = {
+        sym = self.cfg.market.symbol
+        self._put_position({
             "side": side,
             "qty": qty,
             "entry": fill,
@@ -442,10 +636,10 @@ class TradingEngine:
             # epoch 用来算持有了多少根 K 线，避免本地时区歧义。
             "opened_epoch": time.time(),
             "initial_r_pct": abs(fill - stop) / fill if fill > 0 else 0.0,
-            "symbol": self.cfg.market.symbol,
+            "symbol": sym,
             "analyst_stances": list(stances or []),
             "mode": "paper",
-        }
+        })
         # A4：记录计划价与滑点，便于事后审计「计划 vs 成交」偏差
         slip_bps = None
         if plan_price:
@@ -495,8 +689,8 @@ class TradingEngine:
         )
         self.state["position_history"] = hist[-200:]
 
-    def _paper_close(self, price: float, reason: str) -> dict | None:
-        pos = self.state.get("position")
+    def _paper_close(self, price: float, reason: str, symbol: str | None = None) -> dict | None:
+        pos = self._resolve_position(symbol)
         if not pos:
             return None
         slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
@@ -512,6 +706,7 @@ class TradingEngine:
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "action": "CLOSE",
             "side": pos["side"],
+            "symbol": self._pos_symbol(pos, self.cfg.market.symbol),
             "qty": round(pos["qty"], 6),
             "price": round_price(fill),
             "fee": round(fee, 4),
@@ -521,7 +716,7 @@ class TradingEngine:
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
         self._record_close(pos, fill, pnl - fee, reason, "paper")
-        self.state["position"] = None
+        self._drop_position(pos.get("symbol"))
         return rec
 
     # ------------------------------------------------------------------
@@ -721,27 +916,29 @@ class TradingEngine:
         return {"qty": qty, "price": exit_px, "fee": fee, "pnl": pnl}
 
     def _reconcile_position_with_exchange(self) -> None:
-        """核对本地实盘持仓与交易所真实持仓，清理「幽灵仓位」。
+        """逐个核对本地实盘持仓与交易所真实持仓，清理「幽灵仓位」。
 
-        本地 state["position"] 只是缓存：当仓位在交易所网页端被手动平掉、或下单被拒
-        但本地已记账时，会留下幽灵仓位，导致切换/删除品种、开仓被误拦截。
+        本地 `state["positions"]` 只是缓存：当仓位在交易所网页端被手动平掉、或下单
+        被拒但本地已记账时，会留下幽灵仓位，导致切换/删除品种、开仓被误拦截。
         只核对实盘（mode=live）仓位；模拟盘仓位不对应交易所，不能清。
         拿不到交易所数据时保守不动；确认交易所无持仓才清本地缓存，绝不主动平仓。
         """
-        pos = self.state.get("position")
-        if not pos or pos.get("mode") != "live":
+        live_positions = [p for p in self._positions_map().values() if p.get("mode") == "live"]
+        if not live_positions:
             return
         exchange = self.state.get("exchange", "binance")
         testnet = bool(self.state.get("testnet", True))
-        # 用仓位自己的品种去查：auto_rotate 换过品种后，拿当前品种去查只会得到空仓位，
-        # 会把「另一个品种还在持仓」误判成幽灵仓位。
-        symbol = str(pos.get("symbol") or self.cfg.market.symbol)
-        try:
-            client = self.live_client or self.connect(testnet=testnet, exchange=exchange)
-            real = client.positions(symbol)
-        except Exception:  # noqa: BLE001 - 拿不到交易所数据就保守不动
-            return
-        if not real:
+        for pos in live_positions:
+            # 用仓位自己的品种去查：auto_rotate 换过品种后，拿当前品种去查只会得到
+            # 空仓位，会把「另一个品种还在持仓」误判成幽灵仓位。
+            symbol = str(pos.get("symbol") or self.cfg.market.symbol)
+            try:
+                client = self.live_client or self.connect(testnet=testnet, exchange=exchange)
+                real = client.positions(symbol)
+            except Exception:  # noqa: BLE001 - 拿不到交易所数据就保守不动
+                continue
+            if real:
+                continue
             # 交易所已无持仓：先把这次平仓的成交补记下来，再清缓存。
             # 补记失败也只是少了流水，不能因此留下幽灵仓位。
             try:
@@ -749,11 +946,15 @@ class TradingEngine:
             except Exception as exc:  # noqa: BLE001 - 补记是尽力而为
                 self.last_error = f"平仓补记失败：{type(exc).__name__}: {exc}"[:200]
             with self.lock:
-                self.state["position"] = None
+                self._drop_position(symbol)
                 self._save()
 
     def switch_symbol(self, symbol: str) -> dict:
-        """切换活跃品种（有持仓时拒绝，避免仓位和行情对不上）。"""
+        """切换活跃品种（只影响「看哪个品种 / 对谁做开仓决策」，不影响已有仓位）。
+
+        多品种持仓后不再有「有仓不能切」的限制：每个仓位自己带着 symbol，
+        行情、止损检查、移动止损都按仓位自己的品种走，切走不会让仓位失管。
+        """
         symbol = symbol.strip().upper()
         if not symbol:
             raise ValueError("品种不能为空")
@@ -762,11 +963,10 @@ class TradingEngine:
         # 先与交易所核对，清理幽灵仓位（本地记着、但交易所实际已平）
         self._reconcile_position_with_exchange()
         with self.lock:
-            if self.state.get("position"):
-                raise ValueError("还有未平仓位，先平仓再换品种")
             self.cfg.market.symbol = symbol
             self.state["symbol"] = symbol
             self.df = None
+            self._sync_position_view()
             self._save()
         df, src = self.refresh_data()
         return {
@@ -860,6 +1060,13 @@ class TradingEngine:
         rows = self.opportunities if (fresh and self.opportunities) else self._scan_opportunities()
         if not rows:
             return None
+        # 已持仓的品种不再作为轮动目标：切过去只会被「已有持仓」跳过，
+        # 白白浪费一次决策机会，也挡住了真正的第二个仓位。
+        held = set(self._positions_map().keys())
+        rows_all = rows
+        rows = [r for r in rows if str(r.get("symbol", "")).upper() not in held]
+        if not rows:
+            return None
         top = rows[0]
         if top.get("error"):
             return None
@@ -872,7 +1079,7 @@ class TradingEngine:
         if top["symbol"] == current:
             return None
         cur_score = next(
-            (float(r.get("score") or 0.0) for r in rows if r.get("symbol") == current), 0.0
+            (float(r.get("score") or 0.0) for r in rows_all if r.get("symbol") == current), 0.0
         )
         if score - cur_score < 0.02:
             return None
@@ -1017,22 +1224,28 @@ class TradingEngine:
     def _guard_loop(self) -> None:
         while not self._guard_stop.wait(self._guard_interval):
             try:
-                if self.df is None or not self.state.get("position"):
+                if not self._positions_map():
                     continue
                 self._reconcile_position_with_exchange()
-                pos = self.state.get("position")
-                if not pos:
-                    continue
-                self._retry_pending_take_profit(pos)
-                px = None
+                # 实时价只对应「当前活跃品种」；其它品种由 _quote_for 自行取价
+                live_px = None
                 if self.live_price_provider is not None:
                     try:
                         v = float(self.live_price_provider() or 0.0)
                         if v > 0:
-                            px = v
+                            live_px = v
                     except Exception:  # noqa: BLE001
                         pass
-                self._manage_open_position(pos, px)
+                # 逐仓管理：每个品种用自己的行情、自己的移动止损节流。
+                # 一个品种报错不能连累其它仓位（以前单个仓位异常就整轮中断）。
+                for pos in list(self._positions_map().values()):
+                    try:
+                        self._retry_pending_take_profit(pos)
+                        sym = self._pos_symbol(pos, self.cfg.market.symbol)
+                        px = live_px if sym == str(self.cfg.market.symbol).upper() else None
+                        self._manage_open_position(pos, px)
+                    except Exception as exc:  # noqa: BLE001 - 单仓异常不影响其它仓
+                        self.last_error = f"持仓守护异常（{self._pos_symbol(pos)}）：{type(exc).__name__}: {str(exc)[:100]}"
             except Exception as exc:  # noqa: BLE001 - 守护线程绝不能因单次异常退出
                 self.last_error = f"持仓守护异常：{type(exc).__name__}: {str(exc)[:120]}"
 
@@ -1040,7 +1253,9 @@ class TradingEngine:
         """包装：抢锁防重入（自动循环与守护线程可能同时进入）。"""
         lock = getattr(self, "_guard_lock", None)
         if lock is None:      # 兼容用 object.__new__ 构造的测试实例
-            return self._manage_open_position_inner(pos, price)
+            out = self._manage_open_position_inner(pos, price)
+            out["ts"] = time.time()
+            return out
         if not lock.acquire(blocking=False):
             return {"action": "hold", "reason": "持仓管理已在另一线程执行", "details": {}}
         try:
@@ -1048,7 +1263,12 @@ class TradingEngine:
             # 每轮都刷新时间戳。hold 不产生动作，没有时间戳就分不清
             # 「刚刚巡检过」和「线程早就停了」——页面靠它显示上次巡检时刻。
             out["ts"] = time.time()
-            self.last_management = out
+            sym = self._pos_symbol(pos, self.cfg.market.symbol)
+            out["symbol"] = sym
+            self.last_management_by_symbol[sym] = out
+            # last_management 保留「当前品种」那一份，老前端只读这一个字段
+            if sym == str(self.cfg.market.symbol).upper() or not self.last_management:
+                self.last_management = out
             return out
         finally:
             lock.release()
@@ -1059,21 +1279,28 @@ class TradingEngine:
         if cfg is None or not cfg.enabled:
             return {"action": "hold", "reason": "持仓管理员未启用", "details": {}}
         try:
-            df = self.df if self.df is not None else self.refresh_data()[0]
-            px = float(price) if price and price > 0 else self.price()
-            sym = pos.get("symbol") or self.cfg.market.symbol
+            sym = self._pos_symbol(pos, self.cfg.market.symbol)
+            # K 线必须按仓位自己的品种取：拿当前品种的行情去管另一个品种的仓，
+            # ATR / 均线 / 持有根数全是错的。
+            df = self._frame_for(sym)
+            if df is None or not len(df):
+                return {"action": "hold", "reason": "行情暂不可用，本轮不管理", "details": {}}
+            px = float(price) if price and price > 0 else self._quote_for(sym)
+            if px <= 0:
+                return {"action": "hold", "reason": "取不到最新价，本轮不管理", "details": {}}
             dec = manage_position(pos, df, px, cfg,
                                   composite=self._opportunity_composite(sym))
 
             if dec.action == "close":
-                res = self.close(px, reason=f"持仓管理员：{dec.reason}")
+                res = self.close(px, reason=f"持仓管理员：{dec.reason}", symbol=sym)
                 dec.details["close_result"] = res
                 self._notify("info", f"{sym} 持仓管理员提前退出", dec.reason,
                              {"symbol": sym, "action": "close", "details": dec.details})
 
             elif dec.action == "tighten" and dec.new_stop is not None:
                 now = time.time()
-                if now - float(getattr(self, "_stop_adjust_at", 0.0)) < cfg.min_adjust_interval_sec:
+                last_at = float(self._stop_adjust_at_by_symbol.get(sym, 0.0))
+                if now - last_at < cfg.min_adjust_interval_sec:
                     dec.details["throttled"] = True
                     return dec.to_dict()
                 live = pos.get("mode") == "live" and self.state.get("mode") == "live"
@@ -1081,11 +1308,14 @@ class TradingEngine:
                     return {"action": "hold", "reason": "交易所条件单未更新，本地止损保持不变",
                             "details": dec.details}
                 with self.lock:
-                    if self.state.get("position") is pos:
+                    if self._positions_map().get(sym) is pos:
                         pos["stop"] = float(dec.new_stop)
                         self._save()
-                self._stop_adjust_at = now
-                self.state["last_stop_adjust_at"] = now
+                self._stop_adjust_at_by_symbol[sym] = now
+                self.state["last_stop_adjust_by_symbol"] = dict(self._stop_adjust_at_by_symbol)
+                if sym == str(self.cfg.market.symbol).upper():
+                    self._stop_adjust_at = now
+                    self.state["last_stop_adjust_at"] = now
                 self._save()
                 self._notify("info", f"{sym} 移动止损已更新", dec.reason,
                              {"symbol": sym, "new_stop": dec.new_stop})
@@ -1102,19 +1332,30 @@ class TradingEngine:
                     "details": {"error": str(exc)[:160]}}
 
     def run_decision(self, rounds: int = 2, price: float | None = None) -> dict:
-        # 已有持仓时不再跑开仓决策：既省掉每轮 LLM 调用，也不会每 5 分钟推一条
+        # 当前品种已有持仓时不再跑开仓决策：既省掉每轮 LLM 调用，也不会每 5 分钟推一条
         # 「决策被风控拦截」。先与交易所对账（实盘），避免交易所侧止损/止盈已成交、
         # 本地缓存还挂着，导致一直等不到「平仓后再决策」。
+        # 注意：别的品种持仓不影响本品种决策——组合层敞口由 _positions_for_risk 汇总。
         self._reconcile_position_with_exchange()
-        held = self.state.get("position")
+        held = self._get_position()
         if held:
             return {
                 "skipped": True,
-                "reason": "已有持仓，等平仓完成后再做开仓决策",
+                "reason": f"{self.cfg.market.symbol} 已有持仓，等平仓完成后再做开仓决策",
                 "symbol": self.cfg.market.symbol,
                 "position": held,
                 # 持仓期间不是完全放手：由持仓管理员做移动止损 / 时间止损 / 趋势反转退出
                 "management": self._manage_open_position(held, price),
+            }
+        cap = self.position_limit()
+        held_count = len(self._positions_map())
+        if held_count >= cap:
+            return {
+                "skipped": True,
+                "reason": f"同时持仓已达上限 {cap} 个品种（当前 {held_count} 个），本轮不开新仓",
+                "symbol": self.cfg.market.symbol,
+                "position": self.state.get("position"),
+                "management": {},
             }
         df = self.df if self.df is not None else self.refresh_data()[0]
         # 开仓链仍以 K 线收盘价为基准（与改造前一致）；传入的 price 只供持仓管理员
@@ -1200,8 +1441,16 @@ class TradingEngine:
         with self.lock:
             if self.state.get("halt"):
                 return {"ok": False, "error": "熔断开关已打开"}
-            if self.state.get("position"):
-                return {"ok": False, "error": "已有持仓，拒绝重复开仓（请先平仓）"}
+            sym = str(self.cfg.market.symbol).upper()
+            # 同一品种只允许一笔：加仓不做，避免把单品种风险叠成两倍
+            if self._get_position(sym):
+                return {"ok": False, "error": f"{sym} 已有持仓，拒绝重复开仓（请先平仓）"}
+            cap = self.position_limit()
+            held_count = len(self._positions_map())
+            if held_count >= cap:
+                return {"ok": False,
+                        "error": f"同时持仓已达上限 {cap} 个品种（当前 {held_count} 个），"
+                                 "先平掉一个再开仓"}
 
             # 把这次决策时三位分析师的立场带进仓位，平仓时用于方向命中率校准
             stances = list(self.state.get("pending_stances") or [])
@@ -1272,8 +1521,8 @@ class TradingEngine:
                     fill_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
                     fee = float(detail["fee"]) if detail else 0.0
                     plan_px = float(order.get("entry_ref_price") or 0.0) or None
-                    self.state["position"] = {
-                        "symbol": self.cfg.market.symbol,
+                    self._put_position({
+                        "symbol": sym,
                         "side": side,
                         "qty": qty,
                         "entry": fill_px,
@@ -1286,13 +1535,13 @@ class TradingEngine:
                         "analyst_stances": stances,
                         "mode": "live",
                         "order_id": res.order_id,
-                    }
+                    })
                     self.state["fills"].append(
                         {
                             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "OPEN",
                             "side": side,
-                            "symbol": self.cfg.market.symbol,
+                            "symbol": sym,
                             "qty": qty,
                             "price": round_price(fill_px),
                             "plan_price": round_price(plan_px),
@@ -1327,15 +1576,19 @@ class TradingEngine:
         if isinstance(ld, dict) and isinstance(ld.get("order"), dict):
             ld["order"]["status"] = "FILLED"
 
-    def close(self, price: float | None = None, reason: str = "manual") -> dict:
+    def close(self, price: float | None = None, reason: str = "manual",
+              symbol: str | None = None) -> dict:
+        """平仓。`symbol` 不传时平「当前品种」；只有一个仓时也兼容不传的老调用。"""
         price = price if price is not None else self.price()
         with self.lock:
-            pos = self.state.get("position")
+            pos = self._resolve_position(symbol)
             if not pos:
+                if symbol:
+                    return {"ok": False, "error": f"{symbol} 当前没有持仓"}
                 return {"ok": False, "error": "当前没有持仓"}
             # 用仓位自己的品种：auto_rotate 切过品种后，cfg.market.symbol 已经变了，
             # 拿当前品种去撤单/平仓会平错对象（与「幽灵仓位」同源的坑）。
-            sym = pos.get("symbol") or self.cfg.market.symbol
+            sym = str(pos.get("symbol") or self.cfg.market.symbol)
             if pos.get("mode") == "live" and self.state["mode"] == "live":
                 if not self.armed or self.live_client is None:
                     return {"ok": False, "error": "实盘未解锁"}
@@ -1372,7 +1625,7 @@ class TradingEngine:
                     self.state["fills"] = self.state["fills"][-500:]
                     self.state["equity"] += pnl
                     self._record_close(pos, exit_px, pnl, reason, "live")
-                    self.state["position"] = None
+                    self._drop_position(sym)
                     self._save()
                     self._log_live("CLOSE", pos["side"], pos["qty"], exit_px, res.order_id)
                     # A2：平仓后报告已实现盈亏
@@ -1383,7 +1636,7 @@ class TradingEngine:
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
                     return {"ok": False, "error": str(exc)}
-            rec = self._paper_close(price, reason)
+            rec = self._paper_close(price, reason, symbol=sym)
             self._save()
             # A2：平仓后报告已实现盈亏
             self._notify("info" if rec["pnl"] >= 0 else "critical",
@@ -1392,27 +1645,38 @@ class TradingEngine:
                          {"symbol": sym, "pnl": rec["pnl"], "reason": reason})
             return {"ok": True, "mode": "paper", "fill": rec}
 
-    def check_stops(self, price: float | None = None) -> dict | None:
-        """模拟盘里用最新价检查止损/止盈。实盘由交易所的 STOP_MARKET 单负责。"""
-        price = price if price is not None else self.price()
-        pos = self.state.get("position")
-        if not pos or pos.get("mode") == "live":
-            return None
-        hit = None
-        if pos["side"] == "LONG":
-            if price <= pos["stop"]:
-                hit = "stop_loss"
-            elif price >= pos["tp"]:
-                hit = "take_profit"
-        else:
-            if price >= pos["stop"]:
-                hit = "stop_loss"
-            elif price <= pos["tp"]:
-                hit = "take_profit"
-        if hit:
+    def check_stops(self, price: float | None = None) -> list[dict]:
+        """模拟盘里逐品种检查止损/止盈。实盘由交易所的 STOP_MARKET 单负责。
+
+        多品种时每个仓必须用自己品种的价格：拿当前品种的价去比另一个品种的止损，
+        不是误触发就是永远不触发。取不到价的品种本轮跳过。
+        """
+        hits: list[dict] = []
+        cur = str(self.cfg.market.symbol).upper()
+        for sym, pos in list(self._positions_map().items()):
+            if pos.get("mode") == "live":
+                continue
+            px = float(price) if (price and sym == cur) else self._quote_for(sym)
+            if px <= 0:
+                continue
+            hit = None
+            if pos["side"] == "LONG":
+                if px <= pos["stop"]:
+                    hit = "stop_loss"
+                elif px >= pos["tp"]:
+                    hit = "take_profit"
+            else:
+                if px >= pos["stop"]:
+                    hit = "stop_loss"
+                elif px <= pos["tp"]:
+                    hit = "take_profit"
+            if not hit:
+                continue
             with self.lock:
-                return self._paper_close(price, hit)
-        return None
+                rec = self._paper_close(px, hit, symbol=sym)
+            if rec:
+                hits.append(rec)
+        return hits
 
     def _log_live(self, action: str, side: str, qty: float, price: float, order_id: str) -> None:
         path = Path(self.cfg.runs_dir) / "live_orders.jsonl"
@@ -1483,11 +1747,14 @@ class TradingEngine:
                     "executed": None,
                     "error": "行情数据加载中，请稍候再启动",
                 }
-            # 自主选品种：无持仓时每 N 轮扫一次全品种，切到因子信号最强的（有持仓则跳过）
+            # 自主选品种：还没到持仓上限时每 N 轮扫一次全品种，切到「未持仓且信号最强」的
+            # 品种——这是从单仓平滑过渡到多品种的入口：已有仓位的品种会被 _pick_best_symbol
+            # 排除，于是每轮开一个新品种，直到 max_concurrent_positions 打满。
             rotated = False
             self._rotate_cycle_count += 1
             every = max(1, int(getattr(self.cfg.market, "rotate_every_cycles", 1) or 1))
-            if self.cfg.market.auto_rotate and not self.state.get("position") \
+            if self.cfg.market.auto_rotate \
+                    and len(self._positions_map()) < self.position_limit() \
                     and self._rotate_cycle_count % every == 0:
                 try:
                     best = self._pick_best_symbol()
@@ -1553,16 +1820,27 @@ class TradingEngine:
                 except Exception:  # noqa: BLE001
                     pass
             eq = self._equity(price) if price else self.state["equity"]
-            pos = self.state.get("position")
-            if pos and price:
-                pos = {
-                    **pos,
-                    "mark": price,
-                    "unrealized": round(self._position_pnl(price), 2),
-                    "notional": round(pos["qty"] * price, 2),
-                }
-            if pos:
-                pos = {**pos, "symbol": pos.get("symbol") or self.cfg.market.symbol}
+            # 逐仓算标记价与浮盈。多品种下「当前价」只对当前品种成立，
+            # 其它品种用守护线程缓存的报价；没报价的 unrealized 给 None（前端显示 —），
+            # 绝不拿当前品种的价格去套。
+            positions: list[dict] = []
+            for sym, raw in self._positions_map().items():
+                mark = self._mark_price(sym, price)
+                entry = float(raw.get("entry") or 0.0)
+                qty = float(raw.get("qty") or 0.0)
+                direction = 1.0 if raw.get("side") == "LONG" else -1.0
+                unreal = (mark - entry) * qty * direction if (mark > 0 and entry > 0) else None
+                positions.append({
+                    **raw,
+                    "symbol": sym,
+                    "mark": round(mark, 8) if mark > 0 else None,
+                    "unrealized": round(unreal, 2) if unreal is not None else None,
+                    "notional": round(qty * mark, 2) if mark > 0 else None,
+                })
+            cur_sym = str(self.cfg.market.symbol).upper()
+            pos = next((p for p in positions if p["symbol"] == cur_sym), None)
+            if pos is None and positions:
+                pos = positions[0]
             hist = self.state.get("history", [])
             if price:
                 hist = (hist + [{"ts": time.strftime("%H:%M:%S"), "equity": round(eq, 2), "price": price}])[-300:]
@@ -1587,6 +1865,9 @@ class TradingEngine:
                 else 0.0,
                 "drawdown_pct": round((eq / max(self.state["peak_equity"], 1e-9) - 1) * 100, 3),
                 "position": pos,
+                # 多品种：完整持仓列表（前端阶段化改造中，position 仍是「当前品种」兼容视图）
+                "positions": positions,
+                "position_limit": self.position_limit(),
                 "fills": [
                     {**f, "symbol": f.get("symbol") or self.cfg.market.symbol}
                     for f in self.state["fills"][-30:][::-1]
@@ -1608,7 +1889,10 @@ class TradingEngine:
                 # 分析师权重校准状态（样本不足时 calibrated=False，权重仍是默认值）
                 "analyst_calibration": calibration_summary(self.state.get("analyst_accuracy")),
                 # 持仓管理员最近一次判断 + 守护线程状态（手动模式下也能看到退出决策）
-                "position_management": getattr(self, "last_management", {}),
+                # position_management 只给「当前品种」，全量在 position_managements
+                "position_management": (self.last_management_by_symbol.get(cur_sym)
+                                        or getattr(self, "last_management", {})),
+                "position_managements": dict(self.last_management_by_symbol),
                 "position_guard": {
                     "running": bool(getattr(self, "_guard_thread", None)
                                     and self._guard_thread.is_alive()),
