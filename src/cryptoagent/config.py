@@ -66,6 +66,15 @@ class MarketConfig:
     # 调大后同一轮会依次评估前 K 个「未持仓且达标」的品种，机会数随 K 增加——
     # 代价是每多评一个就多一次完整 LLM 决策链，别设太大（2~3 是合理区间）。
     auto_top_k: int = 1
+    # —— 全品种缓存预热 ——
+    # 一轮会切多个品种后，切换时若目标品种的盘缓存已过期，load_market 会当场重下
+    # 6000 根 K 线，把一轮决策拖到十几秒。这里用后台线程把「全部品种」的报价与
+    # K 线提前焐热，让切换只读本地。
+    cache_all_symbols: bool = True
+    # 报价 + 短周期 K 线的节流间隔（秒）；短周期本身还有盘缓存 TTL，到点才会真拉
+    cache_warm_interval_sec: int = 15
+    # 主周期 K 线（默认 1h × 6000 根，较重）的节流间隔（秒）
+    cache_warm_main_sec: int = 300
     # 衍生品数据（基差 / OI / taker 多空比 / 账户多空比）对齐到行情，供 C 档因子使用。
     # 只在主行情刷新时拉，机会扫描不拉；拿不到就静默降级，不影响决策。
     derivatives_enabled: bool = True

@@ -855,7 +855,9 @@ def load_market(
             src = df.attrs.get("source", "binance")
             # 兜底源（币安/Gate）的数据别写进 OKX 专用缓存，否则下次会拿别人的行情当 OKX
             if not (tag and not str(src).startswith("okx")):
-                df.to_csv(real_cache)
+                # 原子写：预热线程与页面/决策线程可能同时读写同一份缓存，
+                # 直接 to_csv 会让读方解析到半截文件（EmptyDataError）。
+                _write_kl_disk(real_cache, df)
             note = "" if df.attrs.get("has_funding") else "（无资金费率，按 0 计）"
             return df, f"{src}:{cfg.symbol} {cfg.interval}{note}"
         except DataError as exc:
@@ -869,7 +871,7 @@ def load_market(
 
     # 合成行情：写独立文件，永不覆盖真实缓存
     df = synthetic_ohlcv(cfg.bars, cfg.seed, interval=cfg.interval)
-    df.to_csv(synth_cache)
+    _write_kl_disk(synth_cache, df)
     return df, f"synthetic(假数据,seed={cfg.seed})"
 
 

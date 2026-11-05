@@ -241,7 +241,7 @@ class BinanceFuturesClient:
     def _request(self, method: str, path: str, params: dict | None = None, signed: bool = False) -> dict:
         params = dict(params or {})
         self._throttle()
-        headers = {"User-Agent": "QeeLin-Agent/1.1.3"}
+        headers = {"User-Agent": "QeeLin-Agent/1.1.4"}
         if signed:
             params["timestamp"] = int(time.time() * 1000)
             params.setdefault("recvWindow", 5000)
@@ -578,7 +578,7 @@ class OKXClient:
         params = dict(params or {})
         self._throttle()
         headers = {
-            "User-Agent": "QeeLin-Agent/1.1.3",
+            "User-Agent": "QeeLin-Agent/1.1.4",
             "Content-Type": "application/json",
             **self._sim_header(),
         }

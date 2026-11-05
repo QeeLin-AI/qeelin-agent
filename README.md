@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.3-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.4-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -16,6 +16,14 @@
 ![总览](docs/ui.png)
 
 ---
+
+## v1.1.4 更新要点
+
+- **全品种缓存预热**：后台线程按 15 秒 / 5 分钟 / 5 分钟三档节流，keep 住全部可交易品种
+  的报价、主周期与短周期 K 线。高频档一轮依次评估多个品种时，切换只读本地盘缓存，
+  不再在决策中途重下 6000 根 K 线。
+- **缓存写入改为原子替换**：`load_market` 落盘不再直接 `to_csv`，避免预热线程与页面/决策
+  同时读写同一份 CSV 时读到半截文件。
 
 ## v1.1.3 更新要点
 
@@ -543,6 +551,7 @@ python -m pytest -q
 
 | 版本 | 要点 |
 |---|---|
+| **v1.1.4** | 全品种缓存预热（报价/主周期/短周期三档节流），`load_market` 缓存原子写入 |
 | **v1.1.3** | 配置方案（稳健/高频/保守 + 恢复默认 + 撤销，硬约束不含密钥与模型配置）；LLM 自主调参（白名单/25%步长/3项上限/保证金交叉校验/审计回滚）；一轮多品种评估 `auto_top_k`；因子库 43→59 |
 | **v1.1.2** | 持仓管理员接入 LLM（解释 / 影子复核）与设置页热更新；规则层参数化与峰值回撤退出；决策页重构（并排等高、紧凑化、影子复核卡片）；移动端扫描卡片化与理由折叠；成交表开仓标识修正 |
 | v1.1.0-Beta | 控制台视觉重做（分组侧栏、五个页签、双主题）；默认风控上限自相矛盾修正 |

@@ -160,9 +160,20 @@ class TradingEngine:
         self._quote_stop = threading.Event()
         self._quote_thread: threading.Thread | None = None
         self._quote_interval = 4
+        # 全品种缓存守护：高频档一轮要切多个品种，提前把每个品种的报价与 K 线
+        # 焐热，切换时只读本地盘缓存（否则 load_market 会当场重下 6000 根）。
+        self._warm_stop = threading.Event()
+        self._warm_thread: threading.Thread | None = None
+        self._warm_interval = 15
+        self._warm_busy = False
+        self._warm_main_at = 0.0
+        self._warm_last = 0.0
+        self._warm_last_result: dict = {}
+        self._kl_short_warm_at: dict[str, float] = {}
         self._composite_cache: dict = {}
         self.start_position_guard()
         self.start_quote_guard()
+        self.start_symbol_cache_guard()
 
     # ------------------------------------------------------------------
     def _default_state(self) -> dict:
@@ -1632,6 +1643,103 @@ class TradingEngine:
             out[sym] = px
         return out
 
+    # ---- 全品种缓存预热 --------------------------------------------------
+    def start_symbol_cache_guard(self, interval_sec: int | None = None) -> None:
+        """启动全品种缓存守护线程（幂等）。
+
+        存在的理由：`auto_top_k > 1` 后一轮会依次切多个品种，而切换走的是
+        `load_market`——它按品种落盘、盘缓存过期就当场重下 6000 根 K 线。
+        不预热的话，一轮 3 个品种可能多花十几秒，且行情越不活跃越容易过期。
+        """
+        mkt = self.cfg.market
+        if interval_sec is None:
+            interval_sec = int(getattr(mkt, "cache_warm_interval_sec", 15) or 15)
+        self._warm_interval = max(5, int(interval_sec))
+        if getattr(self, "_warm_thread", None) and self._warm_thread.is_alive():
+            return
+        self._warm_stop.clear()
+        self._warm_thread = threading.Thread(
+            target=self._warm_loop, name="symbol-cache", daemon=True
+        )
+        self._warm_thread.start()
+
+    def stop_symbol_cache_guard(self) -> None:
+        self._warm_stop.set()
+
+    def _warm_loop(self) -> None:
+        while not self._warm_stop.wait(self._warm_interval):
+            try:
+                self.warm_symbol_cache()
+            except Exception:  # noqa: BLE001 - 预热线程绝不能因单次异常退出
+                pass
+
+    def warm_symbol_cache(self) -> dict:
+        """把「全部可交易品种」的报价与 K 线缓存焐热，返回本轮做了多少事。
+
+        三档节流，避免和决策/页面抢带宽：
+        - 报价：每 `cache_warm_interval_sec`（默认 15s）一轮，每个品种一次轻量请求；
+        - 短周期 K 线：按盘缓存 TTL（半个 bar）节流，默认 5m 图约 2.5 分钟一次；
+        - 主周期 K 线：每 `cache_warm_main_sec`（默认 300s）一轮，且跳过当前品种
+          （它的行情由 refresh_data 负责，重复拉是浪费）。
+        """
+        mkt = self.cfg.market
+        if not bool(getattr(mkt, "cache_all_symbols", True)):
+            return {}
+        if getattr(self, "_warm_busy", False):
+            return {}
+        syms = [str(s).upper() for s in (getattr(mkt, "symbols", None) or [])][:12]
+        if not syms:
+            return {}
+
+        cur = str(mkt.symbol).upper()
+        prefer = self.state.get("exchange", "binance")
+        real = str(getattr(mkt, "source", "synthetic")) == "binance"
+        short_iv = str(getattr(mkt, "short_interval", "5m") or "5m")
+        short_bars = max(20, min(int(getattr(mkt, "short_bars", 200) or 200), 500))
+        now = time.time()
+        every_main = max(60, int(getattr(mkt, "cache_warm_main_sec", 300) or 300))
+        do_main = (now - float(self._warm_main_at or 0.0)) >= every_main
+        short_ttl = kl_disk_ttl(short_iv)
+
+        out = {"symbols": len(syms), "quotes": 0, "main": 0, "short": 0}
+        self._warm_busy = True
+        try:
+            for sym in syms:
+                # 1) 报价：页面标记价、机会榜、非活跃持仓都读它
+                try:
+                    px, _src = fetch_live_price(sym, prefer=prefer)
+                    px = float(px or 0.0)
+                    if px > 0:
+                        self._quote_cache[sym] = (px, time.time())
+                        self._stamp_price(sym, px)
+                        out["quotes"] += 1
+                except Exception:  # noqa: BLE001 - 单品种取价失败不影响其它
+                    pass
+                if not real or sym == cur:
+                    continue
+                # 2) 主周期 K 线：用副本 cfg 只换 symbol，避免动到全局配置
+                if do_main:
+                    try:
+                        load_market(replace(mkt, symbol=sym), prefer=prefer)
+                        out["main"] += 1
+                    except Exception:  # noqa: BLE001
+                        pass
+                # 3) 短周期 K 线：持仓管理员的 ATR/均线要它
+                try:
+                    if now - float(self._kl_short_warm_at.get(sym, 0.0)) >= short_ttl:
+                        fetch_klines(sym, short_iv, short_bars, prefer=prefer)
+                        self._kl_short_warm_at[sym] = now
+                        out["short"] += 1
+                except Exception:  # noqa: BLE001
+                    pass
+            if do_main:
+                self._warm_main_at = now
+        finally:
+            self._warm_busy = False
+        self._warm_last = now
+        self._warm_last_result = out
+        return out
+
     # ---- 持仓管理员的 LLM 闸门 ----------------------------------------
     def _position_llm_client(self):
         """持仓管理员专用共享 LLMClient：配置变更后由 invalidate 清掉再重建。"""
@@ -2410,6 +2518,14 @@ class TradingEngine:
                     **self.state.get("auto", {}),
                     # 每轮评估几个品种：调大即提频，页面上要能看到当前值
                     "top_k": int(getattr(self.cfg.market, "auto_top_k", 1) or 1),
+                },
+                # 全品种缓存预热状态：高频档一轮切多品种时，靠它确认「切换只读本地」
+                "cache_warm": {
+                    "enabled": bool(getattr(self.cfg.market, "cache_all_symbols", True)),
+                    "symbols": len(getattr(self.cfg.market, "symbols", None) or []),
+                    "interval_sec": int(getattr(self, "_warm_interval", 0) or 0),
+                    "last_at": float(getattr(self, "_warm_last", 0.0) or 0.0),
+                    "last_result": dict(getattr(self, "_warm_last_result", {}) or {}),
                 },
                 "halt": bool(self.state.get("halt")),
                 "data_source": self.data_source,
