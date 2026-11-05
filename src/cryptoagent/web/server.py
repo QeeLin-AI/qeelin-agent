@@ -101,6 +101,13 @@ class WebApp:
         # 自定义品种：添加后在后台预下载历史（6000 根），这里记录进行中/失败的
         self._prefetching: set[str] = set()
         self._prefetch_error: dict[str, str] = {}
+        # 配置方案 / LLM 自主调参：改动历史 + 互斥锁（自动调参在 cycle 钩子里跑）
+        self._evolve_lock = threading.Lock()
+        # 自动调参挂在自动循环末尾：cycle 每 N 秒一次，这里只做「到点没到点」的便宜判断
+        try:
+            self.engine.on_cycle_hook = self._auto_evolve_tick
+        except Exception:  # noqa: BLE001 - 挂不上就只保留手动触发
+            pass
         # 交易所可交易合约清单（给「添加品种」做候选提示，10 分钟缓存）
         self._sym_catalog: list[dict] = []
         self._sym_catalog_at = 0.0
@@ -1437,6 +1444,266 @@ class WebApp:
             saved = False          # 只读文件系统：内存里仍然生效
         return {"risk": self.risk_config(), "saved": saved, "warnings": warnings}
 
+    # ------------------------------------------------------------------
+    # 配置方案：预设 / 一键恢复默认 / 回滚
+    # ------------------------------------------------------------------
+    _SETTINGS_GROUPS = ("risk", "position", "market")
+
+    def _settings_snapshot(self) -> dict:
+        from dataclasses import asdict
+        return {g: asdict(getattr(self.cfg, g)) for g in self._SETTINGS_GROUPS}
+
+    def _settings_restore(self, snap: dict) -> None:
+        """把三组配置整体写回快照，并落盘（失败也只影响持久化，内存已是旧值）。"""
+        from ..config import config_path, save_config
+        for g in self._SETTINGS_GROUPS:
+            obj = getattr(self.cfg, g)
+            for k, v in (snap.get(g) or {}).items():
+                if hasattr(obj, k):
+                    setattr(obj, k, v)
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            pass
+
+    def _settings_history(self) -> list:
+        h = self.engine.state.setdefault("settings_history", [])
+        if not isinstance(h, list):
+            h = []
+            self.engine.state["settings_history"] = h
+        return h
+
+    def _push_settings_history(self, rec: dict) -> None:
+        h = self._settings_history()
+        h.append(rec)
+        del h[:-20]
+        try:
+            self.engine._save()
+        except Exception:  # noqa: BLE001 - 历史写盘失败不影响已生效的配置
+            pass
+
+    def settings_profiles(self) -> dict:
+        """列出全部方案 + 与当前配置的差异；`current` 为空表示当前是自定义组合。"""
+        from ..settings_profiles import DEFAULT_PROFILE, PROFILES, matches_profile, profile_diff
+        return {
+            "default": DEFAULT_PROFILE,
+            "current": next((n for n in PROFILES if matches_profile(self.cfg, n)), ""),
+            "profiles": [
+                {
+                    "name": n,
+                    "label": p["label"],
+                    "summary": p["summary"],
+                    "diff": profile_diff(self.cfg, n),
+                    "matches": matches_profile(self.cfg, n),
+                }
+                for n, p in PROFILES.items()
+            ],
+            "history": self._settings_history()[-5:],
+        }
+
+    def apply_settings_profile(self, payload: dict) -> dict:
+        """应用一套方案。走既有 setter，因此沿用它们的校验与「失败整体回滚」。"""
+        from ..settings_profiles import PROFILES, assert_profile_safe, profile_diff
+        name = str(payload.get("name") or "").strip()
+        if name not in PROFILES:
+            raise ApiError(f"未知方案：{name or '(空)'}", 400)
+        # 二次确认：方案不得包含 API Key / provider / model（导入时已校验，这里防运行期被改）
+        assert_profile_safe(name)
+        prof = PROFILES[name]
+        before = profile_diff(self.cfg, name)
+        snap = self._settings_snapshot()
+        try:
+            if prof.get("risk"):
+                self.set_risk(dict(prof["risk"]))
+            if prof.get("position"):
+                self.set_position_settings(dict(prof["position"]))
+            if prof.get("market"):
+                self.set_rotate(dict(prof["market"]))
+        except Exception:
+            self._settings_restore(snap)
+            raise
+        prev = {f"{d['group']}.{d['key']}": d["current"] for d in before}
+        self._push_settings_history({
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "kind": "profile", "name": name, "label": prof["label"],
+            "prev": prev,
+        })
+        return {
+            "applied": name,
+            "label": prof["label"],
+            "changed": len(before),
+            "risk": self.risk_config(),
+            "remaining": profile_diff(self.cfg, name),
+        }
+
+    def rollback_settings(self) -> dict:
+        """把上一次（方案或自动调参）改动回滚。回滚后仍要满足保证金不等式。"""
+        from ..config import config_path, save_config
+        h = self._settings_history()
+        if not h:
+            raise ApiError("没有可回滚的改动", 400)
+        rec = h[-1]
+        snap = self._settings_snapshot()
+        for path, val in (rec.get("prev") or {}).items():
+            grp, _, key = str(path).partition(".")
+            obj = getattr(self.cfg, grp, None)
+            if obj is not None and hasattr(obj, key):
+                setattr(obj, key, val)
+        pos = float(self.cfg.risk.max_position_pct)
+        slots = max(1, int(self.cfg.risk.max_concurrent_positions or 1))
+        margin = float(self.cfg.risk.max_margin_usage_pct)
+        if pos * slots > margin + 1e-9:
+            self._settings_restore(snap)
+            raise ApiError(
+                f"回滚后 {pos:.0%}×{slots} 超过保证金上限 {margin:.0%}，已撤销本次回滚", 400
+            )
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            pass
+        h.pop()
+        try:
+            self.engine._save()
+        except Exception:  # noqa: BLE001
+            pass
+        return {"rolled_back": rec.get("label") or rec.get("name") or rec.get("kind"),
+                "risk": self.risk_config()}
+
+    # ------------------------------------------------------------------
+    # LLM 自主调参（提案由模型出，裁决由代码做）
+    # ------------------------------------------------------------------
+    def settings_evolve(self, payload: dict) -> dict:
+        """让模型基于近期表现提一份参数调整建议；apply=True 时通过裁决就落盘。"""
+        from ..agents.settings_evolver import (
+            POSITION_KEYS, build_context, funnel_stats, perf_stats, propose, sanitize,
+        )
+        apply_now = bool(payload.get("apply"))
+        perf = perf_stats(self.engine.state.get("position_history") or [])
+        funnel = funnel_stats(Path(self.cfg.runs_dir) / "decisions")
+        ctx = build_context(self.cfg, perf, funnel)
+        prop = propose(self.engine._position_llm_client(), ctx)
+        verdict = sanitize(prop, self.cfg, ctx["current"])
+        out = {
+            "proposal": prop,
+            "changes": verdict["changes"],
+            "rejected": verdict["rejected"],
+            "ok": verdict["ok"],
+            "applied": False,
+            "context": {"performance": perf, "funnel": funnel},
+        }
+        if not (apply_now and verdict["ok"]):
+            return out
+
+        snap = self._settings_snapshot()
+        risk_payload: dict = {}
+        rotate_payload: dict = {}
+        position_payload: dict = {}
+        prev: dict = {}
+        for c in verdict["changes"]:
+            if c["key"] == "auto_top_k":
+                rotate_payload["auto_top_k"] = int(c["to"])
+                prev[f"market.{c['key']}"] = c["from"]
+            elif c["key"] == "rotate_min_score":
+                rotate_payload["min_score"] = float(c["to"])
+                prev[f"market.rotate_min_score"] = c["from"]
+            elif c["key"] in POSITION_KEYS:
+                # 持仓管理员·LLM 接入里的数值项（冷却间隔），走它自己的 setter
+                position_payload[c["key"]] = int(c["to"])
+                prev[f"position.{c['key']}"] = c["from"]
+            else:
+                risk_payload[c["key"]] = c["to"]
+                prev[f"risk.{c['key']}"] = c["from"]
+        try:
+            if risk_payload:
+                self.set_risk(risk_payload)
+            if position_payload:
+                self.set_position_settings(position_payload)
+            if rotate_payload:
+                self.set_rotate(rotate_payload)
+        except Exception:
+            self._settings_restore(snap)
+            raise
+        self._push_settings_history({
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "kind": "evolve", "name": "llm",
+            "label": "LLM 自动调参",
+            "diagnosis": str((prop or {}).get("diagnosis") or "")[:160],
+            "prev": prev,
+        })
+        out["applied"] = True
+        out["risk"] = self.risk_config()
+        return out
+
+    def settings_evolve_state(self) -> dict:
+        st = self.engine.state.setdefault("settings_evolve", {})
+        return {
+            "enabled": bool(st.get("enabled")),
+            "interval_hours": float(st.get("interval_hours") or 24),
+            "last_at": float(st.get("last_at") or 0),
+            "last_result": st.get("last_result") or "",
+        }
+
+    def set_settings_evolve(self, payload: dict) -> dict:
+        """开关「每日自动调参」。开启后由自动循环末尾的钩子按间隔触发。"""
+        st = self.engine.state.setdefault("settings_evolve", {})
+        if "enabled" in payload:
+            st["enabled"] = bool(payload["enabled"])
+        if "interval_hours" in payload:
+            try:
+                v = float(payload["interval_hours"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("interval_hours 必须是数字", 400) from exc
+            if not (1.0 <= v <= 168.0):
+                raise ApiError("自动调参间隔只能在 1 ~ 168 小时之间", 400)
+            st["interval_hours"] = v
+        self.engine.state["settings_evolve"] = st
+        try:
+            self.engine._save()
+        except Exception:  # noqa: BLE001
+            pass
+        return self.settings_evolve_state()
+
+    def _auto_evolve_tick(self) -> None:
+        """自动循环末尾调用：只做便宜的「到点了没」，到点才真跑（在独立线程里）。"""
+        try:
+            st = self.engine.state.get("settings_evolve") or {}
+            if not st.get("enabled"):
+                return
+            every = float(st.get("interval_hours") or 24) * 3600.0
+            if time.time() - float(st.get("last_at") or 0) < every:
+                return
+            if not self._evolve_lock.acquire(blocking=False):
+                return
+        except Exception:  # noqa: BLE001
+            return
+
+        def _run() -> None:
+            try:
+                stt = self.engine.state.setdefault("settings_evolve", {})
+                stt["last_at"] = time.time()
+                stt["last_result"] = "运行中"
+                self.engine.state["settings_evolve"] = stt
+                res = self.settings_evolve({"apply": True})
+                stt["last_result"] = (
+                    "已应用：" + "、".join(c["key"] for c in res.get("changes") or [])
+                    if res.get("applied") else
+                    ("无调整" if not (res.get("changes") or []) else "提案被拒：" +
+                     "；".join(r.get("reason") or "" for r in res.get("rejected") or [])[:100])
+                )
+                self.engine.state["settings_evolve"] = stt
+                self.engine._save()
+            except Exception as exc:  # noqa: BLE001 - 自动调参失败不影响交易
+                stt = self.engine.state.setdefault("settings_evolve", {})
+                stt["last_result"] = f"失败：{type(exc).__name__}"
+                self.engine.state["settings_evolve"] = stt
+            finally:
+                try:
+                    self._evolve_lock.release()
+                except RuntimeError:
+                    pass
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def opportunities(self, payload: dict) -> dict:
         """机会信号排行榜：立即返回缓存结果，扫描放到后台线程（一次扫描约 10 秒）。
 
@@ -1481,6 +1748,14 @@ class WebApp:
             if not (1 <= v <= 100):
                 raise ApiError("扫描频率只能在 1 ~ 100 轮之间", 400)
             m.rotate_every_cycles = v
+        if "auto_top_k" in payload:
+            try:
+                v = int(payload["auto_top_k"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("auto_top_k 必须是整数", 400) from exc
+            if not (1 <= v <= 8):
+                raise ApiError("每轮评估品种数只能在 1 ~ 8 之间", 400)
+            m.auto_top_k = v
         try:
             save_config(self.cfg, config_path())
             saved = True
@@ -1490,6 +1765,7 @@ class WebApp:
             "auto_rotate": bool(m.auto_rotate),
             "min_score": float(m.rotate_min_score),
             "every_cycles": int(m.rotate_every_cycles),
+            "auto_top_k": int(getattr(m, "auto_top_k", 1) or 1),
             "saved": saved,
         }
 
@@ -2036,6 +2312,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.notify_settings()})
         if path == "/api/settings/position":
             return self._json({"ok": True, "data": app.position_settings()})
+        if path == "/api/settings/profiles":
+            return self._json({"ok": True, "data": app.settings_profiles()})
+        if path == "/api/settings/evolve":
+            return self._json({"ok": True, "data": app.settings_evolve_state()})
         if path == "/api/scan":
             return self._json({"ok": True, "data": app.last_scan})
         if path == "/api/decisions/latest":
@@ -2114,6 +2394,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.set_notify_settings(payload)})
         if path == "/api/settings/position":
             return self._json({"ok": True, "data": app.set_position_settings(payload)})
+        if path == "/api/settings/profile":
+            return self._json({"ok": True, "data": app.apply_settings_profile(payload)})
+        if path == "/api/settings/rollback":
+            return self._json({"ok": True, "data": app.rollback_settings()})
+        if path == "/api/settings/evolve":
+            return self._json({"ok": True, "data": app.settings_evolve(payload)})
+        if path == "/api/settings/evolve/auto":
+            return self._json({"ok": True, "data": app.set_settings_evolve(payload)})
         if path == "/api/live":
             data = app.start_live() if payload.get("on", True) else app.stop_live()
             return self._json({"ok": True, "data": data})

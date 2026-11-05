@@ -164,7 +164,7 @@ function showTab(name, push = true) {
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name === 'overview') { renderPnl(); fitNotifHeight(); }
   if (name === 'decision') { requestAnimationFrame(fitScanReasons); }
-  if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); }
+  if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); loadProfiles(); loadEvolveState(); }
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -515,6 +515,138 @@ async function savePositionLlmSettings() {
     toast('持仓管理员设置保存失败：' + e.message, 'err');
     return false;
   }
+}
+
+/* ---------------- 配置方案（预设 / 恢复默认 / 撤销） ---------------- */
+let profilesCache = null;
+
+async function loadProfiles() {
+  try {
+    const d = await api('/api/settings/profiles');
+    profilesCache = d;
+    const sel = $('profileSelect');
+    if (!sel) return;
+    const keep = sel.value;
+    sel.innerHTML = (d.profiles || []).map((p) =>
+      `<option value="${esc(p.name)}">${esc(p.label)}${p.matches ? '（当前）' : ''}</option>`
+    ).join('');
+    const cur = (d.profiles || []).find((p) => p.matches);
+    $('profileCurrent').value = cur ? cur.label : '自定义组合';
+    if (keep && (d.profiles || []).some((p) => p.name === keep)) sel.value = keep;
+    renderProfileDiff();
+  } catch (e) { console.error(e); }
+}
+
+function _fmtSetting(v) {
+  if (typeof v === 'boolean') return v ? '开' : '关';
+  if (typeof v === 'number') return Math.abs(v) < 1 ? String(Number(v.toFixed(4))) : String(v);
+  return String(v);
+}
+
+function renderProfileDiff() {
+  const sel = $('profileSelect');
+  const box = $('profileDiff');
+  if (!sel || !box || !profilesCache) return;
+  const p = (profilesCache.profiles || []).find((x) => x.name === sel.value);
+  if (!p) { box.textContent = ''; return; }
+  const diff = p.diff || [];
+  if (!diff.length) {
+    box.innerHTML = `<b>${esc(p.summary)}</b><br>当前配置已与该方案一致。`;
+    return;
+  }
+  const head = `<b>${esc(p.summary)}</b><br>将改动 ${diff.length} 项：`;
+  const rows = diff.slice(0, 12).map((x) =>
+    `<br>· ${esc(x.key)}：${esc(_fmtSetting(x.current))} → <b>${esc(_fmtSetting(x.target))}</b>`).join('');
+  box.innerHTML = head + rows + (diff.length > 12 ? `<br>…另有 ${diff.length - 12} 项` : '');
+}
+
+async function applyProfile(name) {
+  if (!name) return;
+  try {
+    const r = await api('/api/settings/profile', 'POST', { name });
+    toast(`已应用「${r.label}」，改动 ${r.changed} 项`, 'ok');
+    await refreshSettingsPanels();
+  } catch (e) {
+    toast('应用方案失败：' + e.message, 'err');
+  }
+}
+
+async function rollbackSettings() {
+  try {
+    const r = await api('/api/settings/rollback', 'POST', {});
+    toast(`已撤销：${r.rolled_back || '上一次改动'}`, 'ok');
+    await refreshSettingsPanels();
+  } catch (e) {
+    toast('撤销失败：' + e.message, 'err');
+  }
+}
+
+/* ---------------- LLM 自主调参 ---------------- */
+async function loadEvolveState() {
+  try {
+    const d = await api('/api/settings/evolve');
+    if ($('evolveAuto')) $('evolveAuto').checked = !!d.enabled;
+    if ($('evolveInterval')) $('evolveInterval').value = d.interval_hours || 24;
+    if ($('evolveState')) {
+      $('evolveState').textContent = d.enabled
+        ? `已开启 · 每 ${d.interval_hours} 小时 · ${d.last_result || '尚未运行'}`
+        : '已关闭（仅手动）';
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function runEvolve(apply) {
+  const btn = apply ? $('evolveApplyBtn') : $('evolveDryBtn');
+  if (!btn) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '评估中…';
+  try {
+    const d = await api('/api/settings/evolve', 'POST', { apply: !!apply });
+    renderEvolveResult(d);
+    if (d.applied) {
+      toast('已应用模型建议', 'ok');
+      await refreshSettingsPanels();
+    } else if (!d.ok) {
+      toast('建议未通过代码校验，未应用', 'err');
+    } else {
+      toast('评估完成（未应用）', 'ok');
+    }
+  } catch (e) {
+    toast('评估失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+function renderEvolveResult(d) {
+  const box = $('evolveResult');
+  if (!box) return;
+  const p = d.proposal || {};
+  const lines = [];
+  if (p.diagnosis) lines.push(`<b>诊断</b>：${esc(p.diagnosis)}`);
+  if (p.expected) lines.push(`<b>预期</b>：${esc(p.expected)}`);
+  if (p.risk) lines.push(`<b>风险</b>：${esc(p.risk)}`);
+  const ch = d.changes || [];
+  if (ch.length) {
+    lines.push('<b>改动</b>：' + ch.map((c) =>
+      `${esc(c.key)} ${esc(_fmtSetting(c.from))} → <b>${esc(_fmtSetting(c.to))}</b>`).join('；'));
+  }
+  const rj = d.rejected || [];
+  if (rj.length) {
+    lines.push('<b>被拒</b>：' + rj.map((r) => `${esc(r.key)}（${esc(r.reason)}）`).join('；'));
+  }
+  if (!ch.length && !rj.length) lines.push('本轮没有调整建议。');
+  if (d.applied) lines.push('<b>已应用</b>，可在「交易参数」页撤销。');
+  box.innerHTML = lines.join('<br>');
+}
+
+async function refreshSettingsPanels() {
+  await loadProfiles();
+  await loadPositionLlmSettings();
+  await loadEvolveState();
+  try { poll(); } catch (e) { /* 状态轮询自己会重试 */ }
 }
 
 async function testLlmSettings() {
@@ -2515,6 +2647,29 @@ $('llmTestBtn').addEventListener('click', testLlmSettings);
 $('sentimentSaveBtn').addEventListener('click', () => saveSentimentSettings());
 $('notifySaveBtn').addEventListener('click', () => saveNotifySettings());
 $('posLlmSaveBtn').addEventListener('click', () => savePositionLlmSettings());
+
+$('profileSelect').addEventListener('change', renderProfileDiff);
+$('profileApplyBtn').addEventListener('click', () => applyProfile($('profileSelect').value));
+$('profileResetBtn').addEventListener('click', () => applyProfile((profilesCache && profilesCache.default) || 'balanced'));
+$('profileRollbackBtn').addEventListener('click', rollbackSettings);
+
+$('evolveDryBtn').addEventListener('click', () => runEvolve(false));
+$('evolveApplyBtn').addEventListener('click', () => runEvolve(true));
+
+async function saveEvolveAuto() {
+  try {
+    await api('/api/settings/evolve/auto', 'POST', {
+      enabled: $('evolveAuto').checked,
+      interval_hours: Number($('evolveInterval').value) || 24,
+    });
+    loadEvolveState();
+    toast('自动调参设置已保存', 'ok');
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+$('evolveAuto').addEventListener('change', saveEvolveAuto);
+$('evolveInterval').addEventListener('change', saveEvolveAuto);
 $('sentimentSource').addEventListener('change', toggleCpKeyRow);
 
 /* ---------------- 桌面窗口控制（Electron） ---------------- */

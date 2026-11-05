@@ -146,6 +146,9 @@ class TradingEngine:
         self._price_ts: dict[str, float] = {}
         self._quote_cache: dict[str, tuple[float, float]] = {}
         self._frame_cache: dict[str, tuple[pd.DataFrame, float]] = {}
+        # 自动循环末尾的钩子（WebApp 注册，用于「到点没到点」的自动调参检查）。
+        # 引擎不反向依赖 WebApp，所以只留一个可空回调；未注册时什么也不做。
+        self.on_cycle_hook = None
         # 持仓管理守护线程：不依赖「启动自动循环」，手动/半自动模式下开仓后
         # 也能做移动止损、时间止损与趋势反转退出。
         self._guard_lock = threading.Lock()
@@ -2297,6 +2300,12 @@ class TradingEngine:
 
             self.state["auto"]["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
             self._save()
+            hook = getattr(self, "on_cycle_hook", None)
+            if callable(hook):
+                try:
+                    hook()
+                except Exception:  # noqa: BLE001 - 钩子（自动调参）失败绝不能影响交易循环
+                    pass
             return {
                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "price": price,

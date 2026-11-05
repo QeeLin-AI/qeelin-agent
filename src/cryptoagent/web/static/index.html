@@ -499,6 +499,28 @@
       <div class="card-head"><h2>交易参数</h2><span class="muted">仓位与风控</span></div>
 
       <div class="set-group">
+        <div class="set-group-title">配置方案 · 一键套用</div>
+        <p class="set-hint" style="margin-top:0">整套切换风控 / 持仓管理员 / 选品设置。
+          <b>只覆盖这三组，不会改动 API Key 与模型配置。</b></p>
+        <div class="set-grid two-col">
+          <label class="set-field">
+            <span class="set-label">方案</span>
+            <select id="profileSelect"></select>
+          </label>
+          <label class="set-field">
+            <span class="set-label">当前配置</span>
+            <input id="profileCurrent" type="text" readonly />
+          </label>
+        </div>
+        <div id="profileDiff" class="set-hint"></div>
+        <div class="actions">
+          <button id="profileApplyBtn" class="btn primary">应用方案</button>
+          <button id="profileResetBtn" class="btn">恢复默认</button>
+          <button id="profileRollbackBtn" class="btn">撤销上次改动</button>
+        </div>
+      </div>
+
+      <div class="set-group">
         <div class="set-group-title">仓位设置</div>
         <div class="set-grid four">
           <label class="set-field">
@@ -753,6 +775,33 @@
         <p class="set-hint">保存立即生效，无需重启。</p>
         <div class="actions">
           <button id="posLlmSaveBtn" class="btn primary">保存</button>
+        </div>
+      </div>
+
+      <div class="card" id="set-evolve">
+        <div class="card-head"><h2>LLM 自主调参</h2><span id="evolveState" class="muted">--</span></div>
+        <p class="muted">模型读取近期平仓表现与决策漏斗，提出小幅参数调整；能不能落地由代码裁决：
+          只认白名单里的数值项、单项变化 ≤ 25%、一轮最多 3 项，越界即整份作废。
+          <b>只动风控与持仓参数，不涉及 API Key 与模型配置。</b></p>
+        <div class="set-switch-list">
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">每日自动评估并应用</span>
+              <span class="d">随自动交易循环触发，按下面间隔跑一次；每次改动都会记录，可一键撤销</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="evolveAuto" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+        </div>
+        <div class="set-grid two-col">
+          <label class="set-field">
+            <span class="set-label">评估间隔（小时）</span>
+            <input id="evolveInterval" type="number" min="1" max="168" step="1" />
+          </label>
+        </div>
+        <div id="evolveResult" class="set-hint"></div>
+        <div class="actions">
+          <button id="evolveDryBtn" class="btn">评估一次（不应用）</button>
+          <button id="evolveApplyBtn" class="btn primary">评估并应用</button>
         </div>
       </div>
 
