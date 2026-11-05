@@ -1185,14 +1185,21 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
     padding: 10px 9px; min-height: 0; gap: 4px; border-radius: 10px;
   }
   .stat-row > .stat:not(#posCard) label { font-size: 10px; line-height: 1.3; }
-  /* 具体交易所标注自动换到第二行，避免三列窄卡里被挤掉 */
+  /* 具体交易所标注：独占一行但宽度贴合内容，不再横贯整卡；
+     内边距/行高/字距微调成精致小徽章，长文案用省略号兜底防溢出 */
   .stat-row > .stat:not(#posCard) label .src-chip {
-    display: block; margin: 3px 0 0; padding: 0 4px; font-size: 9px; white-space: nowrap;
+    display: block; width: fit-content; max-width: 100%;
+    margin: 3px 0 0; padding: 1px 6px; font-size: 9px; line-height: 1.4;
+    letter-spacing: .01em; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
   }
   .stat-row > .stat:not(#posCard) b { font-size: clamp(14px, 4.3vw, 18px); }
   .stat-row > .stat:not(#posCard) small {
     font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* 三列窄卡放不下「可用 / 钱包余额」，且省略号后信息价值低，手机端直接隐藏。
+     精确定位 equitySub，不影响当日盈亏卡的 dayPnlSub；PC 端保持原样。 */
+  #equitySub { display: none; }
   .stat-row > #posCard { grid-column: 1 / -1; }
 
   /* 通知 / 告警卡移到四张指标卡正下方：打平两栏容器，用 order 提到最前。

@@ -1280,10 +1280,11 @@ function renderStatus(s) {
   const ex = s.account_view === 'exchange';
   const exOk = ex && !s.account_error;
   const chip = $('equitySrc');
-  // 标注要具体：哪个交易所 + 模拟盘/实盘，不再笼统写「交易所 demo」
+  // 标注要具体：哪个交易所 + Demo/实盘；不可达时只显示「本地」。
+  // 用短词 Demo 代替「模拟盘」压缩标注框宽度，具体报错留在 chip.title 与告警条里。
   const srcTag = s.account_error
-    ? '本地（交易所不可达）'
-    : (ex ? `${exName}·${s.testnet ? '模拟盘' : '实盘'}` : '本地');
+    ? '本地'
+    : (ex ? `${exName}·${s.testnet ? 'Demo' : '实盘'}` : '本地');
   chip.textContent = srcTag;
   chip.className = `src-chip${exOk ? ' ex' : ''}`;
   chip.title = s.account_error
@@ -1320,7 +1321,7 @@ function renderStatus(s) {
   }
   const posChip = $('posSrc');
   posChip.classList.toggle('hidden', !exOk);
-  if (exOk) posChip.textContent = srcTag;   // 与权益卡一致：具体交易所 + 模拟盘/实盘
+  if (exOk) posChip.textContent = srcTag;   // 与权益卡一致：具体交易所 + Demo/实盘
 
   // 总览卡只有一行大字的位置，按持仓数量分两档，避免挤：
   //  · 单仓 —— 大字放「方向 数量」，品种名挂在标题旁（原来只有方向+数量，看不出是哪个品种）
