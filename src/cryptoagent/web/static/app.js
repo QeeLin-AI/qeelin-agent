@@ -322,6 +322,9 @@ async function loadLlmSettings() {
 }
 
 async function saveLlmSettings(quiet = false) {
+  // 只认布尔 true：直接把本函数当 click 处理器时，首参会被浏览器塞成 MouseEvent，
+  // truthy 会把成功提示静默吞掉（历史 bug）。「测试连接」里传 true 才是真的静默。
+  const silent = quiet === true;
   const payload = {
     provider: $('llmProvider').value,
     model: $('llmModel').value.trim(),
@@ -334,13 +337,13 @@ async function saveLlmSettings(quiet = false) {
   if (key) payload.api_key = key;
   try {
     await api('/api/settings/llm', 'POST', payload);
-    if (!quiet) toast('LLM 设置已保存', 'ok');
+    if (!silent) toast('模型设置已保存', 'ok');
     $('llmApiKey').value = '';
     loadLlmSettings();
     poll();
     return true;
   } catch (e) {
-    toast(e.message, 'err');
+    toast('模型设置保存失败：' + e.message, 'err');
     return false;
   }
 }
@@ -367,6 +370,7 @@ function toggleCpKeyRow() {
 }
 
 async function saveSentimentSettings(quiet = false) {
+  const silent = quiet === true;   // 见 saveLlmSettings：事件对象不能当 quiet 用
   const payload = {
     enabled: $('sentimentEnabled').checked,
     source: $('sentimentSource').value,
@@ -375,12 +379,12 @@ async function saveSentimentSettings(quiet = false) {
   if (key) payload.cryptopanic_api_key = key;
   try {
     await api('/api/settings/sentiment', 'POST', payload);
-    if (!quiet) toast('情绪 / 新闻源设置已保存', 'ok');
+    if (!silent) toast('情绪新闻设置已保存', 'ok');
     $('sentimentApiKey').value = '';
     loadSentimentSettings();
     return true;
   } catch (e) {
-    toast(e.message, 'err');
+    toast('情绪新闻设置保存失败：' + e.message, 'err');
     return false;
   }
 }
@@ -415,6 +419,7 @@ async function loadNotifySettings() {
 }
 
 async function saveNotifySettings(quiet = false) {
+  const silent = quiet === true;   // 见 saveLlmSettings：事件对象不能当 quiet 用
   const channels = [];
   document.querySelectorAll('#notifyChannels input[type="checkbox"]').forEach((cb) => {
     if (cb.checked) channels.push(cb.value);
@@ -433,11 +438,11 @@ async function saveNotifySettings(quiet = false) {
   };
   try {
     await api('/api/settings/notify', 'POST', payload);
-    if (!quiet) toast('通知 / 告警设置已保存', 'ok');
+    if (!silent) toast('通知告警设置已保存', 'ok');
     loadNotifySettings();
     return true;
   } catch (e) {
-    toast(e.message, 'err');
+    toast('通知告警设置保存失败：' + e.message, 'err');
     return false;
   }
 }
@@ -2306,10 +2311,12 @@ if (notifClearBtn) {
   });
 }
 
-$('llmSaveBtn').addEventListener('click', saveLlmSettings);
+// 必须包一层：直接传函数当 click 处理器时，事件对象会成为第一个实参（quiet），
+// 把「保存成功」提示静默吞掉。这里显式无参调用，让 save* 走默认 quiet=false。
+$('llmSaveBtn').addEventListener('click', () => saveLlmSettings());
 $('llmTestBtn').addEventListener('click', testLlmSettings);
-$('sentimentSaveBtn').addEventListener('click', saveSentimentSettings);
-$('notifySaveBtn').addEventListener('click', saveNotifySettings);
+$('sentimentSaveBtn').addEventListener('click', () => saveSentimentSettings());
+$('notifySaveBtn').addEventListener('click', () => saveNotifySettings());
 $('sentimentSource').addEventListener('change', toggleCpKeyRow);
 
 /* ---------------- 桌面窗口控制（Electron） ---------------- */
