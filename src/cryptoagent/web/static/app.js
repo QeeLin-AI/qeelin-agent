@@ -15,11 +15,12 @@ const fmtQty = (n) => {
   return fmt(n, v >= 1000 ? 2 : v >= 1 ? 4 : 6);
 };
 const pct = (n) => (n === null || n === undefined) ? '--' : `${n >= 0 ? '+' : ''}${Number(n).toFixed(2)}%`;
-// 日历格子的窄屏版本：手机上一格只有约 42px，必须去掉千分位并按量级降精度，
-// 否则 "+1,024.55" 会把所在列撑宽，同一行 7 个格子就变成七种宽度
+// 日历格子的窄屏数值：只保留到个位（去掉小数与千分位），手机上一格仅约 42px，
+// "+1,024.55" 会把所在列撑宽、同一行 7 格宽度不一。完整精度仍在 title 里。
+// 宽屏 .v-full 仍是两位小数，不受影响。
 const fmtCalShort = (n) => {
-  const a = Math.abs(Number(n) || 0);
-  return `${n >= 0 ? '+' : '-'}${a.toFixed(a >= 100 ? 0 : 1)}`;
+  const v = Math.round(Number(n) || 0);
+  return v > 0 ? `+${v}` : (v < 0 ? `${v}` : '0');
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // 持仓方向中文：多 / 空（保留英文便于对照）

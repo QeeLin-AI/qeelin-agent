@@ -1203,10 +1203,15 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .stat-row > #posCard { grid-column: 1 / -1; }
 
   /* 通知 / 告警卡移到四张指标卡正下方：打平两栏容器，用 order 提到最前。
-     其余卡片保持原有相对顺序（盈亏 → 持仓管理员 → 机会榜）。 */
-  .overview-grid { display: flex; flex-direction: column; gap: 16px; }
+     其余卡片保持原有相对顺序（盈亏 → 持仓管理员 → 机会榜）。
+     align-items 必须覆盖基础样式的 start → stretch，否则 flex column 下子项不拉伸、
+     各卡宽度随内容变化而参差不齐；间距统一只由 gap 控制。 */
+  .overview-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
   .ov-main, .ov-side { display: contents; }
   .ov-side .notif-card { order: -1; }
+  /* 基础 .card 带 margin-bottom:18px，≤1180 只清了 .ov-side .card；
+     盈亏卡在 .ov-main 内没被清，会与 flex gap 叠成 34px。这里统一清零。 */
+  .overview-grid .card { margin-bottom: 0; }
 
   /* 手机端点 LOGO / 品牌名回总览：给出可点态与轻微按压反馈（PC 端不生效）。
      .brand-mark 自带 brandBreathe 动画常驻占用 transform，故不在其上加 scale，
