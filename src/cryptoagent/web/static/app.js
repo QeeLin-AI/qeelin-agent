@@ -158,6 +158,18 @@ document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
 });
 
+// 手机端点击顶部 LOGO / 品牌名回到总览页。
+// 仅在移动布局（≤860px）生效，PC 端侧栏品牌区保持纯展示、不响应也无手型光标。
+// 复用 showTab 以同步激活态与 hash；顺带把页面滚回顶部，符合「回到首页」的预期。
+const brandEl = document.querySelector('.side-brand');
+if (brandEl) {
+  brandEl.addEventListener('click', () => {
+    if (!window.matchMedia('(max-width: 860px)').matches) return;
+    showTab('overview');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
+
 // 顶部导航横向滚动时，两端加渐隐遮罩，避免硬切半个图标（仅移动端生效，类由 CSS 媒体查询限定）
 (function () {
   const nav = document.querySelector('.side-scroll');

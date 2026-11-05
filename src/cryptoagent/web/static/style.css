@@ -1207,6 +1207,12 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .overview-grid { display: flex; flex-direction: column; gap: 16px; }
   .ov-main, .ov-side { display: contents; }
   .ov-side .notif-card { order: -1; }
+
+  /* 手机端点 LOGO / 品牌名回总览：给出可点态与轻微按压反馈（PC 端不生效）。
+     .brand-mark 自带 brandBreathe 动画常驻占用 transform，故不在其上加 scale，
+     只用父级 opacity 做反馈，避免被动画覆盖。 */
+  .side-brand { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
+  .side-brand:active { opacity: .72; }
 }
 
 @media (prefers-reduced-motion: reduce) {
