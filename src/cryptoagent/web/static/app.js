@@ -34,6 +34,17 @@ const shortTs = (v) => {
   if (!s) return '';
   return s.length > 14 ? s.slice(5) : s;
 };
+// 通知时间戳是 UTC ISO（带 +00:00 和微秒），直接截断会得到
+// 「11-05T17:07:19.848546+00:00」这种超长串，把通知正文挤成一字一行。
+// 这里转成本地时间并压到 MM-DD HH:MM；解析失败退回原截断逻辑。
+const notifTs = (v) => {
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  const d = new Date(s.replace(/\.(\d{3})\d+/, '.$1'));
+  if (Number.isNaN(d.getTime())) return shortTs(s);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 // 账户模式中文（用户约定）：本地 = 本地模拟撮合，模拟 = 交易所 demo，实盘 = 交易所主网。
 // mode=live 只表示「通过交易所接口下的单」，持仓记录本身不带 testnet 标记，
 // 必须结合全局 s.testnet 才能区分模拟盘与主网，否则币安 demo 会被误标成实盘。
@@ -262,8 +273,8 @@ async function renderNotifications() {
       <div class="notif-body">
         <div class="notif-title">${esc(n.title)}</div>
         <div class="notif-msg">${esc(n.message)}</div>
+        <div class="notif-ts muted">${esc(notifTs(n.ts))}</div>
       </div>
-      <span class="notif-ts muted">${esc((n.ts || '').slice(5))}</span>
     </div>`;
   }).join('');
   el.scrollTop = keepTop;

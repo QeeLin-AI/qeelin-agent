@@ -597,7 +597,9 @@ label.field > input, label.field > select { max-width: 420px; }
    超出部分在列表内部滚动，卡片本身不再随消息条数无限变长 */
 .notif-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overscroll-behavior: contain; }
 .notif-item {
-  display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; align-items: start;
+  /* 两列：级别徽标 + 正文。时间戳不再单独占一列——它是不可断的长串（ISO 带时区），
+     放在 auto 列会把正文挤到只剩几十像素，导致一字一行。 */
+  display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 10px; align-items: start;
   padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border-soft);
   border-left: 2px solid var(--border); border-radius: 10px;
 }
@@ -611,9 +613,10 @@ label.field > input, label.field > select { max-width: 420px; }
 .notif-lvl.down { color: var(--up); background: rgba(242, 99, 111, .13); }
 .notif-lvl.amber { color: var(--amber); background: rgba(233, 162, 59, .13); }
 .notif-lvl.muted { color: var(--muted); }
-.notif-title { font-size: 12.5px; font-weight: 600; }
-.notif-msg { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.55; }
-.notif-ts { font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.notif-title { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.notif-msg { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.55; overflow-wrap: anywhere; }
+/* 时间戳独占一行、放正文下方：既不再和内容抢宽度，也不会被长订单号撑开 */
+.notif-ts { font-size: 10.5px; color: var(--faint); margin-top: 5px; }
 .notif-body { min-width: 0; }
 
 /* ---------------------------------------------------------------- 表格 */
