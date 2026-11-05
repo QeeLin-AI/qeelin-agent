@@ -26,6 +26,22 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const sideCn = (s) => (s === 'LONG' ? '多' : s === 'SHORT' ? '空' : (s || ''));
 // 成交动作中文：开仓 / 平仓（交易所原始成交已带 买入/卖出 则原样保留）
 const actionCn = (a) => (a === 'OPEN' ? '开仓' : a === 'CLOSE' ? '平仓' : (a || ''));
+// 卡片右上角时间戳：本地记录是 %Y-%m-%d %H:%M:%S(19位)，裁掉年份保留 MM-DD HH:MM:SS；
+// 交易所回读已是 %m-%d %H:%M:%S(14位) 则原样保留。
+const shortTs = (v) => {
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  return s.length > 14 ? s.slice(5) : s;
+};
+// 账户模式中文（用户约定）：本地 = 本地模拟撮合，模拟 = 交易所 demo，实盘 = 交易所主网。
+// mode=live 只表示「通过交易所接口下的单」，持仓记录本身不带 testnet 标记，
+// 必须结合全局 s.testnet 才能区分模拟盘与主网，否则币安 demo 会被误标成实盘。
+const modeCn = (m, testnet) => {
+  const v = String(m ?? '').trim().toLowerCase();
+  if (v === 'paper') return '本地';
+  if (v === 'live' || v === 'testnet') return testnet ? '模拟' : '实盘';
+  return '本地';
+};
 /* 「最近成交」展示合并：同一时间段（沿用 f.ts 现有秒级展示粒度）+ 同品种 + 同方向
    的多笔成交合并成一条展示记录。仅作用于渲染结果：s.fills / lastStatus 原始明细
    不做任何修改，fillMeta 与平均滑点仍基于原始明细计算。
@@ -1405,7 +1421,7 @@ function renderStatus(s) {
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
       return `<tr${tip}>
-      <td class="mono">${esc(f.symbol || s.symbol)}<span class="dir-flag ${cls}">${esc(sideCn(f.side))}</span>${mergeTag}</td>
+      <td class="mono">${esc(f.symbol || s.symbol)}<span class="dir-flag ${cls}">${esc(sideCn(f.side))}</span>${mergeTag}<span class="card-ts">${esc(shortTs(f.ts))}</span></td>
       <td class="muted">${esc(f.ts)}</td>
       <td class="${cls}">${esc(f.__n ? f.__acts : actionCn(f.action))}</td>
       <td class="${cls}">${esc(sideCn(f.side))}</td>
@@ -1430,7 +1446,7 @@ function renderStatus(s) {
       const unreal = p.unrealized;
       const cls = unreal == null ? 'muted' : (unreal >= 0 ? 'up' : 'down');
       return `<tr>
-      <td class="mono">${esc(sym)}<span class="cell-tag">${esc(p.mode || (exOk ? '交易所' : 'paper'))}</span><span class="dir-flag ${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</span></td>
+      <td class="mono">${esc(sym)}<span class="cell-tag">${esc(modeCn(p.mode || (exOk ? 'live' : 'paper'), s.testnet))}</span><span class="dir-flag ${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</span><span class="card-ts">${esc(shortTs(p.opened_at))}</span></td>
       <td class="${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</td>
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
       <td>${fmt(p.leverage, 1)}x</td>
@@ -1594,7 +1610,7 @@ function renderPosHistory() {
     const dir = h.side === 'LONG' ? '多' : '空';
     return `<tr>
       <td class="muted">${esc(String(h.closed_at || '').slice(5))}</td>
-      <td>${esc(h.symbol || '')}<span class="cell-tag">${h.mode === 'live' ? '交易所' : '本地模拟'}</span><span class="dir-flag ${h.side === 'LONG' ? 'up' : 'down'}">${dir}</span></td>
+      <td>${esc(h.symbol || '')}<span class="cell-tag">${esc(modeCn(h.mode, lastStatus && lastStatus.testnet))}</span><span class="dir-flag ${h.side === 'LONG' ? 'up' : 'down'}">${dir}</span><span class="card-ts">${esc(shortTs(h.closed_at))}</span></td>
       <td class="${h.side === 'LONG' ? 'up' : 'down'}">${dir}</td>
       <td>${fmtQty(h.qty)}</td>
       <td class="muted">${fmtPx(h.entry)} → ${fmtPx(h.exit)}</td>

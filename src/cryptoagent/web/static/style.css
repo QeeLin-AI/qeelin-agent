@@ -636,6 +636,8 @@ label.field > input, label.field > select { max-width: 420px; }
 .cell-tag { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; vertical-align: middle; }
 /* 品种名后的多空标志：仅手机端卡片显示，PC 表格保持独立「方向」列（默认隐藏） */
 .dir-flag { display: none; }
+/* 卡片右上角时间戳：仅手机端卡片显示，PC 表格已有独立时间列（默认隐藏） */
+.card-ts { display: none; }
 /* 成交合并记录的笔数标记：PC 与手机端均显示，用于完整体现汇总信息 */
 .merge-tag {
   display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px;
@@ -1003,6 +1005,7 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   #posTable thead, #posHistTable thead, #fillsTable thead { display: none; }
   #posTable tbody, #posHistTable tbody, #fillsTable tbody { display: block; }
   #posTable tbody tr, #posHistTable tbody tr, #fillsTable tbody tr {
+    position: relative;   /* 右上角时间戳的定位容器 */
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px 14px; align-items: start;
     padding: 12px 13px; margin-bottom: 10px;
@@ -1043,8 +1046,16 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
     gap: 2px 8px; font-size: 13.5px; font-weight: 650; text-align: left;
     padding: 0 0 8px; margin-bottom: 3px; border-bottom: 1px dashed var(--border);
   }
-  /* 标题里品种名自带语义，不叠「品种」eyebrow */
+  /* 标题里品种名自带语义，不叠「品种」eyebrow；右侧为时间戳预留空间 */
   #posTable td:nth-child(1)::before, #posHistTable td:nth-child(2)::before, #fillsTable td:nth-child(1)::before { display: none; }
+  #posTable td:nth-child(1):not([colspan]), #posHistTable td:nth-child(2):not([colspan]), #fillsTable td:nth-child(1):not([colspan]) { padding-right: 86px; }
+  /* 卡片右上角时间戳：脱离文档流，不占字段网格、不撑高卡片 */
+  .card-ts {
+    display: block; position: absolute; top: 13px; right: 13px;
+    font-size: 10px; font-weight: 500; color: var(--faint);
+    font-variant-numeric: tabular-nums; letter-spacing: .01em;
+    white-space: nowrap; line-height: 1.4; pointer-events: none;
+  }
   /* 品种名后的多空小标志：沿用 .up 红(多) / .down 绿(空) */
   .dir-flag {
     display: inline-block; margin-left: 2px; padding: 1px 6px;
