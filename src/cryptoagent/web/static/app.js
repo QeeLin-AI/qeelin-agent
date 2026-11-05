@@ -1542,6 +1542,20 @@ function renderStatus(s) {
         ? `<span class="${f.slippage_bps > 0 ? 'down' : 'up'}">${f.slippage_bps >= 0 ? '+' : ''}${Number(f.slippage_bps).toFixed(2)}</span>` : '--';
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
+      // 开仓成交没有已实现盈亏：盈亏列改显示「开仓」动作标识，避免显示误导性的 0。
+      // 本地成交带 action=OPEN/CLOSE 可直接判；但线上(armed+live)展示的是交易所回读成交，
+      // 其 action 为「买入/卖出」、pnl 为 realizedPnl（开仓=0），没有 OPEN 标记，
+      // 因此统一用「是否有已实现盈亏」来识别开仓：pnl≈0 且非明确平仓动作 → 开仓。
+      const realized = f.pnl !== undefined && Math.abs(f.pnl) > 1e-6;
+      const actLabel = f.__acts || actionCn(f.action) || (f.action || '');
+      const isExplicitClose = f.action === 'CLOSE' || f.action === '平仓' || actLabel.includes('平仓');
+      const isOpenOnly = !isExplicitClose && (
+        f.action === 'OPEN' || actLabel === '开仓'
+        || (!realized && (actLabel.includes('买入') || actLabel.includes('卖出')))
+      );
+      const pnlCell = isOpenOnly
+        ? `<td class="muted">开仓</td>`
+        : `<td class="${(f.pnl || 0) >= 0 ? 'up' : 'down'}">${f.pnl !== undefined ? fmt(f.pnl) : '--'}</td>`;
       return `<tr${tip}>
       <td class="mono">${esc(f.symbol || s.symbol)}<span class="dir-flag ${cls}">${esc(sideCn(f.side))}</span>${mergeTag}<span class="card-ts">${esc(shortTs(f.ts))}</span></td>
       <td class="muted">${esc(f.ts)}</td>
@@ -1552,7 +1566,7 @@ function renderStatus(s) {
       <td>${fmtPx(f.price)}</td>
       <td>${slip}</td>
       <td class="muted">${f.fee !== undefined ? fmt(f.fee, 4) : '--'}</td>
-      <td class="${(f.pnl || 0) >= 0 ? 'up' : 'down'}">${f.pnl !== undefined ? fmt(f.pnl) : '--'}</td>
+      ${pnlCell}
     </tr>`;
     }).join('');
   } else {
