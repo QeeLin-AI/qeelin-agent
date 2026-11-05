@@ -183,6 +183,12 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
   align-self: flex-start; font-size: 10px; font-weight: 600; letter-spacing: .04em;
   color: var(--faint); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
 }
+/* 进程运行时长：常驻侧栏，用来判断「服务是不是刚重启过」——
+   很多异常（持仓失管、缓存变冷）第一件事就是确认它是不是刚起来。 */
+.side-uptime {
+  align-self: flex-start; font-size: 10px; letter-spacing: .02em;
+  color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
 .ver-v { color: var(--muted); font-weight: 400; }
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 12px; }
 .nav-group + .nav-group { margin-top: 22px; }
@@ -1266,7 +1272,7 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
      宽度由文字决定，5 个带图标的入口仍能一屏放完 */
   .side-brand { gap: 6px; padding-right: 6px; }
   .side-brand .brand-name { font-size: 12.5px; }
-  .side-brand .ver { display: none; }
+  .side-brand .ver, .side-brand .side-uptime { display: none; }
   .side-brand .brand-mark { width: 30px; height: 30px; border-radius: 8px; }
   .side-brand .brand-mark svg { width: 27px; height: 27px; }
   .side-scroll { gap: 10px; }

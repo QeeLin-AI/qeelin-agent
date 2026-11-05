@@ -1053,6 +1053,19 @@ function costGateHtml(p) {
     <div class="muted">${esc((g.reasons || []).join('；'))}</div></div>`;
 }
 
+function fmtUptime(sec) {
+  // 只保留两级单位：天/小时、小时/分、分/秒——侧栏位置窄，写全「1天2小时3分4秒」会折行。
+  const n = Math.max(0, Math.floor(Number(sec) || 0));
+  const d = Math.floor(n / 86400);
+  const h = Math.floor((n % 86400) / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = n % 60;
+  if (d) return `${d} 天 ${h} 小时`;
+  if (h) return `${h} 小时 ${m} 分`;
+  if (m) return `${m} 分 ${s} 秒`;
+  return `${s} 秒`;
+}
+
 function renderPositionManagement(d) {
   const card = $('posMgmtCard');
   if (!card) return;
@@ -1603,6 +1616,10 @@ function renderStatus(s) {
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">v</span>${esc(s.server.version)}`;
+  if (s.uptime_sec != null && $('uptimeTag')) {
+    $('uptimeTag').textContent = `已运行 ${fmtUptime(s.uptime_sec)}`;
+    if (s.started_at) $('uptimeTag').title = `启动于 ${s.started_at}`;
+  }
   renderLive(s);
   renderDataWarn(s);
 

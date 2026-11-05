@@ -137,3 +137,18 @@ def test_symbols_are_capped(monkeypatch):
     _patch(monkeypatch, calls)
     eng.warm_symbol_cache()
     assert len(calls["price"]) == 12      # 上限 12，避免一次打爆限频
+
+
+# ---------------- 运行时长 ----------------
+
+def test_uptime_seconds_counts_from_start():
+    import time as _t
+    eng = _bare_engine()
+    eng.started_at = _t.time() - 3661
+    assert 3660 <= eng.uptime_seconds() <= 3665
+
+
+def test_uptime_seconds_is_zero_when_missing():
+    eng = _bare_engine()                  # __new__ 构造：没有 started_at
+    assert not hasattr(eng, "started_at")
+    assert eng.uptime_seconds() == 0      # 进 status 的字段，绝不能抛错

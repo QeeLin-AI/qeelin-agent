@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.4-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.5-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -16,6 +16,13 @@
 ![总览](docs/ui.png)
 
 ---
+
+## v1.1.5 更新要点
+
+- **侧栏常驻「已运行时长」**：`/api/status` 新增 `uptime_sec` / `started_at`，页面每轮轮询刷新，
+  悬停可看启动时刻。重启会丢 arm 状态、清空缓存，排查异常时第一眼就能确认是不是刚重启。
+- **全品种预热报价间隔默认收紧**：`cache_warm_interval_sec` 线上调为 5 秒（6 品种 ≈ 72 weight/min，
+  远低于币安 2400 上限），机会榜与标记价更跟手。
 
 ## v1.1.4 更新要点
 
@@ -551,6 +558,7 @@ python -m pytest -q
 
 | 版本 | 要点 |
 |---|---|
+| **v1.1.5** | 侧栏运行时长（uptime_sec / started_at）；全品种报价预热间隔调至 5 秒 |
 | **v1.1.4** | 全品种缓存预热（报价/主周期/短周期三档节流），`load_market` 缓存原子写入 |
 | **v1.1.3** | 配置方案（稳健/高频/保守 + 恢复默认 + 撤销，硬约束不含密钥与模型配置）；LLM 自主调参（白名单/25%步长/3项上限/保证金交叉校验/审计回滚）；一轮多品种评估 `auto_top_k`；因子库 43→59 |
 | **v1.1.2** | 持仓管理员接入 LLM（解释 / 影子复核）与设置页热更新；规则层参数化与峰值回撤退出；决策页重构（并排等高、紧凑化、影子复核卡片）；移动端扫描卡片化与理由折叠；成交表开仓标识修正 |

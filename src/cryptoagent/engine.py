@@ -60,6 +60,9 @@ class TradingEngine:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
         self.lock = threading.RLock()
+        # 进程/引擎启动时刻：页面上显示「已运行多久」，用来一眼判断是不是刚重启过
+        # （重启会丢 arm 状态、清空缓存，很多异常排查的第一步就是确认这个）。
+        self.started_at = time.time()
         self.state_path = Path(cfg.runs_dir) / "engine_state.json"
         self.state = self._default_state()
         self._load()
@@ -1326,6 +1329,13 @@ class TradingEngine:
         except Exception:  # noqa: BLE001 - 校准失败不影响决策
             return [0.5, 0.3, 0.2], False
 
+    def uptime_seconds(self) -> int:
+        """进程已运行秒数。取不到启动时刻时返回 0，绝不抛错（要进 status）。"""
+        try:
+            return int(max(0.0, time.time() - float(self.started_at)))
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
     # ------------------------------------------------------------------
     # 持仓管理员参数自迭代（与上面的分析师权重校准同一套机制）
     # ------------------------------------------------------------------
@@ -2530,6 +2540,12 @@ class TradingEngine:
                 "halt": bool(self.state.get("halt")),
                 "data_source": self.data_source,
                 "data_loading": bool(self.data_loading),
+                # 进程运行时长：前端在侧栏常驻显示，用于判断是否刚重启过
+                "uptime_sec": self.uptime_seconds(),
+                "started_at": time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(float(getattr(self, "started_at", time.time()))),
+                ),
                 "llm": {"provider": self.cfg.llm.provider, "model": self.cfg.llm.model},
                 # 分析师权重校准状态（样本不足时 calibrated=False，权重仍是默认值）
                 "analyst_calibration": calibration_summary(self.state.get("analyst_accuracy")),
