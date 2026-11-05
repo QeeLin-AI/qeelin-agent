@@ -1017,7 +1017,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .set-grid.risk-six { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-grid.risk-eight { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-grid.two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .trade-split { grid-template-columns: 1fr; }
+  .trade-split { grid-template-columns: minmax(0, 1fr); }
   .pos-grid { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
 }
