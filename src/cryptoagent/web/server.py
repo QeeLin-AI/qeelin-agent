@@ -1865,7 +1865,7 @@ class WebApp:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "QeeLin-Agent/1.1.0-Beta"
+    server_version = "QeeLin-Agent/1.1.2"
     app: WebApp  # 由 serve() 注入
 
     # -- 基础 ---------------------------------------------------------
