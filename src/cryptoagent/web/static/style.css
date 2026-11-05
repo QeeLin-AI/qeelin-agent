@@ -1365,7 +1365,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .trade-main > .muted { font-size: 11.5px; line-height: 1.5; }
   .auto-controls { gap: 12px; margin: 0 0 2px; }
   .auto-controls .field input { width: 88px; }
-  .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; }
+  .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; flex-basis: 100%; }
   .auto-controls .auto-actions { margin-top: 2px; }
   .auto-meta { margin: 8px 0 0; font-size: 11.5px; }
   .trade-main .divider { margin: 12px 0 8px; }
