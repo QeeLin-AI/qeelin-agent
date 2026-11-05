@@ -538,7 +538,74 @@ async function loadProfiles() {
   } catch (e) { console.error(e); }
 }
 
+// 配置键 → 中文说明。差异预览里把英文键名替换成中文，方便一眼看懂会改什么；
+// 名称、单位与下方「交易参数 / 持仓管理员 / 选品」设置表单保持一致。
+const SETTING_LABELS = {
+  // —— 风控 risk（与「交易参数」表单标签一致）——
+  min_confidence: '置信度门槛',
+  max_loss_per_trade_pct: '单笔风险上限',
+  max_position_pct: '单笔仓位上限',
+  max_concurrent_positions: '同时持仓品种数',
+  max_margin_usage_pct: '保证金占用上限',
+  max_leverage: '杠杆上限',
+  min_leverage: '杠杆下限',
+  daily_loss_limit_pct: '当日亏损上限',
+  max_drawdown_pct: '最大回撤',
+  max_portfolio_notional_pct: '组合名义敞口上限',
+  correlated_exposure_pct: '相关组敞口上限',
+  sizing_mode: '仓位大小',
+  leverage_override: '杠杆',
+  // —— 持仓管理员 position（与「持仓管理员 · LLM 接入」表单标签一致）——
+  auto_tune: '退出参数自校准',
+  llm_explain: '规则动作解释',
+  llm_shadow: '影子复核',
+  llm_offpeak_only: '峰时跳过 LLM',
+  bars_from_index: '持有根数按 K 线计数',
+  peak_drawdown_exit_enabled: '峰值回撤退出',
+  peak_drawdown_r: '峰值回撤阈值（R）',
+  reversal_ema_bars: '反转 EMA 跨度（根）',
+  composite_max_age_sec: '因子信号有效期（秒）',
+  llm_min_interval_sec: 'LLM 冷却（秒 / 每品种）',
+  // —— 选品 market ——
+  auto_rotate: '自动选品种',
+  auto_top_k: '每轮评估品种数',
+  min_score: '选品分数门槛',
+  rotate_min_score: '选品分数门槛',
+};
+// 单位：与表单输入框后缀一致（比例类 _pct 已在 _fmtSetting 里显示为百分号）。
+const SETTING_UNITS = {
+  max_loss_per_trade_pct: '% 权益',
+  max_position_pct: '% 权益',
+  max_margin_usage_pct: '% 权益',
+  daily_loss_limit_pct: '% 权益',
+  max_drawdown_pct: '% 权益',
+  max_portfolio_notional_pct: 'x 权益',
+  correlated_exposure_pct: 'x 权益',
+  max_concurrent_positions: '个',
+  auto_top_k: '个',
+  max_leverage: 'x',
+  min_leverage: 'x',
+  llm_min_interval_sec: '秒',
+  reversal_ema_bars: '根',
+  composite_max_age_sec: '秒',
+  peak_drawdown_r: 'R',
+};
+function _settingLabel(key) {
+  return SETTING_LABELS[key] || key;
+}
+function _settingUnit(key) {
+  return SETTING_UNITS[key] || '';
+}
+// 枚举型取值 → 中文（与表单选项一致）
+function _settingValue(key, v) {
+  if (key === 'sizing_mode') return v === 'risk' ? '按风险上限反推' : (v === 'llm' ? '听交易员' : String(v));
+  if (key === 'leverage_override') return (Number(v) || 0) === 0 ? '自动（跟随决策）' : `${Number(v)}x`;
+  return null;
+}
+
 function _fmtSetting(key, v) {
+  const mapped = _settingValue(key, v);
+  if (mapped != null) return mapped;
   if (typeof v === 'boolean') return v ? '开' : '关';
   if (typeof v === 'number') {
     // 比例类键（_pct 且值在 0~1）按百分数显示，避免 0.008 这种看不懂的写法；
@@ -549,6 +616,13 @@ function _fmtSetting(key, v) {
     return Math.abs(v) < 1 ? String(Number(v.toFixed(4))) : String(v);
   }
   return String(v);
+}
+
+// 差异预览里的一行：中文名 + 当前/目标值 + 单位。
+function _diffRow(key, current, target) {
+  const u = _settingUnit(key);
+  const suf = u ? ` ${u}` : '';
+  return `· ${_settingLabel(key)}：${esc(_fmtSetting(key, current))}${suf} → <b>${esc(_fmtSetting(key, target))}${suf}</b>`;
 }
 
 function renderProfileDiff() {
@@ -564,7 +638,7 @@ function renderProfileDiff() {
   }
   const head = `<b>${esc(p.summary)}</b><br>将改动 ${diff.length} 项：`;
   const rows = diff.slice(0, 12).map((x) =>
-    `<br>· ${esc(x.key)}：${esc(_fmtSetting(x.key, x.current))} → <b>${esc(_fmtSetting(x.key, x.target))}</b>`).join('');
+    `<br>${_diffRow(x.key, x.current, x.target)}`).join('');
   box.innerHTML = head + rows + (diff.length > 12 ? `<br>…另有 ${diff.length - 12} 项` : '');
 }
 
@@ -639,11 +713,11 @@ function renderEvolveResult(d) {
   const ch = d.changes || [];
   if (ch.length) {
     lines.push('<b>改动</b>：' + ch.map((c) =>
-      `${esc(c.key)} ${esc(_fmtSetting(c.key, c.from))} → <b>${esc(_fmtSetting(c.key, c.to))}</b>`).join('；'));
+      `${_settingLabel(c.key)} ${esc(_fmtSetting(c.key, c.from))} → <b>${esc(_fmtSetting(c.key, c.to))}</b>`).join('；'));
   }
   const rj = d.rejected || [];
   if (rj.length) {
-    lines.push('<b>被拒</b>：' + rj.map((r) => `${esc(r.key)}（${esc(r.reason)}）`).join('；'));
+    lines.push('<b>被拒</b>：' + rj.map((r) => `${_settingLabel(r.key)}（${esc(r.reason)}）`).join('；'));
   }
   if (!ch.length && !rj.length) lines.push('本轮没有调整建议。');
   if (d.applied) lines.push('<b>已应用</b>，可在「交易参数」页撤销。');
