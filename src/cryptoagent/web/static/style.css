@@ -717,6 +717,10 @@ label.field > input, label.field > select { max-width: 420px; }
 .settings-content { min-width: 0; }
 .settings-content > .card { display: none; }
 .settings-content > .card.active { display: block; }
+/* 模型设置：外层 panel 仅作容器（保持标签页切换契约），内部拆成两张独立卡片 */
+#set-llm.set-split { background: transparent; border: none; box-shadow: none; padding: 0; margin-bottom: 0; }
+#set-llm.set-split > .card { margin-bottom: 18px; }
+#set-llm.set-split > .card:last-child { margin-bottom: 0; }
 .set-side { min-width: 0; }
 .set-group { margin-top: 20px; }
 .card-head + .set-group, .set-group:first-child { margin-top: 0; }
@@ -949,6 +953,7 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .set-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-grid.risk-six { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-grid.risk-eight { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .set-grid.two-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .trade-split { grid-template-columns: 1fr; }
   .pos-grid { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }

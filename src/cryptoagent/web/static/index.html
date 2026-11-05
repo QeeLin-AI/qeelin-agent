@@ -623,63 +623,72 @@
       </div>
 
     </div>
-    <div class="card" id="set-llm">
-      <div class="card-head"><h2>LLM 模型设置</h2><span class="muted" id="llmStatus">--</span></div>
+    <div class="card set-split" id="set-llm">
 
-      <div class="set-group">
-        <div class="set-group-title">接入参数</div>
-        <div class="set-grid">
-          <label class="set-field">
-            <span class="set-label">服务商</span>
-            <select id="llmProvider">
-              <option value="mock">mock（离线规则兜底）</option>
-              <option value="openai">OpenAI 兼容网关</option>
-            </select>
-          </label>
-          <label class="set-field">
-            <span class="set-label">模型名称</span>
-            <input id="llmModel" type="text" placeholder="如 deepseek-flash / deepseek-v4-pro" />
-          </label>
+      <div class="card" id="set-llm-model">
+        <div class="card-head"><h2>LLM 模型设置</h2><span class="muted" id="llmStatus">--</span></div>
+
+        <div class="set-group">
+          <div class="set-group-title">接入参数</div>
+          <div class="set-grid">
+            <label class="set-field">
+              <span class="set-label">服务商</span>
+              <select id="llmProvider">
+                <option value="mock">mock（离线规则兜底）</option>
+                <option value="openai">OpenAI 兼容网关</option>
+              </select>
+            </label>
+            <label class="set-field">
+              <span class="set-label">模型名称</span>
+              <input id="llmModel" type="text" placeholder="如 deepseek-flash / deepseek-v4-pro" />
+            </label>
+          </div>
+          <div class="set-box">
+            <label class="set-row"><span class="row-label">Base URL</span><input id="llmBaseUrl" type="text" placeholder="https://api.xxx.com/v1" /></label>
+            <label class="set-row"><span class="row-label">API Key</span><input id="llmApiKey" type="password" placeholder="sk-...（留空则不修改）" /></label>
+          </div>
+          <p class="set-hint">改完立即生效（下次决策使用新配置）。API Key 只回显尾号，留空表示保持原值。</p>
         </div>
-        <div class="set-box">
-          <label class="set-row"><span class="row-label">Base URL</span><input id="llmBaseUrl" type="text" placeholder="https://api.xxx.com/v1" /></label>
-          <label class="set-row"><span class="row-label">API Key</span><input id="llmApiKey" type="password" placeholder="sk-...（留空则不修改）" /></label>
+
+        <div class="set-group">
+          <div class="set-group-title">峰谷计价（DeepSeek 官方）</div>
+          <div class="set-status-line">
+            <span id="llmOffpeak" class="tag">--</span>
+            <span class="muted" id="llmPeakHint" style="font-size:11.5px">--</span>
+          </div>
+          <div class="set-grid">
+            <label class="set-field">
+              <span class="set-label">峰时决策</span>
+              <select id="llmPeakMode">
+                <option value="full">照常使用 LLM（质量优先）</option>
+                <option value="thrift">省钱模式（峰时用规则兜底）</option>
+              </select>
+            </label>
+            <label class="set-field">
+              <span class="set-label">节假日（可选）</span>
+              <input id="llmPeakHolidays" type="text" placeholder="2026-10-01,2026-10-02" />
+            </label>
+          </div>
+          <div class="set-switch-list">
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">因子研究仅在谷时调用 LLM</span>
+                <span class="d">研究可延后：峰时改用模板提议器，谷时（半价）再跑 LLM，省一半费用</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="llmOffpeakResearch" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+          </div>
         </div>
-        <p class="set-hint">改完立即生效（下次决策使用新配置）。API Key 只回显尾号，留空表示保持原值。</p>
+
+        <div class="actions">
+          <button id="llmSaveBtn" class="btn primary">保存</button>
+          <button id="llmTestBtn" class="btn ghost">测试连接</button>
+        </div>
       </div>
 
-      <div class="set-group">
-        <div class="set-group-title">峰谷计价（DeepSeek 官方）</div>
-        <div class="set-status-line">
-          <span id="llmOffpeak" class="tag">--</span>
-          <span class="muted" id="llmPeakHint" style="font-size:11.5px">--</span>
-        </div>
-        <div class="set-grid">
-          <label class="set-field">
-            <span class="set-label">峰时决策</span>
-            <select id="llmPeakMode">
-              <option value="full">照常使用 LLM（质量优先）</option>
-              <option value="thrift">省钱模式（峰时用规则兜底）</option>
-            </select>
-          </label>
-          <label class="set-field">
-            <span class="set-label">节假日（可选）</span>
-            <input id="llmPeakHolidays" type="text" placeholder="2026-10-01,2026-10-02" />
-          </label>
-        </div>
-        <div class="set-switch-list">
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">因子研究仅在谷时调用 LLM</span>
-              <span class="d">研究可延后：峰时改用模板提议器，谷时（半价）再跑 LLM，省一半费用</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="llmOffpeakResearch" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-        </div>
-      </div>
+      <div class="card" id="set-llm-position">
+        <div class="card-head"><h2>持仓管理员 · LLM 接入（独立保存）</h2></div>
 
-      <div class="set-group">
-        <div class="set-group-title">持仓管理员 · LLM 接入（独立保存）</div>
         <div class="set-status-line">
           <span id="posLlmOffpeak" class="tag">--</span>
           <span class="muted" id="posLlmUsage" style="font-size:11.5px">--</span>
@@ -721,7 +730,7 @@
             <label class="switch"><input type="checkbox" id="posPeakDrawdownEnabled" /><span class="track"><span class="thumb"></span></span></label>
           </label>
         </div>
-        <div class="set-grid">
+        <div class="set-grid two-col">
           <label class="set-field">
             <span class="set-label">LLM 冷却（秒 / 每品种）</span>
             <input id="posLlmMinInterval" type="number" min="0" max="86400" step="60" />
@@ -746,10 +755,6 @@
         </div>
       </div>
 
-      <div class="actions">
-        <button id="llmSaveBtn" class="btn primary">保存</button>
-        <button id="llmTestBtn" class="btn ghost">测试连接</button>
-      </div>
     </div>
 
     <div class="card" id="set-sentiment">
