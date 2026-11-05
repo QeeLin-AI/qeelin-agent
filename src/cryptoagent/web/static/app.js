@@ -152,6 +152,7 @@ function showTab(name, push = true) {
   $(`tab-${name}`).classList.add('active');
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name === 'overview') { renderPnl(); fitNotifHeight(); }
+  if (name === 'decision') { requestAnimationFrame(fitScanReasons); }
   if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); }
 }
 
@@ -1294,6 +1295,26 @@ function renderScan(data) {
       <td class="muted scan-reason"><span class="reason-text">${esc((r.reasons || []).join('；') || '—')}</span><button class="reason-toggle" type="button" onclick="const c=this.closest('.scan-reason');const ex=c.classList.toggle('expanded');this.textContent=ex?'收起':'展开'">展开</button></td>
     </tr>`;
   }).join('');
+  fitScanReasons();
+}
+
+// 按实际渲染行数决定「理由」是否折叠（仅移动端有折叠样式，PC 端 clamp 未生效、按钮本就隐藏）：
+//   ≤3 行 → 完整展示、隐藏展开按钮（加 .fit）
+//   >3 行 → 默认折叠 3 行、显示展开按钮
+// 元素处于隐藏 tab（clientHeight=0）时跳过，待切到决策页由 showTab 再次测量。
+function fitScanReasons() {
+  document.querySelectorAll('#scanTable .scan-reason').forEach((td) => {
+    const rt = td.querySelector('.reason-text');
+    if (!rt) return;
+    if (rt.clientHeight === 0) return; // 未布局（隐藏 tab），跳过
+    const overflows = rt.scrollHeight - rt.clientHeight > 1;
+    td.classList.toggle('fit', !overflows);
+    if (!overflows) {
+      td.classList.remove('expanded');
+      const b = td.querySelector('.reason-toggle');
+      if (b) b.textContent = '展开';
+    }
+  });
 }
 
 $('runScan').addEventListener('click', async () => {

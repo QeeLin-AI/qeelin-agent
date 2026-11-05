@@ -860,6 +860,31 @@ label.field > input, label.field > select { max-width: 420px; }
 #tab-decision .proposal-grid { gap: 8px; margin: 11px 0; }
 #tab-decision .proposal-grid .item { padding: 10px 12px; }
 
+/* 决策页：多品种扫描 + 影子复核 并排等高，内容溢出滚动（仅 PC；≤860 纵向堆叠） */
+.decision-duo { display: grid; grid-template-columns: 1fr; min-width: 0; }
+.decision-duo > .card { min-width: 0; }
+@media (min-width: 861px) {
+  #tab-decision .decision-duo {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 12px; align-items: stretch;
+    height: 440px; margin-bottom: 12px;
+  }
+  #tab-decision .decision-duo > .card {
+    height: 100%; margin-bottom: 0; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  #tab-decision .decision-duo > .card > .card-head,
+  #tab-decision .decision-duo > .card > p.muted { flex: none; }
+  #tab-decision .decision-duo .table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  #tab-decision .decision-duo #decisionShadowBox { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  /* 半宽后收紧扫描表内距/字号，非理由列不换行（必要时横向滚动），理由列仍换行 */
+  #tab-decision .decision-duo .table th,
+  #tab-decision .decision-duo .table td { padding: 7px 9px; font-size: 11.5px; }
+  #tab-decision .decision-duo #scanTable td:not(:nth-child(7)) { white-space: nowrap; }
+  /* 扫描表格头在滚动区内吸顶 */
+  #tab-decision .decision-duo .table thead th { position: sticky; top: 0; z-index: 1; }
+}
+
 .sizing-trace { margin-top: 14px; border-top: 1px solid var(--border-soft); padding-top: 12px; font-size: 12px; }
 .sizing-trace > b { display: block; color: var(--muted); margin-bottom: 8px; }
 .st-row { display: grid; grid-template-columns: 90px 78px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 0; }
@@ -1139,19 +1164,35 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   #scanTable td:nth-child(4)::before { content: "仓位"; }
   #scanTable td:nth-child(5)::before { content: "杠杆"; }
   #scanTable td:nth-child(6)::before { content: "风控"; }
+  /* 理由：标签与正文从同一行起始；超 3 行才折叠并出现展开按钮 */
   #scanTable td:nth-child(7):not([colspan]) {
-    grid-column: 1 / -1; display: block; text-align: left; white-space: normal;
+    grid-column: 1 / -1; display: grid;
+    grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; row-gap: 2px;
+    align-items: start; text-align: left; white-space: normal;
     overflow-wrap: anywhere; word-break: break-word; line-height: 1.55;
   }
+  #scanTable td:nth-child(7)::before {
+    content: "理由"; grid-column: 1; grid-row: 1;
+    color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .03em;
+    white-space: nowrap; padding-top: 3px;
+  }
   #scanTable td:nth-child(7) .reason-text {
+    grid-column: 2; grid-row: 1;
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
   }
-  #scanTable td:nth-child(7).expanded .reason-text { -webkit-line-clamp: unset; overflow: visible; display: block; }
-  #scanTable td:nth-child(7)::before { content: "理由"; display: block; margin-bottom: 2px; }
-  #scanTable .reason-toggle {
-    display: inline-block; margin-top: 4px; font-size: 11px; color: var(--accent); background: none; border: 0;
+  #scanTable td:nth-child(7).expanded .reason-text,
+  #scanTable td:nth-child(7).fit .reason-text { -webkit-line-clamp: unset; overflow: visible; display: block; }
+  #scanTable td:nth-child(7) .reason-toggle {
+    display: inline-block; grid-column: 2; grid-row: 2; justify-self: start; margin-top: 2px;
+    font-size: 11px; color: var(--accent); background: none; border: 0;
     padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
   }
+  #scanTable td:nth-child(7).fit .reason-toggle { display: none; }
+
+  /* 扫描卡头部：时间戳过长时截断，避免把「扫一遍所有品种」按钮挤到下一行 */
+  .card-head:has(#scanMeta) { flex-wrap: nowrap; }
+  #scanMeta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .card-head:has(#scanMeta) .actions { flex: none; }
   #scanTable tbody tr:has(td[colspan]) { border: 0; background: transparent; padding: 4px 0; }
   #scanTable td[colspan] { grid-column: 1 / -1; justify-content: center; text-align: center; font-size: 12px; font-weight: 400; }
   #scanTable td[colspan]::before { display: none; }
