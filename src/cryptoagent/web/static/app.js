@@ -1278,7 +1278,14 @@ $('autoArmChk').addEventListener('change', async () => {
 });
 
 function renderScan(data) {
-  $('scanMeta').textContent = `${data.rows.length} 个品种 · ${data.ts}`;
+  // 时间戳拆成「日期 + 时间」两段：PC 显示完整，手机端只留时间（CSS 隐藏日期）
+  const ts = String(data.ts || '');
+  const sp = ts.indexOf(' ');
+  const datePart = sp > 0 ? ts.slice(0, sp) : '';
+  const timePart = sp > 0 ? ts.slice(sp + 1) : ts;
+  $('scanMeta').innerHTML = `${data.rows.length} 个品种 · `
+    + (datePart ? `<span class="scan-meta-date">${esc(datePart)}</span> ` : '')
+    + `<span class="scan-meta-time">${esc(timePart)}</span>`;
   const tb = $('scanTable').querySelector('tbody');
   if (!data.rows.length) { tb.innerHTML = '<tr><td colspan="7" class="muted center">没有结果</td></tr>'; return; }
   tb.innerHTML = data.rows.map((r) => {

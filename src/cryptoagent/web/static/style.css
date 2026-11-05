@@ -1193,6 +1193,8 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .card-head:has(#scanMeta) { flex-wrap: nowrap; }
   #scanMeta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
   .card-head:has(#scanMeta) .actions { flex: none; }
+  /* 手机端扫描时间戳只留时间，不展示日期 */
+  #scanMeta .scan-meta-date { display: none; }
   #scanTable tbody tr:has(td[colspan]) { border: 0; background: transparent; padding: 4px 0; }
   #scanTable td[colspan] { grid-column: 1 / -1; justify-content: center; text-align: center; font-size: 12px; font-weight: 400; }
   #scanTable td[colspan]::before { display: none; }
