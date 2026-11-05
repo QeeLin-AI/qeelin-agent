@@ -1173,6 +1173,35 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   .tab { padding: 5px 6px; }
   .tab .nav-ico { width: 14px; height: 14px; }
 }
+/* ================================================================
+   手机端总览：指标卡三列一行 + 通知卡上移到四卡下方
+   放在所有既有断点之后，同特异性下优先级最高；>860px 的 PC 端完全不受影响。
+   ================================================================ */
+@media (max-width: 860px) {
+  /* 账户权益 / 当日盈亏 / 回撤 三项正向同一行；持仓卡样式不改、独占整行 */
+  .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .stat-row > .stat { min-width: 0; }
+  .stat-row > .stat:not(#posCard) {
+    padding: 10px 9px; min-height: 0; gap: 4px; border-radius: 10px;
+  }
+  .stat-row > .stat:not(#posCard) label { font-size: 10px; line-height: 1.3; }
+  /* 具体交易所标注自动换到第二行，避免三列窄卡里被挤掉 */
+  .stat-row > .stat:not(#posCard) label .src-chip {
+    display: block; margin: 3px 0 0; padding: 0 4px; font-size: 9px; white-space: nowrap;
+  }
+  .stat-row > .stat:not(#posCard) b { font-size: clamp(14px, 4.3vw, 18px); }
+  .stat-row > .stat:not(#posCard) small {
+    font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .stat-row > #posCard { grid-column: 1 / -1; }
+
+  /* 通知 / 告警卡移到四张指标卡正下方：打平两栏容器，用 order 提到最前。
+     其余卡片保持原有相对顺序（盈亏 → 持仓管理员 → 机会榜）。 */
+  .overview-grid { display: flex; flex-direction: column; gap: 16px; }
+  .ov-main, .ov-side { display: contents; }
+  .ov-side .notif-card { order: -1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
