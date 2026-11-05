@@ -545,8 +545,8 @@ label.field > input, label.field > select { max-width: 420px; }
 .pnl-stat label { font-size: 10.5px; color: var(--muted); }
 .pnl-stat b { font-size: 16px; font-weight: 650; }
 .pnl-trades { display: flex; flex-direction: column; gap: 9px; max-height: 168px; overflow-y: auto; padding-right: 6px; }
-.pnl-row { display: grid; grid-template-columns: 88px 52px minmax(0, 1fr) 88px; align-items: center; gap: 10px; }
-.pnl-time { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.pnl-row { display: grid; grid-template-columns: 92px 48px minmax(0, 1fr) 84px; align-items: center; gap: 10px; }
+.pnl-time { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pnl-act { font-size: 11.5px; }
 .pnl-bar-track { height: 6px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
 .pnl-bar { height: 100%; border-radius: 99px; background: var(--up); }
@@ -1356,6 +1356,28 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
      只用父级 opacity 做反馈，避免被动画覆盖。 */
   .side-brand { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
   .side-brand:active { opacity: .72; }
+}
+
+/* ---------------------------------------------------------------- 交易页（仅手机端 ≤860px，PC 端布局不动） */
+@media (max-width: 860px) {
+  /* 自动交易卡紧凑化：收紧内部间距与控件尺寸，整体更短 */
+  .trade-split { gap: 14px; }
+  .trade-main > .muted { font-size: 11.5px; line-height: 1.5; }
+  .auto-controls { gap: 12px; margin: 0 0 2px; }
+  .auto-controls .field input { width: 88px; }
+  .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; }
+  .auto-controls .auto-actions { margin-top: 2px; }
+  .auto-meta { margin: 8px 0 0; font-size: 11.5px; }
+  .trade-main .divider { margin: 12px 0 8px; }
+  .trade-main .actions { gap: 8px; }
+  /* 连接卡片：移到自动交易卡最上方，并整体缩小（减小长度/高度） */
+  #connBar { order: -1; }
+  .conn-panel { padding: 12px 14px; border-radius: 10px; }
+  .conn-head { font-size: 11px; }
+  .conn-main { margin: 8px 0 4px; font-size: 17px; letter-spacing: -.02em; }
+  .conn-sub { font-size: 11px; line-height: 1.5; }
+  .conn-actions { margin-top: 10px; gap: 6px; }
+  .conn-actions .btn { font-size: 12px; padding: 6px 12px; }
 }
 
 /* ---------------------------------------------------------------- 持仓管理员卡片 */

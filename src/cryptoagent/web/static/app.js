@@ -2216,7 +2216,7 @@ function renderPnl() {
     const up = (f.pnl || 0) >= 0;
     const w = Math.max(4, Math.round((Math.abs(f.pnl || 0) / maxAbs) * 100));
     return `<div class="pnl-row">
-      <span class="pnl-time">${esc(f.ts || '')}</span>
+      <span class="pnl-time" title="${esc(f.ts || '')}">${esc(shortTs(f.ts))}</span>
       <span class="pnl-act muted">${esc(actionCn(f.action))}</span>
       <div class="pnl-bar-track"><div class="pnl-bar ${up ? 'up' : 'down'}" style="width:${w}%"></div></div>
       <span class="pnl-val ${up ? 'up' : 'down'}">${up ? '+' : ''}${fmt(f.pnl, 2)}</span>
