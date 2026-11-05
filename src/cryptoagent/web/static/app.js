@@ -1616,9 +1616,14 @@ function renderStatus(s) {
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">v</span>${esc(s.server.version)}`;
-  if (s.uptime_sec != null && $('uptimeTag')) {
-    $('uptimeTag').textContent = `已运行 ${fmtUptime(s.uptime_sec)}`;
-    if (s.started_at) $('uptimeTag').title = `启动于 ${s.started_at}`;
+  if (s.uptime_sec != null) {
+    const txt = `已运行 ${fmtUptime(s.uptime_sec)}`;
+    for (const id of ['uptimeTag', 'uptimeTagM']) {
+      const el = $(id);
+      if (!el) continue;
+      el.textContent = txt;
+      if (s.started_at) el.title = `启动于 ${s.started_at}`;
+    }
   }
   renderLive(s);
   renderDataWarn(s);
