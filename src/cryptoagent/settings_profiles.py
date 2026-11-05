@@ -75,7 +75,9 @@ PROFILES: dict[str, dict[str, Any]] = {
         },
         "position": {
             "auto_tune": True,
-            "llm_explain": False,
+            # 高频档持仓多、巡检频繁：只保留「有动作时写解释」（代价极小），
+            # 关掉逐轮影子复核（4 仓 × 900s ≈ 384 次/天，成本会线性放大）。
+            "llm_explain": True,
             "llm_shadow": False,
             "llm_offpeak_only": True,
             "bars_from_index": True,
