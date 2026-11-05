@@ -208,3 +208,24 @@ def test_learning_feeds_effective_params_end_to_end():
     eff = eng.effective_position_config()
     assert eff.trail_atr_mult < base["trail_atr_mult"]
     assert eng.cfg.position.trail_atr_mult == pytest.approx(base["trail_atr_mult"])
+
+
+def test_record_close_writes_r_fields_and_feeds_stats():
+    """平仓要把「赚了几个 R」写进历史，并把这一笔喂给校准器。"""
+    eng, _base = _bare_engine()
+    eng.state = {"position_history": [], "equity": 1000.0}
+    pos = {
+        "symbol": "SOLUSDT", "side": "LONG", "qty": 1.0, "entry": 100.0,
+        "stop": 96.0, "initial_r_pct": 0.02, "opened_at": "2026-11-06 01:00:00",
+        "mfe_r": 1.8, "trailed": True, "mode": "paper",
+    }
+    eng._record_close(pos, 104.0, 4.0, "止损触发", "paper", rule="stop_loss")
+    h = eng.state["position_history"][-1]
+    assert h["realized_r"] == pytest.approx(2.0)          # (104-100)/100 ÷ 0.02
+    assert h["r_pct"] == pytest.approx(0.02)
+    assert h["initial_stop"] == pytest.approx(100.0 * (1 - 0.02))
+    assert h["mfe_r"] == pytest.approx(1.8)
+    assert h["rule"] == "stop_loss"
+    # 被移动止损动过的仓位，止损出场归到 trail 组（而不是普通止损）
+    assert eng.position_tuning["stats"]["rules"].get("trail") == 1
+    assert eng.position_tuning["stats"]["n"] == 1
