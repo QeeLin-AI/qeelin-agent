@@ -528,18 +528,26 @@ async function loadProfiles() {
     if (!sel) return;
     const keep = sel.value;
     sel.innerHTML = (d.profiles || []).map((p) =>
-      `<option value="${esc(p.name)}">${esc(p.label)}${p.matches ? '（当前）' : ''}</option>`
+      `<option value="${esc(p.name)}">${esc(p.label)}${p.matches ? ' · 当前' : ''}</option>`
     ).join('');
     const cur = (d.profiles || []).find((p) => p.matches);
     $('profileCurrent').value = cur ? cur.label : '自定义组合';
     if (keep && (d.profiles || []).some((p) => p.name === keep)) sel.value = keep;
+    else if (cur) sel.value = cur.name;
     renderProfileDiff();
   } catch (e) { console.error(e); }
 }
 
-function _fmtSetting(v) {
+function _fmtSetting(key, v) {
   if (typeof v === 'boolean') return v ? '开' : '关';
-  if (typeof v === 'number') return Math.abs(v) < 1 ? String(Number(v.toFixed(4))) : String(v);
+  if (typeof v === 'number') {
+    // 比例类键（_pct 且值在 0~1）按百分数显示，避免 0.008 这种看不懂的写法；
+    // 倍权益类（如组合名义敞口 7.0）不是比例，保持原值。
+    if (String(key || '').endsWith('_pct') && Math.abs(v) <= 1) {
+      return `${Number((v * 100).toFixed(1))}%`;
+    }
+    return Math.abs(v) < 1 ? String(Number(v.toFixed(4))) : String(v);
+  }
   return String(v);
 }
 
@@ -556,7 +564,7 @@ function renderProfileDiff() {
   }
   const head = `<b>${esc(p.summary)}</b><br>将改动 ${diff.length} 项：`;
   const rows = diff.slice(0, 12).map((x) =>
-    `<br>· ${esc(x.key)}：${esc(_fmtSetting(x.current))} → <b>${esc(_fmtSetting(x.target))}</b>`).join('');
+    `<br>· ${esc(x.key)}：${esc(_fmtSetting(x.key, x.current))} → <b>${esc(_fmtSetting(x.key, x.target))}</b>`).join('');
   box.innerHTML = head + rows + (diff.length > 12 ? `<br>…另有 ${diff.length - 12} 项` : '');
 }
 
@@ -631,7 +639,7 @@ function renderEvolveResult(d) {
   const ch = d.changes || [];
   if (ch.length) {
     lines.push('<b>改动</b>：' + ch.map((c) =>
-      `${esc(c.key)} ${esc(_fmtSetting(c.from))} → <b>${esc(_fmtSetting(c.to))}</b>`).join('；'));
+      `${esc(c.key)} ${esc(_fmtSetting(c.key, c.from))} → <b>${esc(_fmtSetting(c.key, c.to))}</b>`).join('；'));
   }
   const rj = d.rejected || [];
   if (rj.length) {

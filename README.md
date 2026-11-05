@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.2-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.3-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -16,6 +16,19 @@
 ![总览](docs/ui.png)
 
 ---
+
+## v1.1.3 更新要点
+
+- **配置方案**：内置「稳健 / 高频稳健 / 保守」三套，一键套用、一键恢复默认、一键撤销上次改动。
+  方案**只覆盖风控 / 持仓 / 选品三组**，代码级拒绝任何含 API Key、provider、model 的字段
+  （导入时校验 + 应用前二次校验）。
+- **LLM 自主调参**：模型读近期平仓绩效与决策漏斗，提出小幅调整；能否落地由代码裁决——
+  白名单数值项、单次 ≤ 25%、一轮 ≤ 3 项、越界即整份作废、改动后仍须满足保证金不等式。
+  支持手动评估与每日自动，每次改动写入审计历史可回滚。
+- **交易频率**：新增 `market.auto_top_k`，一轮可依次评估多个品种（原先一轮只看一个）。
+- **因子库 43 → 59**：补 1 周动量、距区间高点、费率×滞涨、费率×OI 拥挤、基差动量，
+  以及 ADX / Aroon / Choppiness / Keltner / CCI / Roll 价差 / Elder 力度 / CMF /
+  收益自相关 / ATR 期限结构 / RSI 背离；新增全库沙箱健康检查。
 
 ## v1.1.2 更新要点
 
@@ -530,6 +543,7 @@ python -m pytest -q
 
 | 版本 | 要点 |
 |---|---|
+| **v1.1.3** | 配置方案（稳健/高频/保守 + 恢复默认 + 撤销，硬约束不含密钥与模型配置）；LLM 自主调参（白名单/25%步长/3项上限/保证金交叉校验/审计回滚）；一轮多品种评估 `auto_top_k`；因子库 43→59 |
 | **v1.1.2** | 持仓管理员接入 LLM（解释 / 影子复核）与设置页热更新；规则层参数化与峰值回撤退出；决策页重构（并排等高、紧凑化、影子复核卡片）；移动端扫描卡片化与理由折叠；成交表开仓标识修正 |
 | v1.1.0-Beta | 控制台视觉重做（分组侧栏、五个页签、双主题）；默认风控上限自相矛盾修正 |
 | v1.0.2 | 持仓管理员（退出决策）、执行成本闸、43 个内置因子、分析师权重事后校准 |
