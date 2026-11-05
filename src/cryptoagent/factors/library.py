@@ -500,6 +500,249 @@ LIBRARY: dict[str, BuiltinFactor] = {
 ''',
         validated=False,
     ),
+
+    # ------------------------------------------------------------------
+    # 第二批：按公开研究的结论补维度（2026-11）
+    #
+    # 文献锚点：
+    # - Liu, Tsyvinski & Wu (JF 2022)「Common Risk Factors in Cryptocurrency」：
+    #   25 个股票因子里，加密市场显著的有市值、价格、区间最高价、1~4 周动量、
+    #   成交额及其波动率。这里补 1 周动量与「距区间最高价」，其余维度已有。
+    # - 永续合约实务研究（funding/basis/OI 三件套）：费率**水平**在 8 小时尺度
+    #   预测力强于 z-score；费率高位而价格滞涨才是危险信号（funding divergence）；
+    #   基差压缩往往领先于反向。这里补三个交互因子。
+    # - 经典技术分析里长期缺位的：ADX（趋势强度）、Aroon（趋势新鲜度）、
+    #   Choppiness（盘整判别）、Keltner（ATR 通道）、CCI、Roll 价差、Elder 力度、
+    #   Chaikin 资金流、收益自相关、ATR 期限结构、RSI 背离。
+    #
+    # 一律 validated=False：只按 0.25 权重参与，不因为「文献说有效」就主导实盘。
+    # ------------------------------------------------------------------
+    "mom_168": BuiltinFactor(
+        name="mom_168",
+        family="momentum",
+        hypothesis="1 周动量：Liu-Tsyvinski-Wu 在加密横截面上最强的动量窗口是 1~4 周，"
+                   "比日内动量更抗噪。",
+        code='''def factor(df):
+    return df["close"] / df["close"].shift(168) - 1.0
+''',
+        validated=False,
+    ),
+    "near_high_168": BuiltinFactor(
+        name="near_high_168",
+        family="breakout",
+        hypothesis="距 1 周最高价的距离：论文里「区间内最高价」是显著性最高的因子，"
+                   "时间序列上等价于价格贴着新高走（越接近 1 越强）。",
+        code='''def factor(df):
+    hi = df["high"].rolling(168).max()
+    return df["close"] / hi.replace(0.0, np.nan)
+''',
+        validated=False,
+    ),
+    "funding_price_stall": BuiltinFactor(
+        name="funding_price_stall",
+        family="derivatives",
+        hypothesis="费率高位 + 价格滞涨：只有价格在涨时高费率是噪音，"
+                   "盘整期还维持高费率说明多头在硬扛，反向。",
+        code='''def factor(df):
+    fr = df["funding_rate"]
+    z = (fr - fr.rolling(72).mean()) / fr.rolling(72).std().replace(0.0, np.nan)
+    mom = (df["close"] / df["close"].shift(24) - 1.0).abs()
+    scale = mom.rolling(168).median()
+    stall = 1.0 / (1.0 + mom / (scale + 1e-9))
+    return -z * stall
+''',
+        validated=False,
+    ),
+    "basis_momentum": BuiltinFactor(
+        name="basis_momentum",
+        family="carry",
+        hypothesis="基差变化率：基差压缩（永续溢价收窄）通常领先于价格反向，"
+                   "扩张则说明多头愿意继续付溢价。",
+        code='''def factor(df):
+    return df["basis"] - df["basis"].shift(24)
+''',
+        validated=False,
+    ),
+    "funding_oi_crowding": BuiltinFactor(
+        name="funding_oi_crowding",
+        family="derivatives",
+        hypothesis="费率 × 持仓量同步走高=杠杆多头拥挤："
+                   "高费率且 OI 仍在扩张时，48 小时内出现剧烈回调的概率显著上升。",
+        code='''def factor(df):
+    fr = df["funding_rate"].rolling(3).mean()
+    oi_chg = df["open_interest"] / df["open_interest"].shift(24) - 1.0
+    return -(fr * oi_chg.clip(lower=0.0))
+''',
+        validated=False,
+    ),
+    "adx_14": BuiltinFactor(
+        name="adx_14",
+        family="trend",
+        hypothesis="ADX 方向化：ADX 只衡量趋势强度，不辨方向；"
+                   "乘上 +DI/-DI 的符号后才能当方向性因子用（强趋势顺向）。",
+        code='''def factor(df):
+    n = 14.0
+    up = df["high"].diff()
+    dn = -df["low"].diff()
+    plus = np.where((up > dn) & (up > 0.0), up, 0.0)
+    minus = np.where((dn > up) & (dn > 0.0), dn, 0.0)
+    tr = np.maximum(df["high"] - df["low"],
+                    np.maximum((df["high"] - df["close"].shift()).abs(),
+                               (df["low"] - df["close"].shift()).abs()))
+    atr = tr.ewm(alpha=1.0 / n, adjust=False).mean().replace(0.0, np.nan)
+    pdi = pd.Series(plus, index=df.index).ewm(alpha=1.0 / n, adjust=False).mean() / atr * 100.0
+    mdi = pd.Series(minus, index=df.index).ewm(alpha=1.0 / n, adjust=False).mean() / atr * 100.0
+    dx = (pdi - mdi).abs() / (pdi + mdi).replace(0.0, np.nan) * 100.0
+    adx = dx.ewm(alpha=1.0 / n, adjust=False).mean()
+    return adx * np.sign(pdi - mdi)
+''',
+        validated=False,
+    ),
+    "aroon_25": BuiltinFactor(
+        name="aroon_25",
+        family="trend",
+        hypothesis="Aroon 振荡器：最高价/最低价出现的**新鲜度**之比。"
+                   "新高刚出现（Aroon Up 高）说明趋势还在，越久没创新高越可能转势。",
+        code='''def factor(df):
+    n = 25.0
+    up = df["high"].rolling(int(n) + 1).apply(
+        lambda s: 100.0 * float(np.argmax(s)) / n, raw=True)
+    dn = df["low"].rolling(int(n) + 1).apply(
+        lambda s: 100.0 * float(np.argmin(s)) / n, raw=True)
+    return up - dn
+''',
+        validated=False,
+    ),
+    "choppiness_14": BuiltinFactor(
+        name="choppiness_14",
+        family="structure",
+        hypothesis="震荡指数：路径长度 / 净位移 的对数比。"
+                   "数值低=单边趋势（顺势），高=来回震荡（该收手）。",
+        code='''def factor(df):
+    n = 14.0
+    tr = np.maximum(df["high"] - df["low"],
+                    np.maximum((df["high"] - df["close"].shift()).abs(),
+                               (df["low"] - df["close"].shift()).abs()))
+    rng = (df["high"].rolling(int(n)).max()
+           - df["low"].rolling(int(n)).min()).replace(0.0, np.nan)
+    chop = 100.0 * np.log10(tr.rolling(int(n)).sum() / rng) / np.log10(n)
+    return (50.0 - chop) / 50.0
+''',
+        validated=False,
+    ),
+    "keltner_position": BuiltinFactor(
+        name="keltner_position",
+        family="trend",
+        hypothesis="Keltner 通道位置：用 ATR 而非标准差做带宽，比布林带更不容易被单根"
+                   "跳空扭曲；贴着上轨说明趋势推动力仍在。",
+        code='''def factor(df):
+    ema = df["close"].ewm(span=20, adjust=False).mean()
+    tr = np.maximum(df["high"] - df["low"],
+                    np.maximum((df["high"] - df["close"].shift()).abs(),
+                               (df["low"] - df["close"].shift()).abs()))
+    atr = tr.rolling(20).mean()
+    width = (2.0 * atr).replace(0.0, np.nan)
+    return (df["close"] - ema) / width
+''',
+        validated=False,
+    ),
+    "cci_20": BuiltinFactor(
+        name="cci_20",
+        family="reversal",
+        hypothesis="CCI(20)：典型价偏离其均值的程度，用平均绝对偏差标准化，"
+                   "比 RSI 更早捕捉极端；取负号，高位超买视为看跌。",
+        code='''def factor(df):
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    ma = tp.rolling(20).mean()
+    dev = (tp - ma).abs().rolling(20).mean().replace(0.0, np.nan)
+    return (-(tp - ma) / (0.015 * dev)).clip(-200.0, 200.0)
+''',
+        validated=False,
+    ),
+    "roll_spread": BuiltinFactor(
+        name="roll_spread",
+        family="liquidity",
+        hypothesis="Roll 隐含价差：用相邻两期收益的负协方差反推买卖价差。"
+                   "价差越宽说明成交成本越高，需要更高预期收益补偿。",
+        code='''def factor(df):
+    dp = df["close"].diff()
+    cov = dp.rolling(48).cov(dp.shift(1))
+    # Roll 估计量只在一阶自协方差为负时有定义；其余用最近一次有效值前填，
+    # 既不把「估不出来」当成「流动性极好」，也不会整天给出空信号。
+    spread = 2.0 * np.sqrt((-cov).where(cov < 0.0)).ffill(limit=24)
+    return -(spread / df["close"])
+''',
+        validated=False,
+    ),
+    "elder_force_13": BuiltinFactor(
+        name="elder_force_13",
+        family="volume",
+        hypothesis="Elder 力度指数：价格变化 × 成交量再做 EMA 平滑，"
+                   "把「涨/跌」和「有多少钱在推」合成一个量。",
+        code='''def factor(df):
+    vol_ema = df["volume"].ewm(span=13, adjust=False).mean()
+    ef = (df["close"].diff() * df["volume"]).ewm(span=13, adjust=False).mean()
+    return ef / (df["close"] * vol_ema + 1e-9)
+''',
+        validated=False,
+    ),
+    "cmf_20": BuiltinFactor(
+        name="cmf_20",
+        family="volume",
+        hypothesis="Chaikin 资金流：用收盘在当日区间的位置给成交量加权，"
+                   "衡量是「收在高端的大量」还是「收在低端的大量」在主导。",
+        code='''def factor(df):
+    rng = (df["high"] - df["low"]).replace(0.0, np.nan)
+    mfv = ((df["close"] - df["low"]) - (df["high"] - df["close"])) / rng * df["volume"]
+    return mfv.rolling(20).sum() / df["volume"].rolling(20).sum().replace(0.0, np.nan)
+''',
+        validated=False,
+    ),
+    "return_autocorr_48": BuiltinFactor(
+        name="return_autocorr_48",
+        family="structure",
+        hypothesis="收益一阶自相关 × 近期动量：自相关为正说明趋势会延续（顺势），"
+                   "为负说明会反转（反向），同一个公式自动切换方向。",
+        code='''def factor(df):
+    ret = df["close"].pct_change()
+    ac = ret.rolling(48).corr(ret.shift(1))
+    mom = df["close"] / df["close"].shift(24) - 1.0
+    return ac * mom
+''',
+        validated=False,
+    ),
+    "atr_term_14_96": BuiltinFactor(
+        name="atr_term_14_96",
+        family="volatility",
+        hypothesis="波动率期限结构：短期 ATR 相对长期的比值。"
+                   "波动突然抬升往往意味着风险溢价先行、收益随后走弱。",
+        code='''def factor(df):
+    tr = np.maximum(df["high"] - df["low"],
+                    np.maximum((df["high"] - df["close"].shift()).abs(),
+                               (df["low"] - df["close"].shift()).abs()))
+    short = tr.rolling(14).mean()
+    long = tr.rolling(96).mean().replace(0.0, np.nan)
+    return -(short / long - 1.0)
+''',
+        validated=False,
+    ),
+    "rsi_divergence_14": BuiltinFactor(
+        name="rsi_divergence_14",
+        family="reversal",
+        hypothesis="RSI 背离：价格创 48 根新高、但 RSI 没能同步创新高时，"
+                   "上涨的内生动能在衰减（连续化处理，不做布尔判断）。",
+        code='''def factor(df):
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0.0).rolling(14).mean()
+    loss = (-delta.clip(upper=0.0)).rolling(14).mean()
+    rs = gain / loss.replace(0.0, np.nan)
+    rsi = 100.0 - 100.0 / (1.0 + rs)
+    strength = df["close"] / df["close"].rolling(48).max().replace(0.0, np.nan)
+    gap = rsi - rsi.rolling(48).max()
+    return strength * gap / 50.0
+''',
+        validated=False,
+    ),
 }
 
 
@@ -514,8 +757,10 @@ FACTOR_REQUIRES: dict[str, tuple[str, ...]] = {
     "turnover_zscore": ("quote_volume",),
     "amihud_illiquidity": ("quote_volume",),
     "basis_carry": ("basis",),
+    "basis_momentum": ("basis",),
     "oi_momentum": ("open_interest",),
     "oi_price_divergence": ("open_interest",),
+    "funding_oi_crowding": ("open_interest",),
     "taker_long_short": ("taker_ratio",),
     "account_long_short": ("ls_ratio",),
 }
