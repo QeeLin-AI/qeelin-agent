@@ -1219,6 +1219,43 @@ class TradingEngine:
         threading.Thread(target=_work, name="opportunity-scan", daemon=True).start()
         return dict(self.scan_state)
 
+    def _top_symbols(self, k: int | None = None) -> list[str]:
+        """按机会分返回前 K 个「未持仓且达阈值」的品种，供一轮内依次决策。
+
+        `auto_top_k=1` 时等价于旧的「一轮切到最强的一个」。调大后同一轮会评估多个
+        品种——这是提高交易频率最直接的一步：机会数随 K 线性增加，而不是靠调快循环
+        （循环再快，一轮也只看得见一个品种）。
+        """
+        try:
+            kk = int(k if k is not None else getattr(self.cfg.market, "auto_top_k", 1))
+        except (TypeError, ValueError):
+            kk = 1
+        kk = max(0, min(kk, 8))
+        if kk <= 0:
+            return []
+        fresh = (time.time() - float(self.scan_state.get("last_ts") or 0.0)) < 300.0
+        rows = self.opportunities if (fresh and self.opportunities) else self._scan_opportunities()
+        if not rows:
+            return []
+        held = set(self._positions_map().keys())
+        thr = float(getattr(self.cfg.market, "rotate_min_score", 0.0) or 0.0)
+        ranked: list[tuple[float, str]] = []
+        for r in rows:
+            if r.get("error"):
+                continue
+            sym = str(r.get("symbol") or "").upper()
+            if not sym or sym in held:
+                continue
+            try:
+                score = float(r.get("score") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if score < thr:
+                continue
+            ranked.append((score, sym))
+        ranked.sort(key=lambda x: -x[0])
+        return [s for _, s in ranked[:kk]]
+
     def _pick_best_symbol(self, min_score: float | None = None) -> str | None:
         """自主选品种：扫全品种，返回机会分最大且超阈值的品种。
 
@@ -2188,28 +2225,28 @@ class TradingEngine:
                     "executed": None,
                     "error": "行情数据加载中，请稍候再启动",
                 }
-            # 自主选品种：还没到持仓上限时每 N 轮扫一次全品种，切到「未持仓且信号最强」的
-            # 品种——这是从单仓平滑过渡到多品种的入口：已有仓位的品种会被 _pick_best_symbol
-            # 排除，于是每轮开一个新品种，直到 max_concurrent_positions 打满。
-            rotated = False
+            # 选品种：按机会分取前 auto_top_k 个「未持仓且达标」的品种，本轮依次评估。
+            # top_k=1 时与旧行为完全一致（切到最强的一个、开一个仓就结束）。
+            targets: list[str] = []
             self._rotate_cycle_count += 1
             every = max(1, int(getattr(self.cfg.market, "rotate_every_cycles", 1) or 1))
             if self.cfg.market.auto_rotate \
                     and len(self._positions_map()) < self.position_limit() \
                     and self._rotate_cycle_count % every == 0:
                 try:
-                    best = self._pick_best_symbol()
-                    if best and best != self.cfg.market.symbol:
-                        self.switch_symbol(best)
-                        rotated = True
+                    targets = self._top_symbols()
+                    if not targets:
+                        # 全体弱机会时的老逻辑：退而求其次切到「明显更强」的那个
+                        best = self._pick_best_symbol()
+                        if best:
+                            targets = [best]
                 except Exception as exc:  # noqa: BLE001 - 选品种失败不阻断决策
                     self.last_error = f"自主选品种失败：{exc}"
 
             df, src = self.refresh_data()
             price = float(df["close"].iloc[-1])
-            # 有实时报价时优先用实时价，模拟盘止损才跟得上秒级行情；
-            # 刚换品种时跳过实时价（它还是旧品种的价）
-            if self.live_price_provider is not None and not rotated:
+            # 有实时报价时优先用实时价，模拟盘止损才跟得上秒级行情
+            if self.live_price_provider is not None:
                 try:
                     lp = float(self.live_price_provider() or 0.0)
                     if lp > 0:
@@ -2217,19 +2254,56 @@ class TradingEngine:
                 except Exception:  # noqa: BLE001
                     pass
             stopped = self.check_stops(price)
-            # 持仓管理员要用同一份实时价判断（模拟盘 check_stops 也用它）
-            payload = self.run_decision(price=price)
-            executed = None
-            if self.auto_execute and payload.get("order"):
-                executed = self.execute(price, reason="auto")
+
+            plan = targets or [str(self.cfg.market.symbol).upper()]
+            first_payload: dict | None = None
+            first_executed: dict | None = None
+            evaluated: list[str] = []
+            for sym in plan:
+                # 每开一仓都重新看额度：一轮内打满上限就停，不再白烧 LLM
+                if len(self._positions_map()) >= self.position_limit():
+                    break
+                sym_u = str(sym).upper()
+                if sym_u in self._positions_map():
+                    continue
+                if sym_u != str(self.cfg.market.symbol).upper():
+                    try:
+                        self.switch_symbol(sym_u)
+                    except Exception as exc:  # noqa: BLE001 - 单个品种切换失败不影响其它
+                        self.last_error = f"切换 {sym_u} 失败：{exc}"
+                        continue
+                    df, _src = self.refresh_data()
+                    if df is None or not len(df):
+                        continue
+                    # 换品种后必须用新品种的价格：拿旧价下单会直接错单
+                    price = float(df["close"].iloc[-1])
+                    if self.live_price_provider is not None:
+                        try:
+                            lp = float(self.live_price_provider() or 0.0)
+                            if lp > 0:
+                                price = lp
+                        except Exception:  # noqa: BLE001
+                            pass
+                payload = self.run_decision(price=price)
+                executed = None
+                if self.auto_execute and payload.get("order"):
+                    executed = self.execute(price, reason="auto")
+                evaluated.append(sym_u)
+                if first_payload is None:
+                    first_payload, first_executed = payload, executed
+                # 没开出仓就继续看下一个品种；开了仓则下一轮再评估（避免同轮重复加仓）
+                if executed is None:
+                    continue
+
             self.state["auto"]["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
             self._save()
             return {
                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "price": price,
                 "stopped": stopped,
-                "decision": payload.get("risk_decision"),
-                "executed": executed,
+                "decision": (first_payload or {}).get("risk_decision"),
+                "executed": first_executed,
+                "evaluated": evaluated,
             }
 
     # ------------------------------------------------------------------
@@ -2323,7 +2397,11 @@ class TradingEngine:
                 "daily": self._daily_pnl(),
                 "consecutive_losses": self.state["consecutive_losses"],
                 "last_decision": self.state.get("last_decision"),
-                "auto": self.state.get("auto", {}),
+                "auto": {
+                    **self.state.get("auto", {}),
+                    # 每轮评估几个品种：调大即提频，页面上要能看到当前值
+                    "top_k": int(getattr(self.cfg.market, "auto_top_k", 1) or 1),
+                },
                 "halt": bool(self.state.get("halt")),
                 "data_source": self.data_source,
                 "data_loading": bool(self.data_loading),

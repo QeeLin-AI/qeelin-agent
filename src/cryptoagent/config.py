@@ -62,6 +62,10 @@ class MarketConfig:
     rotate_min_score: float = 0.2
     # 扫描频率：每 N 个自动循环扫一次（1 = 每轮都扫）
     rotate_every_cycles: int = 1
+    # 每轮最多评估几个品种（1 = 保持旧行为：一轮只切一个、只开一个仓）。
+    # 调大后同一轮会依次评估前 K 个「未持仓且达标」的品种，机会数随 K 增加——
+    # 代价是每多评一个就多一次完整 LLM 决策链，别设太大（2~3 是合理区间）。
+    auto_top_k: int = 1
     # 衍生品数据（基差 / OI / taker 多空比 / 账户多空比）对齐到行情，供 C 档因子使用。
     # 只在主行情刷新时拉，机会扫描不拉；拿不到就静默降级，不影响决策。
     derivatives_enabled: bool = True

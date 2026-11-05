@@ -1758,7 +1758,7 @@ function renderStatus(s) {
   $('autoState').textContent = s.auto.running ? '运行中' : '停止';
   $('autoState').className = `badge ${s.auto.running ? 'on' : 'off'}`;
   $('autoMeta').textContent = s.auto.running
-    ? `每 ${s.auto.interval_sec}s 跑一次，自动下单：${s.auto.execute ? '是' : '否'}，上次：${s.auto.last_run || '--'}`
+    ? `每 ${s.auto.interval_sec}s 跑一次，每轮评估 ${s.auto.top_k || 1} 个品种，自动下单：${s.auto.execute ? '是' : '否'}，上次：${s.auto.last_run || '--'}`
     : '未运行';
   // 状态指示配色：运行中→启动绿/停止灰；停止→启动灰/停止红
   if ($('autoStart')) { $('autoStart').classList.toggle('active', s.auto.running); }
