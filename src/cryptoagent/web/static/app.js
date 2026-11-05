@@ -1053,6 +1053,19 @@ function costGateHtml(p) {
     <div class="muted">${esc((g.reasons || []).join('；'))}</div></div>`;
 }
 
+// 运行时长本地每秒自增：以最近一次服务器返回的 uptime_sec 为基准，
+// 每 1 秒 +1，下次状态轮询回来时自动校准（避免本地与服务器时钟偏差）。
+let _uptimeBase = null;
+function renderUptime() {
+  if (!_uptimeBase) return;
+  const total = _uptimeBase.sec + Math.floor((Date.now() - _uptimeBase.at) / 1000);
+  const txt = `已运行 ${fmtUptime(total)}`;
+  for (const id of ['uptimeTag', 'uptimeTagM']) {
+    const el = $(id);
+    if (el) el.textContent = txt;
+  }
+}
+
 function fmtUptime(sec) {
   // 只保留两级单位：天/小时、小时/分、分/秒——侧栏位置窄，写全「1天2小时3分4秒」会折行。
   const n = Math.max(0, Math.floor(Number(sec) || 0));
@@ -1617,13 +1630,15 @@ function renderStatus(s) {
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">v</span>${esc(s.server.version)}`;
   if (s.uptime_sec != null) {
-    const txt = `已运行 ${fmtUptime(s.uptime_sec)}`;
-    for (const id of ['uptimeTag', 'uptimeTagM']) {
-      const el = $(id);
-      if (!el) continue;
-      el.textContent = txt;
-      if (s.started_at) el.title = `启动于 ${s.started_at}`;
+    // 记录基准（秒 + 本地接收时刻），交给本地定时器每秒自增；标题保持启动时刻。
+    _uptimeBase = { sec: s.uptime_sec, at: Date.now() };
+    if (s.started_at) {
+      for (const id of ['uptimeTag', 'uptimeTagM']) {
+        const el = $(id);
+        if (el) el.title = `启动于 ${s.started_at}`;
+      }
     }
+    renderUptime();
   }
   renderLive(s);
   renderDataWarn(s);
@@ -2843,4 +2858,5 @@ $('themeBtn').addEventListener('click', () => {
   // /api/status 不现场打交易所——实时价来自 ticker 线程，实盘权益 20 秒缓存，
   // 其余全是内存数据，所以这个频率不会把签名接口刷爆。
   setInterval(poll, 3000);
+  setInterval(renderUptime, 1000); // 运行时长每秒跳动
 })();
