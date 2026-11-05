@@ -1054,7 +1054,7 @@ function costGateHtml(p) {
 }
 
 // 运行时长本地每秒自增：以最近一次服务器返回的 uptime_sec 为基准，
-// 每 1 秒 +1，下次状态轮询回来时自动校准（避免本地与服务器时钟偏差）。
+// 用真实墙钟时间推算已运行秒数（下次轮询回来自动校准，规避时钟偏差）。
 let _uptimeBase = null;
 function renderUptime() {
   if (!_uptimeBase) return;
@@ -1064,6 +1064,15 @@ function renderUptime() {
     const el = $(id);
     if (el) el.textContent = txt;
   }
+}
+// 自调度：把每次刷新对齐到「墙钟秒边界」，而不是用 setInterval(1000) 任其漂移。
+// 这样秒数恰好在整秒翻滚、相邻两次间隔严格等于 1 秒，跳动精准且均匀。
+function _scheduleUptimeTick() {
+  const delay = 1000 - (Date.now() % 1000);
+  setTimeout(() => {
+    renderUptime();
+    _scheduleUptimeTick();
+  }, delay);
 }
 
 function fmtUptime(sec) {
@@ -2858,5 +2867,5 @@ $('themeBtn').addEventListener('click', () => {
   // /api/status 不现场打交易所——实时价来自 ticker 线程，实盘权益 20 秒缓存，
   // 其余全是内存数据，所以这个频率不会把签名接口刷爆。
   setInterval(poll, 3000);
-  setInterval(renderUptime, 1000); // 运行时长每秒跳动
+  _scheduleUptimeTick(); // 运行时长：对齐墙钟秒边界，每秒精准均匀跳动
 })();
