@@ -268,20 +268,31 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 .panel { display: none; }
 .panel.active { display: block; }
 .page-head {
-  display: flex; align-items: flex-end; justify-content: space-between; gap: 20px;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
   margin-bottom: 26px; padding-bottom: 22px; border-bottom: 1px solid var(--border-soft);
 }
 .eyebrow {
-  display: block; font-size: 10px; font-weight: 700; letter-spacing: .17em;
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 10px; font-weight: 700; letter-spacing: .17em;
   text-transform: uppercase; color: var(--accent); margin-bottom: 10px;
+}
+.eyebrow::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .page-head h1 { margin: 0; font-size: 27px; line-height: 1.2; font-weight: 700; letter-spacing: -.04em; }
 .page-sub { margin: 8px 0 0; font-size: 13px; color: var(--muted); max-width: 640px; }
 .page-head-main { min-width: 0; }
-.page-head-aside { padding-bottom: 5px; flex: none; }
+.page-head-aside { flex: none; align-self: flex-start; }
 .ph-note {
-  font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--faint); border: 1px solid var(--border); border-radius: 99px; padding: 5px 12px;
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 99px; padding: 6px 13px;
+}
+.ph-note::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* ---------------------------------------------------------------- 卡片 */
