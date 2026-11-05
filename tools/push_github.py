@@ -60,7 +60,22 @@ st, js = api("/trees", "POST", {"base_tree": base_tree, "tree": blobs})
 new_tree = js["sha"]
 print("tree", new_tree)
 
-msg = os.environ.get("GIT_MSG") or "feat(ui): 持仓期间在总览「持仓」卡显示持仓管理员巡检状态——last_management 带时间戳，页面可判断守护线程是否仍在工作（原先 hold 时整张管理员卡片隐藏，看不出它有没有跑）"
+def _head_message() -> str:
+    """默认沿用本地 HEAD 的提交信息，避免脚本里的旧文案盖掉本次改动（可用 GIT_MSG 覆盖）。"""
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "-C", ROOT, "log", "-1", "--pretty=%B"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return out.stdout.strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+msg = os.environ.get("GIT_MSG") or _head_message() or "chore: 同步更新"
+
 st, js = api("/commits", "POST", {"message": msg, "tree": new_tree, "parents": [head]})
 commit = js["sha"]
 print("commit", commit)
