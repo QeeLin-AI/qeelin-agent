@@ -572,13 +572,14 @@ const SETTING_LABELS = {
   min_score: '选品分数门槛',
   rotate_min_score: '选品分数门槛',
 };
-// 单位：与表单输入框后缀一致（比例类 _pct 已在 _fmtSetting 里显示为百分号）。
+// 单位：与表单输入框后缀一致。比例类 _pct 已在 _fmtSetting 里显示成「X%」，
+// 所以这里只补「权益」二字，避免叠成「X% % 权益」。
 const SETTING_UNITS = {
-  max_loss_per_trade_pct: '% 权益',
-  max_position_pct: '% 权益',
-  max_margin_usage_pct: '% 权益',
-  daily_loss_limit_pct: '% 权益',
-  max_drawdown_pct: '% 权益',
+  max_loss_per_trade_pct: '权益',
+  max_position_pct: '权益',
+  max_margin_usage_pct: '权益',
+  daily_loss_limit_pct: '权益',
+  max_drawdown_pct: '权益',
   max_portfolio_notional_pct: 'x 权益',
   correlated_exposure_pct: 'x 权益',
   max_concurrent_positions: '个',
@@ -1127,26 +1128,43 @@ function costGateHtml(p) {
     <div class="muted">${esc((g.reasons || []).join('；'))}</div></div>`;
 }
 
-// 运行时长本地每秒自增：以最近一次服务器返回的 uptime_sec 为基准，
-// 用真实墙钟时间推算已运行秒数（下次轮询回来自动校准，规避时钟偏差）。
-let _uptimeBase = null;
-function renderUptime() {
-  if (!_uptimeBase) return;
-  const total = _uptimeBase.sec + Math.floor((Date.now() - _uptimeBase.at) / 1000);
-  const txt = `已运行 ${fmtUptime(total)}`;
-  for (const id of ['uptimeTag', 'uptimeTagM']) {
-    const el = $(id);
-    if (el) el.textContent = txt;
+// 运行时长本地每秒自增：以服务器返回的 uptime_sec 为锚点，用本地墙钟推算已运行秒数。
+// 用 requestAnimationFrame 逐帧检查、只在「整秒翻滚」那一刻改写文字——既不依赖
+// setTimeout 的抖动，也不会一秒内反复重绘；轮询回来只在漂移超过 2 秒时才重新锚定，
+// 避免每次轮询都因服务器/本地时钟微小偏差而偶发跳秒或重复。
+let _uptimeAnchor = null; // { sec, wall }
+let _uptimeLastSec = -1;
+let _uptimeRAF = 0;
+function _renderUptimeFrame() {
+  if (_uptimeAnchor) {
+    const total = _uptimeAnchor.sec + Math.floor((Date.now() - _uptimeAnchor.wall) / 1000);
+    if (total !== _uptimeLastSec) {
+      _uptimeLastSec = total;
+      const txt = `已运行 ${fmtUptime(total)}`;
+      for (const id of ['uptimeTag', 'uptimeTagM']) {
+        const el = $(id);
+        if (el) el.textContent = txt;
+      }
+    }
   }
+  _uptimeRAF = requestAnimationFrame(_renderUptimeFrame);
 }
-// 自调度：把每次刷新对齐到「墙钟秒边界」，而不是用 setInterval(1000) 任其漂移。
-// 这样秒数恰好在整秒翻滚、相邻两次间隔严格等于 1 秒，跳动精准且均匀。
-function _scheduleUptimeTick() {
-  const delay = 1000 - (Date.now() % 1000);
-  setTimeout(() => {
-    renderUptime();
-    _scheduleUptimeTick();
-  }, delay);
+// 服务器返回 uptime_sec 时调用：首次建立锚点；之后仅在漂移过大时纠正。
+function _anchorUptime(sec, startedAt) {
+  const wall = Date.now();
+  if (_uptimeAnchor) {
+    const expected = _uptimeAnchor.sec + Math.floor((wall - _uptimeAnchor.wall) / 1000);
+    if (Math.abs(expected - sec) <= 2) return; // 漂移很小，保持当前平滑计数，不跳秒
+  }
+  _uptimeAnchor = { sec, wall };
+  _uptimeLastSec = -1;
+  if (!_uptimeRAF) _uptimeRAF = requestAnimationFrame(_renderUptimeFrame);
+  if (startedAt) {
+    for (const id of ['uptimeTag', 'uptimeTagM']) {
+      const el = $(id);
+      if (el) el.title = `启动于 ${startedAt}`;
+    }
+  }
 }
 
 function fmtUptime(sec) {
@@ -1713,15 +1731,8 @@ function renderStatus(s) {
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">v</span>${esc(s.server.version)}`;
   if (s.uptime_sec != null) {
-    // 记录基准（秒 + 本地接收时刻），交给本地定时器每秒自增；标题保持启动时刻。
-    _uptimeBase = { sec: s.uptime_sec, at: Date.now() };
-    if (s.started_at) {
-      for (const id of ['uptimeTag', 'uptimeTagM']) {
-        const el = $(id);
-        if (el) el.title = `启动于 ${s.started_at}`;
-      }
-    }
-    renderUptime();
+    // 以服务器返回为锚点自增；仅在漂移过大时纠正，避免每次轮询都跳秒。
+    _anchorUptime(s.uptime_sec, s.started_at);
   }
   renderLive(s);
   renderDataWarn(s);
@@ -2941,5 +2952,5 @@ $('themeBtn').addEventListener('click', () => {
   // /api/status 不现场打交易所——实时价来自 ticker 线程，实盘权益 20 秒缓存，
   // 其余全是内存数据，所以这个频率不会把签名接口刷爆。
   setInterval(poll, 3000);
-  _scheduleUptimeTick(); // 运行时长：对齐墙钟秒边界，每秒精准均匀跳动
+  _uptimeRAF = requestAnimationFrame(_renderUptimeFrame); // 运行时长：逐帧检查、整秒翻滚，均匀跳动
 })();
