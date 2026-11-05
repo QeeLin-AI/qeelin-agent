@@ -98,6 +98,28 @@ document.querySelectorAll('.tab').forEach((btn) => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
 });
 
+// 顶部导航横向滚动时，两端加渐隐遮罩，避免硬切半个图标（仅移动端生效，类由 CSS 媒体查询限定）
+(function () {
+  const nav = document.querySelector('.side-scroll');
+  if (!nav) return;
+  const updateNavMask = () => {
+    const max = nav.scrollWidth - nav.clientWidth;
+    nav.classList.toggle('nav-more', nav.scrollLeft < max - 1);
+    nav.classList.toggle('nav-prev', nav.scrollLeft > 1);
+  };
+  nav.addEventListener('scroll', updateNavMask, { passive: true });
+  window.addEventListener('resize', updateNavMask);
+  // 切 tab 后若激活项被遮在边缘，滚到可见并刷新遮罩
+  document.querySelectorAll('.tab').forEach((btn) => btn.addEventListener('click', () => {
+    requestAnimationFrame(() => {
+      const active = nav.querySelector('.tab.active');
+      if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      updateNavMask();
+    });
+  }));
+  updateNavMask();
+})();
+
 // 多仓时点总览的「持仓」卡 → 跳到交易页并定位到持仓表。
 // 单仓不响应：那一档已经把方向和开仓价都写在卡上了，没有「明细」可看，
 // 让整张卡可点反而会变成误触。
