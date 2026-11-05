@@ -12,6 +12,8 @@
   不同杠杆、不同止损宽度的仓位共用一套参数；
 - 只在持仓时运行。此时开仓决策本来就是 skipped，规则计算不增加任何网络/LLM 成本；
   `llm_explain` 默认关闭，打开才会多一次 LLM 调用。
+- LLM 接入分两级：`llm_explain` 只写解释；`llm_shadow`（影子模式）额外给独立退出意见，
+  但**只记日志、绝不改变动作**。两者共用同一次调用，由 engine 的谷时/冷却闸门控制频率。
 """
 from __future__ import annotations
 
@@ -28,6 +30,20 @@ SYSTEM_POSITION_MANAGER = (
     "你是持仓管理员。你只解释已经由规则引擎做出的持仓管理动作，不要建议新动作、"
     "不要发明数字、不要开新仓。用一两句话说明这个动作在权衡什么（锁定利润、"
     "控制时间成本、避免趋势反转回吐），中文，不超过 60 字。"
+)
+
+SYSTEM_SHADOW = (
+    "你是持仓管理员的独立复核员。只依据给定数字判断，不要发明数据、不要建议开新仓、"
+    "不要建议放宽止损。explain 只解释规则已做出的动作；action 是你的独立退出意见"
+    "（hold / tighten / close），只能是维持或提前退出。输出严格 JSON，中文，"
+    "每个文本字段不超过 60 字。"
+)
+
+SHADOW_SCHEMA = (
+    "- explain: 用一两句话解释规则动作在权衡什么\n"
+    "- action: hold 或 tighten 或 close（你的独立意见）\n"
+    "- confidence: 0 到 1 之间的数字\n"
+    "- reason: 给出该独立意见的理由"
 )
 
 
@@ -86,7 +102,32 @@ def _atr_pct(df: pd.DataFrame, price: float) -> float:
     return 0.01
 
 
-def _hold_state(pos: dict, df: pd.DataFrame, price: float) -> dict:
+def _held_bars(pos: dict, df: pd.DataFrame, from_index: bool = True) -> int:
+    """持有根数。
+
+    用「最后一根 K 线的时间 - 开仓时间」而不是 `time.time() - 开仓时间`：
+    行情停更 / 数据源切换时，墙钟会继续把 bars 往上加，可能误触发时间止损。
+    `.timestamp()` 对 naive 索引按本地时区解释，与 `_opened_epoch()` 的口径一致。
+    """
+    opened = _opened_epoch(pos)
+    if opened is None:
+        return 0
+    step = _bar_seconds(df)
+    if from_index:
+        try:
+            last = pd.DatetimeIndex(df.index)[-1]
+            last_epoch = float(last.timestamp())
+            # K 线明显早于开仓（回测/测试/数据停更/时区错位）时不能按索引算，
+            # 否则 bars 会被夹成 0、时间止损永远不触发 —— 回退墙钟估算。
+            if last_epoch >= opened:
+                return max(0, int((last_epoch - opened) / step))
+        except Exception:  # noqa: BLE001 - 索引异常时回退墙钟估算
+            pass
+    return max(0, int((time.time() - opened) / step))
+
+
+def _hold_state(pos: dict, df: pd.DataFrame, price: float,
+                from_index: bool = True) -> dict:
     """把仓位与行情整理成规则需要的最小状态。"""
     side = str(pos.get("side") or "LONG").upper()
     sign = 1.0 if side.startswith("L") else -1.0
@@ -101,10 +142,7 @@ def _hold_state(pos: dict, df: pd.DataFrame, price: float) -> dict:
         r_pct = abs(entry - stop) / entry
     r_pct = max(r_pct, 1e-4)
 
-    opened = _opened_epoch(pos)
-    bars = 0
-    if opened is not None:
-        bars = max(0, int((time.time() - opened) / _bar_seconds(df)))
+    bars = _held_bars(pos, df, from_index)
 
     fav = (price - entry) / entry * sign
     # 开仓以来的极值（含当前价）；窗口按持有根数截取，避免把开仓前的行情算进来
@@ -135,8 +173,9 @@ def _reversal(st: dict, df: pd.DataFrame, price: float, cfg: PositionConfig,
     """趋势反转：均线转向 + 近 3 根反向动量，或因子强烈反向。"""
     sign = st["sign"]
     c = df["close"].astype(float)
-    if len(c) >= 50:
-        ema_slow = c.ewm(span=48, adjust=False).mean()
+    span = max(10, int(getattr(cfg, "reversal_ema_bars", 48) or 48))
+    if len(c) >= span + 2:
+        ema_slow = c.ewm(span=span, adjust=False).mean()
         below = sign * (float(c.iloc[-1]) - float(ema_slow.iloc[-1])) < 0
         mom = 0.0
         if len(c) >= 4:
@@ -158,13 +197,14 @@ def manage_position(
     price: float,
     cfg: PositionConfig | None = None,
     composite: float | None = None,
+    composite_ts: float | None = None,
 ) -> PositionDecision:
     """纯规则：返回 hold / tighten / close。绝不抛异常，异常一律退化为 hold。"""
     cfg = cfg or PositionConfig()
     if not cfg.enabled or df is None or len(df) < 20 or price <= 0:
         return PositionDecision("hold", "持仓管理员未启用或数据不足")
     try:
-        st = _hold_state(pos, df, price)
+        st = _hold_state(pos, df, price, bool(getattr(cfg, "bars_from_index", True)))
         if not st["valid"]:
             return PositionDecision("hold", "仓位缺少开仓价/止损，跳过管理")
 
@@ -174,6 +214,16 @@ def manage_position(
             "atr_pct": round(st["atr_pct"], 5),
             "side": st["side"],
         }
+
+        # 机会扫描的 composite 有缓存：过期信号不该拿来触发「提前平仓」。
+        # 没带时间戳时保持旧行为（调用方还拿不到 ts），有 ts 才做新鲜度校验。
+        max_age = int(getattr(cfg, "composite_max_age_sec", 300) or 0)
+        if composite is not None and composite_ts is not None and max_age > 0:
+            age = max(0.0, time.time() - float(composite_ts))
+            details["composite_age_sec"] = round(age, 1)
+            if age > max_age:
+                composite = None
+                details["composite_stale"] = True
 
         # 1) 时间止损：横盘耗时间、资金效率太低
         if st["bars"] >= int(cfg.max_hold_bars) and st["fav"] < cfg.min_progress_r * st["r_pct"]:
@@ -190,7 +240,23 @@ def manage_position(
             if hit:
                 return PositionDecision("close", why, details=details)
 
-        # 3) 移动止损：浮盈达到 1R 后先保本，再按 ATR 跟踪极值
+        # 3) 峰值回撤退出：新增行为，默认关闭（需模拟盘验证后再开）。
+        #    只针对「曾经浮盈到过 1R 以上、又回吐 N×R」的仓位，避免把正常震荡当反转。
+        if (getattr(cfg, "peak_drawdown_exit_enabled", False)
+                and st["bars"] >= int(cfg.reversal_min_hold_bars)):
+            peak_fav = (st["peak"] - st["entry"]) / st["entry"] * st["sign"]
+            drawdown_r = (peak_fav - st["fav"]) / st["r_pct"]
+            details["peak_fav_r"] = round(peak_fav / st["r_pct"], 2)
+            details["drawdown_r"] = round(drawdown_r, 2)
+            if (peak_fav >= cfg.trail_activate_r * st["r_pct"]
+                    and drawdown_r >= float(getattr(cfg, "peak_drawdown_r", 1.0))):
+                return PositionDecision(
+                    "close",
+                    f"峰值回撤：浮盈自高点回吐 {drawdown_r:.2f}R，提前退出保住利润",
+                    details=details,
+                )
+
+        # 4) 移动止损：浮盈达到 1R 后先保本，再按 ATR 跟踪极值
         if st["fav"] >= cfg.trail_activate_r * st["r_pct"]:
             sign, dist = st["sign"], cfg.trail_atr_mult * st["atr_pct"]
             if sign > 0:
@@ -230,6 +296,70 @@ def explain_management(llm, decision: PositionDecision, pos: dict) -> str:
             f"规则理由：{decision.reason}。请只解释权衡，不要建议别的动作。"
         )
         resp = llm.text(SYSTEM_POSITION_MANAGER, user, mock=decision.reason)
-        return str(getattr(resp, "text", "") or "").strip()[:200]
+        return str(resp.content or "").strip()[:200]
     except Exception:  # noqa: BLE001
         return ""
+
+
+def shadow_review(llm, decision: PositionDecision, pos: dict) -> dict | None:
+    """影子模式：LLM 独立给一份退出意见，只用于对照记录，绝不触发动作。
+
+    用 `llm.json()`（带 schema 校验 + 重试 + mock 兜底），输出不合规时返回 None。
+    """
+    d = decision.details or {}
+    mock = {
+        "explain": decision.reason,
+        "action": decision.action,
+        "confidence": 0.0,
+        "reason": "规则兜底（模型不可用）",
+    }
+    user = (
+        f"品种 {pos.get('symbol', '')}，方向 {pos.get('side', '')}，"
+        f"开仓价 {pos.get('entry')}，持有 {d.get('bars_held', '--')} 根，"
+        f"浮盈 {d.get('floating_r', '--')}R，ATR% {d.get('atr_pct', '--')}，"
+        f"因子复合 {d.get('factor_composite', '--')}。\n"
+        f"规则动作：{decision.action}；规则理由：{decision.reason}。\n"
+        f"请给出 explain（解释规则动作）与 action（你的独立退出意见）。"
+    )
+    try:
+        data, resp = llm.json(SYSTEM_SHADOW, user, SHADOW_SCHEMA, mock)
+        act = str(data.get("action") or "hold").strip().lower()
+        if act not in ("hold", "tighten", "close"):
+            act = "hold"
+        try:
+            conf = max(0.0, min(1.0, float(data.get("confidence") or 0.0)))
+        except (TypeError, ValueError):
+            conf = 0.0
+        return {
+            "explain": str(data.get("explain") or "").strip()[:200],
+            "action": act,
+            "confidence": round(conf, 3),
+            "reason": str(data.get("reason") or "").strip()[:200],
+            "source": str(getattr(resp, "provider", "") or ""),
+            "degraded": bool(getattr(resp, "degraded", False)),
+        }
+    except Exception:  # noqa: BLE001 - 复核是旁路
+        return None
+
+
+def review_management(llm, cfg, decision: PositionDecision, pos: dict) -> dict:
+    """一次 LLM 调用同时产出「解释」和「影子意见」；两个开关都关时零调用。
+
+    返回 `{"explanation": str, "shadow": dict|None}`。调用方只把结果写进决策记录，
+    **绝不据此修改 action** —— 影子意见正确与否只能靠日志事后对照。
+    """
+    out: dict[str, Any] = {"explanation": "", "shadow": None}
+    want_shadow = bool(getattr(cfg, "llm_shadow", False))
+    want_explain = bool(getattr(cfg, "llm_explain", False)) and decision.action != "hold"
+    if not want_shadow and not want_explain:
+        return out
+    if want_shadow:
+        sh = shadow_review(llm, decision, pos)
+        if sh:
+            out["shadow"] = sh
+            out["explanation"] = sh["explain"]
+            return out
+        # 影子调用失败 → 退到纯解释（仍不阻断动作）
+    if want_explain:
+        out["explanation"] = explain_management(llm, decision, pos)
+    return out

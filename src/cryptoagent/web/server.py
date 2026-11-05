@@ -1605,7 +1605,80 @@ class WebApp:
                 save_config(self.cfg, config_path())
             except OSError:
                 saved = False
+        # provider/model/Key 变了，持仓管理员的共享客户端也要按新配置重建
+        self.engine.invalidate_position_llm()
         data = self.llm_settings()
+        data["saved"] = saved
+        return data
+
+    def position_settings(self) -> dict:
+        """读持仓管理员配置：LLM 接入开关 + 退出规则 + 用量/影子对照（只读诊断）。"""
+        p = self.cfg.position
+        return {
+            "llm_explain": bool(p.llm_explain),
+            "llm_shadow": bool(p.llm_shadow),
+            "llm_offpeak_only": bool(p.llm_offpeak_only),
+            "llm_min_interval_sec": int(p.llm_min_interval_sec),
+            "bars_from_index": bool(p.bars_from_index),
+            "reversal_ema_bars": int(p.reversal_ema_bars),
+            "composite_max_age_sec": int(p.composite_max_age_sec),
+            "peak_drawdown_exit_enabled": bool(p.peak_drawdown_exit_enabled),
+            "peak_drawdown_r": float(p.peak_drawdown_r),
+            "offpeak": offpeak_info(self.cfg.llm),
+            "usage": dict(self.engine.position_llm_usage),
+            "shadow_recent": list(self.engine.llm_shadow_log[-10:]),
+        }
+
+    def set_position_settings(self, payload: dict) -> dict:
+        """热更新持仓管理员配置：WebApp 与 Engine 共享同一个 AppConfig，改完立即生效。
+
+        LLM 配置变更顺带失效共享客户端；所有数值都做范围校验，畸形输入整体不动。
+        """
+        from ..config import config_path, save_config
+
+        p = self.cfg.position
+        bool_keys = ("llm_explain", "llm_shadow", "llm_offpeak_only",
+                     "bars_from_index", "peak_drawdown_exit_enabled")
+        int_keys = {
+            "llm_min_interval_sec": (0, 86400),
+            "reversal_ema_bars": (10, 200),
+            "composite_max_age_sec": (0, 3600),
+        }
+        float_keys = {"peak_drawdown_r": (0.1, 10.0)}
+        if not any(k in payload for k in (*bool_keys, *int_keys, *float_keys)):
+            raise ApiError("没有需要保存的配置", 400)
+
+        staged: dict = {}
+        for k in bool_keys:
+            if k in payload:
+                staged[k] = bool(payload[k])
+        for k, (lo, hi) in int_keys.items():
+            if k in payload:
+                try:
+                    v = int(payload[k])
+                except (TypeError, ValueError):
+                    raise ApiError(f"{k} 必须是整数", 400)
+                if not lo <= v <= hi:
+                    raise ApiError(f"{k} 需在 {lo} ~ {hi} 之间", 400)
+                staged[k] = v
+        for k, (lo, hi) in float_keys.items():
+            if k in payload:
+                try:
+                    v = float(payload[k])
+                except (TypeError, ValueError):
+                    raise ApiError(f"{k} 必须是数字", 400)
+                if not lo <= v <= hi:
+                    raise ApiError(f"{k} 需在 {lo} ~ {hi} 之间", 400)
+                staged[k] = v
+        for k, v in staged.items():
+            setattr(p, k, v)
+        self.engine.invalidate_position_llm()
+        saved = True
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            saved = False
+        data = self.position_settings()
         data["saved"] = saved
         return data
 
@@ -1959,6 +2032,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.sentiment_settings()})
         if path == "/api/settings/notify":
             return self._json({"ok": True, "data": app.notify_settings()})
+        if path == "/api/settings/position":
+            return self._json({"ok": True, "data": app.position_settings()})
         if path == "/api/scan":
             return self._json({"ok": True, "data": app.last_scan})
         if path == "/api/decisions/latest":
@@ -2035,6 +2110,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.set_sentiment_settings(payload)})
         if path == "/api/settings/notify":
             return self._json({"ok": True, "data": app.set_notify_settings(payload)})
+        if path == "/api/settings/position":
+            return self._json({"ok": True, "data": app.set_position_settings(payload)})
         if path == "/api/live":
             data = app.start_live() if payload.get("on", True) else app.stop_live()
             return self._json({"ok": True, "data": data})

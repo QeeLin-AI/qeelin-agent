@@ -205,8 +205,26 @@ class PositionConfig:
     # 实盘是否在交易所撤掉旧条件单、按新止损重挂（模拟盘改本地缓存即可）
     live_stop_adjust: bool = True
     min_adjust_interval_sec: int = 300
+    # ---- LLM 接入 ----
     # 是否让 LLM 生成一段「为什么这样管理」的解释（默认关，不增加调用成本）
     llm_explain: bool = False
+    # 影子模式：LLM 独立给出退出意见，只记日志/通知，绝不改变动作（默认关）
+    llm_shadow: bool = False
+    # 峰时（DeepSeek 原价）跳过持仓管理员的 LLM 调用，等谷时半价再跑
+    llm_offpeak_only: bool = True
+    # 同一品种两次 LLM 调用的最小间隔（秒），避免动作频繁时反复烧 token
+    llm_min_interval_sec: int = 900
+
+    # ---- 规则层（默认保持既有行为；新增退出规则一律默认关）----
+    # 趋势反转用的 EMA 跨度（按 bar 数），不再写死 48
+    reversal_ema_bars: int = 48
+    # 持有根数按 K 线索引里开仓之后的 bar 数统计（墙钟估算仅作兜底）
+    bars_from_index: bool = True
+    # 因子复合信号超过这个秒数就不用于退出判断，避免拿过期信号误平
+    composite_max_age_sec: int = 300
+    # 浮盈从峰值回撤 N×R 时提前退出（新增行为，默认关，需模拟盘验证后再开）
+    peak_drawdown_exit_enabled: bool = False
+    peak_drawdown_r: float = 1.0
 
 
 @dataclass

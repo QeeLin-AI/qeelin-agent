@@ -152,7 +152,7 @@ function showTab(name, push = true) {
   $(`tab-${name}`).classList.add('active');
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name === 'overview') { renderPnl(); fitNotifHeight(); }
-  if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); }
+  if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); }
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -443,6 +443,61 @@ async function saveNotifySettings(quiet = false) {
     return true;
   } catch (e) {
     toast('通知告警设置保存失败：' + e.message, 'err');
+    return false;
+  }
+}
+
+/* ---------------- 持仓管理员 · LLM 接入设置 ---------------- */
+async function loadPositionLlmSettings() {
+  try {
+    const d = await api('/api/settings/position');
+    $('posLlmExplain').checked = !!d.llm_explain;
+    $('posLlmShadow').checked = !!d.llm_shadow;
+    $('posLlmOffpeakOnly').checked = !!d.llm_offpeak_only;
+    $('posBarsFromIndex').checked = !!d.bars_from_index;
+    $('posPeakDrawdownEnabled').checked = !!d.peak_drawdown_exit_enabled;
+    $('posLlmMinInterval').value = d.llm_min_interval_sec;
+    $('posReversalEmaBars').value = d.reversal_ema_bars;
+    $('posCompositeMaxAge').value = d.composite_max_age_sec;
+    $('posPeakDrawdownR').value = d.peak_drawdown_r;
+    const off = d.offpeak || {};
+    $('posLlmOffpeak').textContent = off.label || '--';
+    const u = d.usage || {};
+    $('posLlmUsage').textContent =
+      `LLM 调用 ${u.calls ?? 0} 次 · 峰时跳过 ${u.skipped_offpeak ?? 0}` +
+      ` · 冷却跳过 ${u.skipped_cooldown ?? 0} · 失败 ${u.errors ?? 0}`;
+    const box = $('posLlmShadowBox');
+    const rows = d.shadow_recent || [];
+    box.innerHTML = rows.length
+      ? `<b>影子对照（最近 ${rows.length} 条）</b><br>`
+        + rows.slice(-5).reverse().map((r) =>
+          `${esc(r.symbol || '')} 规则 ${esc(r.rule_action || '')} / LLM ${esc(r.llm_action || '')}`
+          + ` · 置信 ${Number(r.confidence || 0).toFixed(2)}${r.degraded ? ' · 降级' : ''}`
+          + `<br><span class="muted">${esc(r.reason || '')}</span>`
+        ).join('<br>')
+      : '暂无影子对照记录（开启「影子复核」并产生持仓动作后显示）';
+  } catch (e) { console.error(e); }
+}
+
+async function savePositionLlmSettings() {
+  const payload = {
+    llm_explain: $('posLlmExplain').checked,
+    llm_shadow: $('posLlmShadow').checked,
+    llm_offpeak_only: $('posLlmOffpeakOnly').checked,
+    bars_from_index: $('posBarsFromIndex').checked,
+    peak_drawdown_exit_enabled: $('posPeakDrawdownEnabled').checked,
+    llm_min_interval_sec: Number($('posLlmMinInterval').value),
+    reversal_ema_bars: Number($('posReversalEmaBars').value),
+    composite_max_age_sec: Number($('posCompositeMaxAge').value),
+    peak_drawdown_r: Number($('posPeakDrawdownR').value),
+  };
+  try {
+    await api('/api/settings/position', 'POST', payload);
+    toast('持仓管理员设置已保存', 'ok');
+    loadPositionLlmSettings();
+    return true;
+  } catch (e) {
+    toast('持仓管理员设置保存失败：' + e.message, 'err');
     return false;
   }
 }
@@ -846,17 +901,63 @@ function costGateHtml(p) {
 function renderPositionManagement(d) {
   const card = $('posMgmtCard');
   if (!card) return;
-  const m = d && d.position_management;
-  const has = m && m.action && m.action !== 'hold';
+  const m = (d && d.position_management) || {};
+  const last = (d && d.position_management_last) || {};
+  const all = (d && d.position_managements) || {};
+  const shadow = (d && d.position_llm_shadow) || [];
+  const guard = (d && d.position_guard) || {};
+  // 最近一次动作 / 影子记录常驻，不再被 30 秒后的 hold 巡检冲掉
+  const has = (m.action && m.action !== 'hold') || !!last.action || shadow.length > 0;
   card.classList.toggle('hidden', !has);
   if (!has) return;
-  const cls = m.action === 'close' ? 'down' : 'up';
-  $('posMgmtBody').innerHTML = `<p>最近一次判断：<b class="${cls}">${esc(m.action)}</b>
-    · ${esc(m.reason || '')}</p>
-    ${m.new_stop ? `<p class="muted">新止损 ${fmt(m.new_stop)}</p>` : ''}
-    ${m.explanation ? `<p class="muted">${esc(m.explanation)}</p>` : ''}
-    <p class="muted">守护线程${(d.position_guard || {}).running ? '运行中' : '未运行'}，
-    每 ${(d.position_guard || {}).interval_sec || 30} 秒检查一次，不依赖自动交易循环。</p>`;
+
+  const ago = (ts) => {
+    const t = Number(ts) || 0;
+    if (!t) return '--';
+    const s = Math.max(0, Math.round(Date.now() / 1000 - t));
+    return s < 60 ? `${s}s 前` : (s < 3600 ? `${Math.floor(s / 60)}m 前` : `${Math.floor(s / 3600)}h 前`);
+  };
+  const actCn = (a) => ({ hold: '持有', tighten: '收紧止损', close: '退出' }[a] || a || '--');
+  let html = '';
+
+  if (last.action) {
+    const cls = last.action === 'close' ? 'down' : 'up';
+    html += `<div class="pm-block">
+      <div class="pm-block-title">最近一次动作 <span class="muted">${esc(ago(last.ts))}</span></div>
+      <p><b class="${cls}">${esc(actCn(last.action))}</b>${last.symbol ? ' · ' + esc(last.symbol) : ''}
+        · ${esc(last.reason || '')}</p>
+      ${last.new_stop ? `<p class="muted">新止损 ${fmt(last.new_stop)}</p>` : ''}
+      ${last.explanation ? `<p class="pm-explain">${esc(last.explanation)}</p>` : ''}
+    </div>`;
+  }
+
+  const rows = Object.entries(all).sort((a, b) => (Number(b[1].ts) || 0) - (Number(a[1].ts) || 0));
+  if (rows.length) {
+    html += `<div class="pm-block"><div class="pm-block-title">各品种巡检</div><div class="pm-rows">`;
+    for (const [sym, o] of rows.slice(0, 6)) {
+      const r = o && o.details && o.details.floating_r;
+      html += `<span class="pm-row"><b>${esc(sym)}</b>
+        <span class="${o.action === 'close' ? 'down' : (o.action === 'tighten' ? 'up' : 'muted')}">${esc(actCn(o.action))}</span>
+        ${r != null ? `<span class="muted">${Number(r) >= 0 ? '+' : ''}${Number(r).toFixed(2)}R</span>` : ''}
+        <span class="muted">${esc(ago(o.ts))}</span></span>`;
+    }
+    html += `</div></div>`;
+  }
+
+  if (shadow.length) {
+    html += `<div class="pm-block"><div class="pm-block-title">LLM 影子复核 <span class="muted">只读对照</span></div><div class="pm-rows">`;
+    for (const r of shadow.slice(-5).reverse()) {
+      html += `<span class="pm-row"><b>${esc(r.symbol || '')}</b>
+        <span>规则 ${esc(actCn(r.rule_action))}</span>
+        <span class="${r.llm_action === 'close' ? 'down' : ''}">LLM ${esc(actCn(r.llm_action))}</span>
+        <span class="muted">${esc(ago(r.ts))}</span></span>`;
+    }
+    html += `</div></div>`;
+  }
+
+  html += `<p class="muted">守护线程${guard.running ? '运行中' : '未运行'}，
+    每 ${guard.interval_sec || 30} 秒检查一次，不依赖自动交易循环。</p>`;
+  $('posMgmtBody').innerHTML = html;
 }
 
 function renderResearchAuto(a) {
@@ -2317,6 +2418,7 @@ $('llmSaveBtn').addEventListener('click', () => saveLlmSettings());
 $('llmTestBtn').addEventListener('click', testLlmSettings);
 $('sentimentSaveBtn').addEventListener('click', () => saveSentimentSettings());
 $('notifySaveBtn').addEventListener('click', () => saveNotifySettings());
+$('posLlmSaveBtn').addEventListener('click', () => savePositionLlmSettings());
 $('sentimentSource').addEventListener('change', toggleCpKeyRow);
 
 /* ---------------- 桌面窗口控制（Electron） ---------------- */

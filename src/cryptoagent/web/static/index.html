@@ -678,6 +678,74 @@
         </div>
       </div>
 
+      <div class="set-group">
+        <div class="set-group-title">持仓管理员 · LLM 接入（独立保存）</div>
+        <div class="set-status-line">
+          <span id="posLlmOffpeak" class="tag">--</span>
+          <span class="muted" id="posLlmUsage" style="font-size:11.5px">--</span>
+        </div>
+        <div class="set-switch-list">
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">规则动作解释</span>
+              <span class="d">开仓后的移动止损 / 时间止损 / 反转退出发生时，让 LLM 写一句权衡说明</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posLlmExplain" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">影子复核（只记录，不改动作）</span>
+              <span class="d">LLM 独立给退出意见，与规则结果对照留档；绝不触发平仓或放宽止损</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posLlmShadow" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">峰时跳过 LLM（谷时半价再跑）</span>
+              <span class="d">与因子研究的峰谷策略分开控制，避免持仓期间在原价时段反复调用</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posLlmOffpeakOnly" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">持有根数按 K 线计数</span>
+              <span class="d">行情停更时不再用墙钟虚增持有根数，避免误触发时间止损</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posBarsFromIndex" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">峰值回撤退出（实验性）</span>
+              <span class="d">浮盈曾到过 1R 又回吐 N×R 时提前平仓；默认关闭，需模拟盘验证后再开</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posPeakDrawdownEnabled" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+        </div>
+        <div class="set-grid">
+          <label class="set-field">
+            <span class="set-label">LLM 冷却（秒 / 每品种）</span>
+            <input id="posLlmMinInterval" type="number" min="0" max="86400" step="60" />
+          </label>
+          <label class="set-field">
+            <span class="set-label">反转 EMA 跨度（根）</span>
+            <input id="posReversalEmaBars" type="number" min="10" max="200" step="1" />
+          </label>
+          <label class="set-field">
+            <span class="set-label">因子信号有效期（秒）</span>
+            <input id="posCompositeMaxAge" type="number" min="0" max="3600" step="30" />
+          </label>
+          <label class="set-field">
+            <span class="set-label">峰值回撤阈值（R）</span>
+            <input id="posPeakDrawdownR" type="number" min="0.1" max="10" step="0.1" />
+          </label>
+        </div>
+        <p class="set-hint">开关改完立即生效，无需重启。影子意见只写日志供事后对照；退出动作始终由确定性规则终审。</p>
+        <div id="posLlmShadowBox" class="set-hint"></div>
+        <div class="actions">
+          <button id="posLlmSaveBtn" class="btn primary">保存持仓管理员设置</button>
+        </div>
+      </div>
+
       <div class="actions">
         <button id="llmSaveBtn" class="btn primary">保存</button>
         <button id="llmTestBtn" class="btn ghost">测试连接</button>

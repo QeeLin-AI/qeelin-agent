@@ -19,7 +19,7 @@ import pandas as pd
 
 from .agents.calibration import record_accuracy, summary as calibration_summary, weights_from_accuracy
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
-from .agents.position_manager import explain_management, manage_position
+from .agents.position_manager import manage_position, review_management
 from .config import AppConfig
 from .data import (
     KL_INTERVALS,
@@ -109,6 +109,22 @@ class TradingEngine:
         )
         self.last_management: dict = {}
         self.last_management_by_symbol: dict[str, dict] = {}
+        # 持仓管理员 LLM：共享客户端、每仓冷却、最近一次动作、影子对照日志。
+        # 后四项随 state 落盘，重启后解释/审计不会丢，也不会重复烧 token。
+        self._position_llm = None
+        self._position_llm_at: dict[str, float] = dict(
+            self.state.setdefault("position_llm_at", {}) or {}
+        )
+        self.last_management_action: dict = dict(
+            self.state.get("last_management_action") or {}
+        )
+        self.llm_shadow_log: list[dict] = list(
+            self.state.get("llm_shadow_log") or []
+        )[-50:]
+        self.position_llm_usage: dict = dict(self.state.get("position_llm_usage") or {})
+        for _k, _v in {"calls": 0, "errors": 0, "skipped_offpeak": 0,
+                       "skipped_cooldown": 0}.items():
+            self.position_llm_usage.setdefault(_k, _v)
         # 各品种最新价（非活跃品种也要实时刷新，标记价/浮盈都读它）
         self._last_prices: dict[str, float] = {}
         self._price_ts: dict[str, float] = {}
@@ -1414,6 +1430,40 @@ class TradingEngine:
             out[sym] = px
         return out
 
+    # ---- 持仓管理员的 LLM 闸门 ----------------------------------------
+    def _position_llm_client(self):
+        """持仓管理员专用共享 LLMClient：配置变更后由 invalidate 清掉再重建。"""
+        if self._position_llm is None:
+            from .agents.llm import LLMClient
+            self._position_llm = LLMClient(self.cfg.llm)
+        return self._position_llm
+
+    def invalidate_position_llm(self) -> None:
+        """LLM provider/model/Key 改变后调用，避免旧客户端继续用老配置。"""
+        self._position_llm = None
+
+    def _position_llm_allowed(self, sym: str) -> bool:
+        """谷时优先 + 每仓冷却。任一不满足就跳过本次调用，绝不因 LLM 拖慢退出。"""
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None:
+            return False
+        now = time.time()
+        if bool(getattr(cfg, "llm_offpeak_only", True)):
+            from .agents.llm import is_offpeak
+            if not is_offpeak(self.cfg.llm):
+                self.position_llm_usage["skipped_offpeak"] += 1
+                return False
+        gap = max(0, int(getattr(cfg, "llm_min_interval_sec", 900) or 0))
+        last = float(self._position_llm_at.get(sym, 0.0) or 0.0)
+        if gap and now - last < gap:
+            self.position_llm_usage["skipped_cooldown"] += 1
+            return False
+        self._position_llm_at[sym] = now
+        self.state["position_llm_at"] = dict(self._position_llm_at)
+        self.position_llm_usage["calls"] += 1
+        self.state["position_llm_usage"] = dict(self.position_llm_usage)
+        return True
+
     def _manage_open_position(self, pos: dict, price: float | None = None) -> dict:
         """包装：抢锁防重入（自动循环与守护线程可能同时进入）。"""
         lock = getattr(self, "_guard_lock", None)
@@ -1434,6 +1484,17 @@ class TradingEngine:
             # last_management 保留「当前品种」那一份，老前端只读这一个字段
             if sym == str(self.cfg.market.symbol).upper() or not self.last_management:
                 self.last_management = out
+            # 最近一次「有动作」单独留档：下一轮 hold 会覆盖 last_management，
+            # 但页面上这条（含 LLM 解释）必须继续展示，否则用户根本看不到它。
+            if out.get("action") not in (None, "hold"):
+                slim = {k: out[k] for k in ("action", "reason", "new_stop",
+                                            "explanation", "ts", "symbol") if k in out}
+                det = dict(out.get("details") or {})
+                det.pop("close_result", None)   # 订单回执可能很大，不进状态存档
+                slim["details"] = det
+                self.last_management_action = slim
+                self.state["last_management_action"] = slim
+                self._save()
             return out
         finally:
             lock.release()
@@ -1453,8 +1514,17 @@ class TradingEngine:
             px = float(price) if price and price > 0 else self._quote_for(sym)
             if px <= 0:
                 return {"action": "hold", "reason": "取不到最新价，本轮不管理", "details": {}}
-            dec = manage_position(pos, df, px, cfg,
-                                  composite=self._opportunity_composite(sym))
+            composite = self._opportunity_composite(sym)
+            # composite 来自机会扫描/短缓存，可能已经过期；把时间戳一起交给规则层做新鲜度校验
+            comp_ts = None
+            hit = (getattr(self, "_composite_cache", None) or {}).get(sym)
+            if hit:
+                comp_ts = float(hit[0])
+            elif any(r.get("symbol") == sym and not r.get("error")
+                     for r in (self.opportunities or [])):
+                comp_ts = float(self.scan_state.get("last_ts") or 0) or None
+            dec = manage_position(pos, df, px, cfg, composite=composite,
+                                  composite_ts=comp_ts)
 
             if dec.action == "close":
                 res = self.close(px, reason=f"持仓管理员：{dec.reason}", symbol=sym)
@@ -1485,12 +1555,35 @@ class TradingEngine:
                 self._notify("info", f"{sym} 移动止损已更新", dec.reason,
                              {"symbol": sym, "new_stop": dec.new_stop})
 
-            if cfg.llm_explain and dec.action != "hold":
+            # 解释 / 影子复核共用一次 LLM 调用，且受谷时 + 每仓冷却闸门约束。
+            # 影子意见只写日志，绝不参与 action —— 规则终审的地位不变。
+            want_llm = (
+                (bool(getattr(cfg, "llm_explain", False)) and dec.action != "hold")
+                or bool(getattr(cfg, "llm_shadow", False))
+            )
+            if want_llm and self._position_llm_allowed(sym):
                 try:
-                    from .agents.llm import LLMClient
-                    dec.explanation = explain_management(LLMClient(self.cfg.llm), dec, pos)
-                except Exception:  # noqa: BLE001 - 解释是旁路
-                    pass
+                    review = review_management(self._position_llm_client(), cfg, dec, pos)
+                    dec.explanation = review.get("explanation") or ""
+                    sh = review.get("shadow")
+                    if sh:
+                        rec = {
+                            "ts": time.time(), "symbol": sym,
+                            "rule_action": dec.action, "rule_reason": dec.reason,
+                            "llm_action": sh.get("action"),
+                            "confidence": sh.get("confidence"),
+                            "reason": sh.get("reason"),
+                            "source": sh.get("source"),
+                            "degraded": sh.get("degraded"),
+                        }
+                        self.llm_shadow_log.append(rec)
+                        self.llm_shadow_log = self.llm_shadow_log[-50:]
+                        self.state["llm_shadow_log"] = list(self.llm_shadow_log)
+                        dec.details["shadow_action"] = sh.get("action")
+                    self._save()
+                except Exception:  # noqa: BLE001 - LLM 是旁路，绝不阻断退出动作
+                    self.position_llm_usage["errors"] += 1
+                    self.state["position_llm_usage"] = dict(self.position_llm_usage)
             return dec.to_dict()
         except Exception as exc:  # noqa: BLE001 - 持仓管理绝不阻断主流程
             return {"action": "hold", "reason": f"持仓管理异常，保守不动：{type(exc).__name__}",
@@ -2059,6 +2152,11 @@ class TradingEngine:
                 # position_management 只给「当前品种」，全量在 position_managements
                 "position_management": self._latest_management(cur_sym),
                 "position_managements": dict(self.last_management_by_symbol),
+                # 最近一次「有动作」（含 LLM 解释）单独保留，不会被下一轮 hold 冲掉
+                "position_management_last": dict(self.last_management_action),
+                # 持仓管理员 LLM 的用量与影子对照（只读审计，不参与决策）
+                "position_llm_usage": dict(self.position_llm_usage),
+                "position_llm_shadow": list(self.llm_shadow_log[-10:]),
                 "position_guard": {
                     "running": bool(getattr(self, "_guard_thread", None)
                                     and self._guard_thread.is_alive()),
