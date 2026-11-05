@@ -26,6 +26,50 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const sideCn = (s) => (s === 'LONG' ? '多' : s === 'SHORT' ? '空' : (s || ''));
 // 成交动作中文：开仓 / 平仓（交易所原始成交已带 买入/卖出 则原样保留）
 const actionCn = (a) => (a === 'OPEN' ? '开仓' : a === 'CLOSE' ? '平仓' : (a || ''));
+/* 「最近成交」展示合并：同一时间段（沿用 f.ts 现有秒级展示粒度）+ 同品种 + 同方向
+   的多笔成交合并成一条展示记录。仅作用于渲染结果：s.fills / lastStatus 原始明细
+   不做任何修改，fillMeta 与平均滑点仍基于原始明细计算。
+   - 组内只有 1 笔：原样返回，完全按原规则展示（含 title、动作、涨跌色等），零影响。
+   - 多笔：数量/手续费/盈亏求和，成交价/计划价/滑点按数量加权平均，动作与原因去重并列，
+     并用 __n 标记笔数（品种列渲染成「N 笔合并」），完整体现该组汇总信息。
+   - 输出顺序按每组首次出现的位置（Map 保序），与接口返回的最新在前顺序一致。 */
+const mergeFillsForDisplay = (fills) => {
+  const groups = new Map();
+  fills.forEach((f) => {
+    const key = `${f.ts || ''}\u0001${f.symbol || ''}\u0001${f.side || ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  });
+  const num = (v) => (typeof v === 'number' ? v : Number(v));
+  const valid = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(num(v));
+  return Array.from(groups.values()).map((rows) => {
+    if (rows.length === 1) return rows[0];
+    const sum = (k) => rows.reduce((a, f) => a + (valid(f[k]) ? num(f[k]) : 0), 0);
+    const wavg = (k) => {
+      let w = 0, acc = 0;
+      rows.forEach((f) => {
+        const q = valid(f.qty) ? num(f.qty) : 0;
+        if (q > 0 && valid(f[k])) { w += q; acc += q * num(f[k]); }
+      });
+      return w > 0 ? acc / w : null;
+    };
+    const acts = [...new Set(rows.map((f) => actionCn(f.action)).filter(Boolean))];
+    const reasons = [...new Set(rows.map((f) => f.reason).filter(Boolean))];
+    const base = rows[0];
+    return {
+      ...base,
+      qty: sum('qty'),
+      price: wavg('price') ?? base.price,
+      plan_price: wavg('plan_price'),
+      slippage_bps: wavg('slippage_bps'),
+      fee: rows.some((f) => valid(f.fee)) ? sum('fee') : undefined,
+      pnl: rows.some((f) => valid(f.pnl)) ? sum('pnl') : undefined,
+      reason: reasons.join(' / ') || undefined,
+      __n: rows.length,
+      __acts: acts.join(' / ') || '--',
+    };
+  });
+};
 // 数据源标签：把 `binance-vision:BTCUSDT 1h（无资金费率）` 压成 `币安镜像 · 1h`
 const shortSource = (src) => {
   if (!src) return '--';
@@ -1347,19 +1391,23 @@ function renderStatus(s) {
       const xs = s.fills.map((f) => f.slippage_bps).filter((x) => x !== null && x !== undefined);
       return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
     })();
+    // 展示层合并：仅改变渲染出的行，s.fills 原始明细与上面的平均滑点统计均不受影响
+    const shown = mergeFillsForDisplay(s.fills);
     if ($('fillMeta')) {
-      $('fillMeta').textContent = `开仓 / 平仓流水（最近 ${s.fills.length} 条）`
+      const mergeNote = shown.length < s.fills.length ? ` · 合并显示为 ${shown.length} 条` : '';
+      $('fillMeta').textContent = `开仓 / 平仓流水（最近 ${s.fills.length} 条${mergeNote}）`
         + (avgSlip !== null ? ` · 平均滑点 ${avgSlip >= 0 ? '+' : ''}${avgSlip.toFixed(2)}bps` : '');
     }
-    tb.innerHTML = s.fills.map((f) => {
+    tb.innerHTML = shown.map((f) => {
       const cls = f.side === 'LONG' ? 'up' : 'down';
       const slip = f.slippage_bps !== null && f.slippage_bps !== undefined
         ? `<span class="${f.slippage_bps > 0 ? 'down' : 'up'}">${f.slippage_bps >= 0 ? '+' : ''}${Number(f.slippage_bps).toFixed(2)}</span>` : '--';
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
+      const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
       return `<tr${tip}>
-      <td class="mono">${esc(f.symbol || s.symbol)}</td>
+      <td class="mono">${esc(f.symbol || s.symbol)}<span class="dir-flag ${cls}">${esc(sideCn(f.side))}</span>${mergeTag}</td>
       <td class="muted">${esc(f.ts)}</td>
-      <td class="${cls}">${esc(actionCn(f.action))}</td>
+      <td class="${cls}">${esc(f.__n ? f.__acts : actionCn(f.action))}</td>
       <td class="${cls}">${esc(sideCn(f.side))}</td>
       <td>${fmtQty(f.qty)}</td>
       <td>${f.plan_price ? fmtPx(f.plan_price) : '--'}</td>
@@ -1382,7 +1430,7 @@ function renderStatus(s) {
       const unreal = p.unrealized;
       const cls = unreal == null ? 'muted' : (unreal >= 0 ? 'up' : 'down');
       return `<tr>
-      <td class="mono">${esc(sym)}<span class="cell-tag">${esc(p.mode || (exOk ? '交易所' : 'paper'))}</span></td>
+      <td class="mono">${esc(sym)}<span class="cell-tag">${esc(p.mode || (exOk ? '交易所' : 'paper'))}</span><span class="dir-flag ${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</span></td>
       <td class="${p.side === 'LONG' ? 'up' : 'down'}">${esc(sideCn(p.side))}</td>
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
       <td>${fmt(p.leverage, 1)}x</td>
@@ -1546,7 +1594,7 @@ function renderPosHistory() {
     const dir = h.side === 'LONG' ? '多' : '空';
     return `<tr>
       <td class="muted">${esc(String(h.closed_at || '').slice(5))}</td>
-      <td>${esc(h.symbol || '')}<span class="cell-tag">${h.mode === 'live' ? '交易所' : '本地模拟'}</span></td>
+      <td>${esc(h.symbol || '')}<span class="cell-tag">${h.mode === 'live' ? '交易所' : '本地模拟'}</span><span class="dir-flag ${h.side === 'LONG' ? 'up' : 'down'}">${dir}</span></td>
       <td class="${h.side === 'LONG' ? 'up' : 'down'}">${dir}</td>
       <td>${fmtQty(h.qty)}</td>
       <td class="muted">${fmtPx(h.entry)} → ${fmtPx(h.exit)}</td>

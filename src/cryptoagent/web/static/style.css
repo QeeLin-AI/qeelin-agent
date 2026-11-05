@@ -634,6 +634,15 @@ label.field > input, label.field > select { max-width: 420px; }
 .table-scroll table { min-width: 0; }
 .col-2line { display: flex; flex-direction: column; line-height: 1.4; font-size: 11px; }
 .cell-tag { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; vertical-align: middle; }
+/* 品种名后的多空标志：仅手机端卡片显示，PC 表格保持独立「方向」列（默认隐藏） */
+.dir-flag { display: none; }
+/* 成交合并记录的笔数标记：PC 与手机端均显示，用于完整体现汇总信息 */
+.merge-tag {
+  display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px;
+  font-size: 10px; font-weight: 700; line-height: 1.7;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 5px; vertical-align: middle;
+}
 .col-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 10px; font-size: 12px; color: var(--text); font-weight: 600; }
 .pos-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .pos-col { min-width: 0; padding: 12px; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px; }
@@ -982,6 +991,91 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   main { padding: 22px 18px 70px; }
   .topbar { padding: 10px 18px; }
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }
+
+  /* ---- 交易页宽表 → 手机端「一条记录 = 一张卡片」 ----
+     持仓/持仓历史/最近成交 在窄屏原为横向滚动表格，现改为独立卡片。
+     卡片只显示核心字段：品种(含多空标志) / 开仓价 / 数量 / 盈亏 / 操作。
+     其余字段仅用 CSS 隐藏、数据仍在 DOM 中，PC 端 >860px 全部字段照常显示。
+     方向由 app.js 产出的 .dir-flag 徽标整合进品种名，PC 端该徽标隐藏、仍显示独立方向列。
+     .table-scroll 取消局部滚动容器，多条目靠页面自然纵向滚动。 */
+  .table-scroll:has(#posTable), .table-scroll:has(#posHistTable), .table-scroll:has(#fillsTable) { overflow: visible; }
+  #posTable, #posHistTable, #fillsTable { display: block; width: 100%; }
+  #posTable thead, #posHistTable thead, #fillsTable thead { display: none; }
+  #posTable tbody, #posHistTable tbody, #fillsTable tbody { display: block; }
+  #posTable tbody tr, #posHistTable tbody tr, #fillsTable tbody tr {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 14px; align-items: start;
+    padding: 12px 13px; margin-bottom: 10px;
+    border: 1px solid var(--border-soft); border-radius: 10px;
+    background: var(--surface-2);
+  }
+  #posTable tbody tr:last-child, #posHistTable tbody tr:last-child, #fillsTable tbody tr:last-child { margin-bottom: 0; }
+  #posTable tbody tr:hover td, #posHistTable tbody tr:hover td, #fillsTable tbody tr:hover td { background: transparent; }
+  /* 每个字段 = 「字段名（左） + 数值（右）」同一行 */
+  #posTable tbody td, #posHistTable tbody td, #fillsTable tbody td {
+    display: flex; flex-wrap: nowrap; align-items: baseline; justify-content: space-between;
+    gap: 8px; min-width: 0; padding: 2px 0; border: 0; text-align: right;
+    white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
+  }
+  #posTable tbody td::before, #posHistTable tbody td::before, #fillsTable tbody td::before {
+    content: ""; flex: none; order: -1;
+    color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .03em;
+    text-align: left; white-space: nowrap;
+  }
+  /* 只保留核心字段：其余列隐藏（:not([colspan]) 保护空态提示单元格） */
+  #posTable td:nth-child(5):not([colspan]), #posTable td:nth-child(6):not([colspan]),
+  #posTable td:nth-child(7):not([colspan]),                      /* 标记价/杠杆/止损止盈 */
+  #posTable td:nth-child(2):not([colspan]),                      /* 方向：已整合进品种徽标 */
+  #posHistTable td:nth-child(1):not([colspan]),                  /* 平仓时间 */
+  #posHistTable td:nth-child(3):not([colspan]),                  /* 方向 */
+  #posHistTable td:nth-child(7):not([colspan]),                  /* 原因 */
+  #fillsTable td:nth-child(2):not([colspan]),                    /* 时间 */
+  #fillsTable td:nth-child(3):not([colspan]),                    /* 动作 */
+  #fillsTable td:nth-child(4):not([colspan]),                    /* 方向 */
+  #fillsTable td:nth-child(6):not([colspan]),                    /* 计划价 */
+  #fillsTable td:nth-child(8):not([colspan]),                    /* 滑点 */
+  #fillsTable td:nth-child(9):not([colspan]) { display: none; } /* 手续费 */
+  /* 品种列 = 卡片标题：跨整行、大字、下方虚线分隔 */
+  #posTable td:nth-child(1):not([colspan]),
+  #posHistTable td:nth-child(2):not([colspan]),
+  #fillsTable td:nth-child(1):not([colspan]) {
+    grid-column: 1 / -1; flex-wrap: wrap; justify-content: flex-start;
+    gap: 2px 8px; font-size: 13.5px; font-weight: 650; text-align: left;
+    padding: 0 0 8px; margin-bottom: 3px; border-bottom: 1px dashed var(--border);
+  }
+  /* 标题里品种名自带语义，不叠「品种」eyebrow */
+  #posTable td:nth-child(1)::before, #posHistTable td:nth-child(2)::before, #fillsTable td:nth-child(1)::before { display: none; }
+  /* 品种名后的多空小标志：沿用 .up 红(多) / .down 绿(空) */
+  .dir-flag {
+    display: inline-block; margin-left: 2px; padding: 1px 6px;
+    font-size: 10px; font-weight: 700; letter-spacing: .02em;
+    border: 1px solid currentColor; border-radius: 5px;
+    vertical-align: baseline; line-height: 1.5;
+  }
+  /* 盈亏跨整行、稍大字，作为卡片的结果行 */
+  #posTable td:nth-child(8):not([colspan]),
+  #posHistTable td:nth-child(6):not([colspan]),
+  #fillsTable td:nth-child(10):not([colspan]) { grid-column: 1 / -1; font-size: 13px; }
+  /* 行内「平仓」跨整行，触控区放大到 34px */
+  #posTable td:nth-child(9):not([colspan]) {
+    grid-column: 1 / -1; padding-top: 8px; border-top: 1px dashed var(--border);
+  }
+  #posTable td:nth-child(9) .btn { min-height: 34px; padding: 0 14px; }
+  /* 空态（单个 colspan 单元格）：不套卡片框、不回填字段名、居中 */
+  #posTable tbody tr:has(td[colspan]), #posHistTable tbody tr:has(td[colspan]), #fillsTable tbody tr:has(td[colspan]) { border: 0; background: transparent; padding: 4px 0; }
+  #posTable td[colspan], #posHistTable td[colspan], #fillsTable td[colspan] { grid-column: 1 / -1; justify-content: center; text-align: center; font-size: 12px; font-weight: 400; }
+  #posTable td[colspan]::before, #posHistTable td[colspan]::before, #fillsTable td[colspan]::before { display: none; }
+  /* 字段名回填（仅保留的核心字段） */
+  #posTable td:nth-child(3)::before { content: "数量"; }
+  #posTable td:nth-child(4)::before { content: "开仓价"; }
+  #posTable td:nth-child(8)::before { content: "浮动盈亏"; }
+  #posTable td:nth-child(9)::before { content: "操作"; }
+  #posHistTable td:nth-child(4)::before { content: "数量"; }
+  #posHistTable td:nth-child(5)::before { content: "开平价"; }
+  #posHistTable td:nth-child(6)::before { content: "盈亏"; }
+  #fillsTable td:nth-child(5)::before { content: "数量"; }
+  #fillsTable td:nth-child(7)::before { content: "成交价"; }
+  #fillsTable td:nth-child(10)::before { content: "盈亏"; }
 }
 @media (max-width: 720px) {
   .set-stats.three, .set-grid.four, .set-grid.risk-six, .set-grid.risk-eight, .set-grid.narrow { grid-template-columns: 1fr; }
