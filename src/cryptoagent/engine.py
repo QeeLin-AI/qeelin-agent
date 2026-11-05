@@ -12,13 +12,19 @@ import os
 import shutil
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pandas as pd
 
 from .agents.calibration import record_accuracy, summary as calibration_summary, weights_from_accuracy
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
+from .agents.position_calibration import (
+    TUNABLE as TUNING_KEYS,
+    record_episode,
+    learned_params,
+    summary as tuning_summary,
+)
 from .agents.position_manager import manage_position, review_management
 from .config import AppConfig
 from .data import (
@@ -125,6 +131,16 @@ class TradingEngine:
         for _k, _v in {"calls": 0, "errors": 0, "skipped_offpeak": 0,
                        "skipped_cooldown": 0}.items():
             self.position_llm_usage.setdefault(_k, _v)
+        # 持仓管理员自迭代：绩效样本 + 当前生效参数 + 配置锚点。
+        # 锚点用来识别「用户手动改过配置」——一旦改了，学习结果立即作废、以配置为准。
+        _tune = self.state.get("position_tuning") or {}
+        self.position_tuning: dict = {
+            "stats": dict(_tune.get("stats") or {}),
+            "effective": dict(_tune.get("effective") or {}),
+            "anchor": dict(_tune.get("anchor") or {}),
+            "changes": list(_tune.get("changes") or [])[-10:],
+            "updated_at": float(_tune.get("updated_at") or 0.0),
+        }
         # 各品种最新价（非活跃品种也要实时刷新，标记价/浮盈都读它）
         self._last_prices: dict[str, float] = {}
         self._price_ts: dict[str, float] = {}
@@ -781,7 +797,8 @@ class TradingEngine:
         self.state["fills"] = self.state["fills"][-500:]
         return fill_rec
 
-    def _record_close(self, pos: dict, exit_price: float, pnl: float, reason: str, mode: str) -> None:
+    def _record_close(self, pos: dict, exit_price: float, pnl: float, reason: str, mode: str,
+                      rule: str = "") -> None:
         """把一次平仓写进持仓历史：持仓历史表 + 每日盈亏统计都靠它。"""
         # 分析师权重校准：用「市场实际方向」而非这笔仓的盈亏评判立场
         # （开仓方向由交易员定，不该算到分析师头上）。
@@ -793,6 +810,22 @@ class TradingEngine:
             record_accuracy(stats, stances, market_dir)
 
         hist = self.state.setdefault("position_history", [])
+        # R 口径与持仓管理员一致：开仓时的初始风险是分母，止损后来被移动也不改分母。
+        # initial_r_pct 缺失时用当前止损近似，并标注 approx，避免和真值混算。
+        entry_f = float(pos.get("entry") or 0.0)
+        r_pct = float(pos.get("initial_r_pct") or 0.0)
+        r_approx = False
+        if r_pct <= 0 and entry_f > 0:
+            stop_f = float(pos.get("stop") or 0.0)
+            if stop_f > 0:
+                r_pct = abs(entry_f - stop_f) / entry_f
+                r_approx = True
+        sign = 1.0 if str(pos.get("side") or "LONG").upper().startswith("L") else -1.0
+        realized_r = None
+        initial_stop = None
+        if entry_f > 0 and r_pct > 0:
+            realized_r = round((float(exit_price or 0.0) - entry_f) / entry_f * sign / r_pct, 4)
+            initial_stop = round_price(entry_f * (1.0 - sign * r_pct))
         hist.append(
             {
                 "symbol": pos.get("symbol") or self.cfg.market.symbol,
@@ -802,6 +835,13 @@ class TradingEngine:
                 "exit": round_price(float(exit_price or 0)),
                 "pnl": round(float(pnl or 0), 4),
                 "leverage": pos.get("leverage"),
+                # 自迭代要用的量：没有这三项，事后连「赚了几个 R」都算不出来
+                "initial_stop": initial_stop,
+                "r_pct": round(r_pct, 6) if r_pct > 0 else None,
+                "r_approx": r_approx,
+                "realized_r": realized_r,
+                "mfe_r": round(float(pos.get("mfe_r")), 4) if pos.get("mfe_r") is not None else None,
+                "rule": str(rule or ""),
                 "opened_at": pos.get("opened_at", ""),
                 "closed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "mode": mode,
@@ -809,8 +849,11 @@ class TradingEngine:
             }
         )
         self.state["position_history"] = hist[-200:]
+        # 喂给持仓管理员的自校准（样本不足时内部会自动不动）
+        self._learn_from_close(pos, float(exit_price or 0.0), rule)
 
-    def _paper_close(self, price: float, reason: str, symbol: str | None = None) -> dict | None:
+    def _paper_close(self, price: float, reason: str, symbol: str | None = None,
+                     rule: str = "") -> dict | None:
         pos = self._resolve_position(symbol)
         if not pos:
             return None
@@ -836,7 +879,7 @@ class TradingEngine:
         }
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
-        self._record_close(pos, fill, pnl - fee, reason, "paper")
+        self._record_close(pos, fill, pnl - fee, reason, "paper", rule=rule)
         self._drop_position(pos.get("symbol"))
         return rec
 
@@ -1025,7 +1068,7 @@ class TradingEngine:
                 if pnl < 0
                 else 0
             )
-            self._record_close(pos, exit_px, pnl, "exchange", "live")
+            self._record_close(pos, exit_px, pnl, "exchange", "live", rule="exchange")
             self._save()
         self._log_live("CLOSE", str(pos.get("side")), qty, exit_px, order_id)
         self._notify(
@@ -1231,6 +1274,125 @@ class TradingEngine:
             return weights_from_accuracy(self.state.get("analyst_accuracy"))
         except Exception:  # noqa: BLE001 - 校准失败不影响决策
             return [0.5, 0.3, 0.2], False
+
+    # ------------------------------------------------------------------
+    # 持仓管理员参数自迭代（与上面的分析师权重校准同一套机制）
+    # ------------------------------------------------------------------
+    def _tuning_base(self) -> dict[str, float]:
+        """当前配置里的可调参数原值——学习的锚点，也是「用户改配置」的比对基准。"""
+        cfg = getattr(self.cfg, "position", None)
+        out: dict[str, float] = {}
+        for k in TUNING_KEYS:
+            try:
+                out[k] = float(getattr(cfg, k))
+            except (AttributeError, TypeError, ValueError):
+                out[k] = 0.0
+        return out
+
+    def effective_position_config(self):
+        """返回带自校准覆盖的持仓配置**副本**；未启用/异常时返回原对象。
+
+        用户手动改过配置（与锚点不一致）时，学习结果立即作废、以配置为准——
+        绝不出现「我改了他又给我悄悄改回去」。
+        """
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None or not bool(getattr(cfg, "auto_tune", True)):
+            return cfg
+        try:
+            base = self._tuning_base()
+            anchor = self.position_tuning.get("anchor") or {}
+            eff = self.position_tuning.get("effective") or {}
+            stale = (not eff) or any(
+                abs(float(anchor.get(k, base[k])) - base[k]) > 1e-9 for k in TUNING_KEYS
+            )
+            if stale:
+                eff = dict(base)
+                self.position_tuning["anchor"] = dict(base)
+                self.position_tuning["effective"] = dict(eff)
+            else:
+                eff = {k: float(eff.get(k, base[k])) for k in TUNING_KEYS}
+            return replace(cfg, **eff)
+        except Exception:  # noqa: BLE001 - 校准是旁路，出问题就用原配置
+            return cfg
+
+    def _recompute_position_tuning(self) -> None:
+        """用最新绩效样本重算生效参数；样本不足时保持原值（calibrated=False）。"""
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None or not bool(getattr(cfg, "auto_tune", True)):
+            return
+        try:
+            base = self._tuning_base()
+            anchor = self.position_tuning.get("anchor") or {}
+            prev = self.position_tuning.get("effective") or {}
+            if not prev or any(
+                abs(float(anchor.get(k, base[k])) - base[k]) > 1e-9 for k in TUNING_KEYS
+            ):
+                prev = dict(base)  # 用户改过配置：从新配置重新开始学
+            eff, _ok, changes = learned_params(prev, self.position_tuning.get("stats") or {})
+            now = time.time()
+            log = list(self.position_tuning.get("changes") or [])
+            for ch in changes:
+                log.append({**ch, "ts": now})
+            self.position_tuning.update({
+                "anchor": dict(base),
+                "effective": dict(eff),
+                "changes": log[-10:],
+                "updated_at": now,
+            })
+            self.state["position_tuning"] = {
+                "stats": dict(self.position_tuning.get("stats") or {}),
+                "effective": dict(eff),
+                "anchor": dict(base),
+                "changes": list(self.position_tuning["changes"]),
+                "updated_at": now,
+            }
+            self._save()
+        except Exception:  # noqa: BLE001 - 学习失败绝不影响交易
+            pass
+
+    def position_tuning_status(self) -> dict:
+        """给状态接口/设置页的自迭代摘要（不触发任何重算，纯读）。"""
+        try:
+            cfg = getattr(self.cfg, "position", None)
+            return {
+                **tuning_summary(self.position_tuning.get("stats") or {},
+                                 self.position_tuning.get("effective") or {}),
+                "auto_tune": bool(getattr(cfg, "auto_tune", True)) if cfg else False,
+                "base": self._tuning_base(),
+                "changes": list(self.position_tuning.get("changes") or [])[-5:],
+                "updated_at": float(self.position_tuning.get("updated_at") or 0.0),
+            }
+        except Exception:  # noqa: BLE001
+            return {"samples": 0, "min_samples": 0, "calibrated": False, "auto_tune": False}
+
+    def _learn_from_close(self, pos: dict, exit_price: float, rule: str) -> None:
+        """把一笔平仓换算成 R，喂给校准器。带移动止损的仓位统一归到 trail 组。"""
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None or not bool(getattr(cfg, "auto_tune", True)):
+            return
+        try:
+            entry = float(pos.get("entry") or 0.0)
+            exit_px = float(exit_price or 0.0)
+            if entry <= 0 or exit_px <= 0:
+                return
+            r_pct = float(pos.get("initial_r_pct") or 0.0)
+            if r_pct <= 0:
+                stop = float(pos.get("stop") or 0.0)
+                if stop <= 0:
+                    return
+                r_pct = abs(entry - stop) / entry
+            if r_pct <= 0:
+                return
+            sign = 1.0 if str(pos.get("side") or "LONG").upper().startswith("L") else -1.0
+            realized_r = (exit_px - entry) / entry * sign / r_pct
+            # 被动过移动止损的仓位，其出场本质上就是移动止损的结果
+            tag = "trail" if (pos.get("trailed") and rule in ("stop_loss", "trail")) else (rule or "unknown")
+            stats = self.position_tuning.setdefault("stats", {})
+            record_episode(stats, tag, realized_r, pos.get("mfe_r"))
+            self._recompute_position_tuning()
+        except Exception:  # noqa: BLE001
+            pass
+
 
     # ------------------------------------------------------------------
     # 持仓管理员：开仓之后的退出决策（移动止损 / 时间止损 / 趋势反转）
@@ -1501,7 +1663,9 @@ class TradingEngine:
 
     def _manage_open_position_inner(self, pos: dict, price: float | None = None) -> dict:
         """在「已有持仓、跳过开仓决策」的这一轮里做退出管理。"""
-        cfg = getattr(self.cfg, "position", None)
+        # 用带自校准覆盖的配置副本：样本够时参数会随实盘结果缓慢演进，
+        # 样本不足时它与原配置完全等价（calibrated=False）。
+        cfg = self.effective_position_config()
         if cfg is None or not cfg.enabled:
             return {"action": "hold", "reason": "持仓管理员未启用", "details": {}}
         try:
@@ -1526,8 +1690,23 @@ class TradingEngine:
             dec = manage_position(pos, df, px, cfg, composite=composite,
                                   composite_ts=comp_ts)
 
+            # 记录持仓期峰值（以 R 计）：自校准判断「冲高后回吐」的唯一依据。
+            # 用现价算即可，不依赖 K 线重放；每 30 秒采样一次，只会略微低估峰值。
+            try:
+                _entry = float(pos.get("entry") or 0.0)
+                _r = float(pos.get("initial_r_pct") or 0.0)
+                if _entry > 0 and _r > 0:
+                    _sign = 1.0 if str(pos.get("side") or "LONG").upper().startswith("L") else -1.0
+                    _fav_r = (px - _entry) / _entry * _sign / _r
+                    if _fav_r > float(pos.get("mfe_r") if pos.get("mfe_r") is not None else -99.0):
+                        pos["mfe_r"] = round(_fav_r, 4)
+                        self._save()
+            except Exception:  # noqa: BLE001 - 峰值记录失败不影响退出判断
+                pass
+
             if dec.action == "close":
-                res = self.close(px, reason=f"持仓管理员：{dec.reason}", symbol=sym)
+                res = self.close(px, reason=f"持仓管理员：{dec.reason}", symbol=sym,
+                                 rule=dec.rule or "position_manager")
                 dec.details["close_result"] = res
                 self._notify("info", f"{sym} 持仓管理员提前退出", dec.reason,
                              {"symbol": sym, "action": "close", "details": dec.details})
@@ -1545,6 +1724,9 @@ class TradingEngine:
                 with self.lock:
                     if self._positions_map().get(sym) is pos:
                         pos["stop"] = float(dec.new_stop)
+                        # 标记「这笔仓的止损被移动过」：它最终多半以 stop_loss 出场，
+                        # 自校准要能把这类出场归到移动止损组，而不是普通止损。
+                        pos["trailed"] = True
                         self._save()
                 self._stop_adjust_at_by_symbol[sym] = now
                 self.state["last_stop_adjust_by_symbol"] = dict(self._stop_adjust_at_by_symbol)
@@ -1836,7 +2018,7 @@ class TradingEngine:
             ld["order"]["status"] = "FILLED"
 
     def close(self, price: float | None = None, reason: str = "manual",
-              symbol: str | None = None) -> dict:
+              symbol: str | None = None, rule: str = "") -> dict:
         """平仓。`symbol` 不传时平「当前品种」；只有一个仓时也兼容不传的老调用。"""
         price = price if price is not None else self.price()
         with self.lock:
@@ -1883,7 +2065,7 @@ class TradingEngine:
                     )
                     self.state["fills"] = self.state["fills"][-500:]
                     self.state["equity"] += pnl
-                    self._record_close(pos, exit_px, pnl, reason, "live")
+                    self._record_close(pos, exit_px, pnl, reason, "live", rule=rule)
                     self._drop_position(sym)
                     self._save()
                     self._log_live("CLOSE", pos["side"], pos["qty"], exit_px, res.order_id)
@@ -1895,7 +2077,7 @@ class TradingEngine:
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
                     return {"ok": False, "error": str(exc)}
-            rec = self._paper_close(price, reason, symbol=sym)
+            rec = self._paper_close(price, reason, symbol=sym, rule=rule)
             self._save()
             # A2：平仓后报告已实现盈亏
             self._notify("info" if rec["pnl"] >= 0 else "critical",
@@ -1932,7 +2114,7 @@ class TradingEngine:
             if not hit:
                 continue
             with self.lock:
-                rec = self._paper_close(px, hit, symbol=sym)
+                rec = self._paper_close(px, hit, symbol=sym, rule=hit)
             if rec:
                 hits.append(rec)
         return hits
@@ -2157,6 +2339,8 @@ class TradingEngine:
                 # 持仓管理员 LLM 的用量与影子对照（只读审计，不参与决策）
                 "position_llm_usage": dict(self.position_llm_usage),
                 "position_llm_shadow": list(self.llm_shadow_log[-10:]),
+                # 持仓管理员自迭代：样本数、捕获率、当前生效参数与最近改动
+                "position_tuning": self.position_tuning_status(),
                 "position_guard": {
                     "running": bool(getattr(self, "_guard_thread", None)
                                     and self._guard_thread.is_alive()),

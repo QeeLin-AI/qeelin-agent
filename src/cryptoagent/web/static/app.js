@@ -469,6 +469,17 @@ async function loadPositionLlmSettings() {
     $('posLlmOffpeakOnly').checked = !!d.llm_offpeak_only;
     $('posBarsFromIndex').checked = !!d.bars_from_index;
     $('posPeakDrawdownEnabled').checked = !!d.peak_drawdown_exit_enabled;
+    if ($('posAutoTune')) $('posAutoTune').checked = d.auto_tune !== false;
+    const tn = d.tuning || {};
+    if ($('posTuneDesc')) {
+      const n = Number(tn.samples || 0);
+      const need = Number(tn.min_samples || 20);
+      $('posTuneDesc').textContent = tn.auto_tune === false
+        ? '已关闭：参数完全按你设置的值运行'
+        : (n >= need
+          ? `已启用 · 已学 ${n} 笔样本，参数会随实盘结果缓慢演进（单轮最多 12%，有硬边界）`
+          : `已启用 · 已攒 ${n}/${need} 笔样本，攒够后开始自动微调；改配置即重置`);
+    }
     $('posLlmMinInterval').value = d.llm_min_interval_sec;
     $('posReversalEmaBars').value = d.reversal_ema_bars;
     $('posCompositeMaxAge').value = d.composite_max_age_sec;
@@ -489,6 +500,7 @@ async function savePositionLlmSettings() {
     llm_offpeak_only: $('posLlmOffpeakOnly').checked,
     bars_from_index: $('posBarsFromIndex').checked,
     peak_drawdown_exit_enabled: $('posPeakDrawdownEnabled').checked,
+    auto_tune: $('posAutoTune') ? $('posAutoTune').checked : true,
     llm_min_interval_sec: Number($('posLlmMinInterval').value),
     reversal_ema_bars: Number($('posReversalEmaBars').value),
     composite_max_age_sec: Number($('posCompositeMaxAge').value),
@@ -909,8 +921,10 @@ function renderPositionManagement(d) {
   const all = (d && d.position_managements) || {};
   const shadow = (d && d.position_llm_shadow) || [];
   const guard = (d && d.position_guard) || {};
+  const tune = (d && d.position_tuning) || {};
   // 最近一次动作 / 影子记录常驻，不再被 30 秒后的 hold 巡检冲掉
-  const has = (m.action && m.action !== 'hold') || !!last.action || shadow.length > 0;
+  const has = (m.action && m.action !== 'hold') || !!last.action || shadow.length > 0
+    || Number(tune.samples || 0) > 0;
   card.classList.toggle('hidden', !has);
   if (!has) return;
 
@@ -956,6 +970,28 @@ function renderPositionManagement(d) {
         <span class="muted">${esc(ago(r.ts))}</span></span>`;
     }
     html += `</div></div>`;
+  }
+
+  // 自迭代：攒样本 → 自动微调参数。只展示「已经变了的」参数，避免刷屏。
+  if (Number(tune.samples || 0) > 0) {
+    const base = tune.base || {};
+    const eff = tune.effective || {};
+    const moved = Object.keys(eff)
+      .filter((k) => base[k] != null && Math.abs(Number(eff[k]) - Number(base[k])) > 1e-9);
+    const cap = tune.capture_median;
+    html += `<div class="pm-block">
+      <div class="pm-block-title">参数自校准
+        <span class="muted">${tune.calibrated ? '已启用' : `攒样本 ${tune.samples}/${tune.min_samples || 20}`}</span>
+      </div>
+      <p class="muted">已学 ${Number(tune.samples)} 笔
+        ${cap != null ? ` · 峰值捕获率 ${Number(cap).toFixed(2)}` : ''}
+        ${tune.auto_tune === false ? ' · 当前关闭（按你设置的值运行）' : ''}</p>
+      ${moved.length
+        ? `<div class="pm-rows">${moved.slice(0, 4).map((k) =>
+            `<span class="pm-row"><b>${esc(k)}</b>
+             <span class="muted">${Number(base[k]).toFixed(3)} → ${Number(eff[k]).toFixed(3)}</span></span>`).join('')}</div>`
+        : `<p class="muted">参数暂未调整${tune.calibrated ? '（当前表现已在目标区间）' : ''}。</p>`}
+    </div>`;
   }
 
   html += `<p class="muted">守护线程${guard.running ? '运行中' : '未运行'}，

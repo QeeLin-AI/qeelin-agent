@@ -1619,6 +1619,8 @@ class WebApp:
             "llm_shadow": bool(p.llm_shadow),
             "llm_offpeak_only": bool(p.llm_offpeak_only),
             "llm_min_interval_sec": int(p.llm_min_interval_sec),
+            "auto_tune": bool(getattr(p, "auto_tune", True)),
+            "tuning": self.engine.position_tuning_status(),
             "bars_from_index": bool(p.bars_from_index),
             "reversal_ema_bars": int(p.reversal_ema_bars),
             "composite_max_age_sec": int(p.composite_max_age_sec),
@@ -1638,7 +1640,7 @@ class WebApp:
 
         p = self.cfg.position
         bool_keys = ("llm_explain", "llm_shadow", "llm_offpeak_only",
-                     "bars_from_index", "peak_drawdown_exit_enabled")
+                     "bars_from_index", "peak_drawdown_exit_enabled", "auto_tune")
         int_keys = {
             "llm_min_interval_sec": (0, 86400),
             "reversal_ema_bars": (10, 200),

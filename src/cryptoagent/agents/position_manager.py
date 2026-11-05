@@ -54,6 +54,9 @@ class PositionDecision:
     new_stop: float | None = None
     details: dict[str, Any] = field(default_factory=dict)
     explanation: str = ""
+    # 命中的规则标识（time_stop / reversal / peak_dd / trail / hold）。
+    # 平仓时随仓写进历史，供 position_calibration 归因用——只靠中文理由文本没法统计。
+    rule: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -232,13 +235,14 @@ def manage_position(
                 "close",
                 f"时间止损：持有 {st['bars']} 根，浮盈仅 {st['fav'] / st['r_pct']:+.2f}R，退出释放资金",
                 details=details,
+                rule="time_stop",
             )
 
         # 2) 趋势反转：均线与因子都指向反方时不等静态止损
         if cfg.reversal_enabled and st["bars"] >= int(cfg.reversal_min_hold_bars):
             hit, why = _reversal(st, df, price, cfg, composite, details)
             if hit:
-                return PositionDecision("close", why, details=details)
+                return PositionDecision("close", why, details=details, rule="reversal")
 
         # 3) 峰值回撤退出：新增行为，默认关闭（需模拟盘验证后再开）。
         #    只针对「曾经浮盈到过 1R 以上、又回吐 N×R」的仓位，避免把正常震荡当反转。
@@ -254,6 +258,7 @@ def manage_position(
                     "close",
                     f"峰值回撤：浮盈自高点回吐 {drawdown_r:.2f}R，提前退出保住利润",
                     details=details,
+                    rule="peak_dd",
                 )
 
         # 4) 移动止损：浮盈达到 1R 后先保本，再按 ATR 跟踪极值
@@ -277,12 +282,13 @@ def manage_position(
                     f"移动止损：浮盈 {st['fav'] / st['r_pct']:+.2f}R，止损移到 {new_stop:.6g}（保本/跟踪极值）",
                     new_stop=float(new_stop),
                     details=details,
+                    rule="trail",
                 )
 
-        return PositionDecision("hold", "持仓条件未触发调整", details=details)
+        return PositionDecision("hold", "持仓条件未触发调整", details=details, rule="hold")
     except Exception as exc:  # noqa: BLE001 - 持仓管理是旁路，绝不因它中断主流程
         return PositionDecision("hold", f"持仓管理计算失败，保守不动：{type(exc).__name__}",
-                                details={"error": str(exc)[:120]})
+                                details={"error": str(exc)[:120]}, rule="error")
 
 
 def explain_management(llm, decision: PositionDecision, pos: dict) -> str:

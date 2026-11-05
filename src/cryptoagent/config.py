@@ -215,6 +215,12 @@ class PositionConfig:
     # 同一品种两次 LLM 调用的最小间隔（秒），避免动作频繁时反复烧 token
     llm_min_interval_sec: int = 900
 
+    # ---- 自迭代（对标分析师权重校准）----
+    # 打开后：每笔平仓的最终 R 与峰值 MFE 会累积成样本，样本达标即自动微调
+    # trail_activate_r / trail_atr_mult / min_progress_r / max_hold_bars。
+    # 单轮最多 12%、硬边界见 position_calibration.BOUNDS，永远跳不出安全区间。
+    auto_tune: bool = True
+
     # ---- 规则层（默认保持既有行为；新增退出规则一律默认关）----
     # 趋势反转用的 EMA 跨度（按 bar 数），不再写死 48
     reversal_ema_bars: int = 48

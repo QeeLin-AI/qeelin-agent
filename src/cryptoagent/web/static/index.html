@@ -724,6 +724,13 @@
             </span>
             <label class="switch"><input type="checkbox" id="posPeakDrawdownEnabled" /><span class="track"><span class="thumb"></span></span></label>
           </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">退出参数自校准</span>
+              <span class="d" id="posTuneDesc">按每笔平仓的最终 R 与持仓期峰值自动微调移动止损/时间止损参数；单轮最多 12%，有硬边界，改配置即重置</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posAutoTune" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
         </div>
         <div class="set-grid two-col">
           <label class="set-field">
