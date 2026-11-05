@@ -1367,7 +1367,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .auto-controls .field input { width: 88px; }
   .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; flex-basis: 100%; }
   .auto-controls .auto-actions { margin-top: 2px; }
-  .auto-meta { margin: 8px 0 0; font-size: 11.5px; }
+  .auto-meta { display: block; width: 100%; margin: 12px 0 0; font-size: 11.5px; overflow-wrap: anywhere; }
   .trade-main .divider { margin: 12px 0 8px; }
   .trade-main .actions { gap: 8px; }
   /* 连接卡片：移到自动交易卡最上方，并整体缩小（减小长度/高度） */
