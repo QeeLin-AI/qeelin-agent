@@ -1241,7 +1241,6 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
 .pm-rows { display: flex; flex-direction: column; gap: 4px; }
 .pm-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; font-size: 11.5px; padding: 3px 0; }
 .pm-row b { font-weight: 650; min-width: 78px; }
-#posLlmShadowBox { margin-top: 10px; line-height: 1.7; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }

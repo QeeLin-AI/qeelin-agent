@@ -219,6 +219,7 @@ async function poll() {
     lastStatus = s;
     renderStatus(s);
     renderPositionManagement(s && s.data);
+    renderDecisionShadow(s);
   } catch (e) {
     console.error(e);
   }
@@ -466,16 +467,6 @@ async function loadPositionLlmSettings() {
     $('posLlmUsage').textContent =
       `LLM 调用 ${u.calls ?? 0} 次 · 峰时跳过 ${u.skipped_offpeak ?? 0}` +
       ` · 冷却跳过 ${u.skipped_cooldown ?? 0} · 失败 ${u.errors ?? 0}`;
-    const box = $('posLlmShadowBox');
-    const rows = d.shadow_recent || [];
-    box.innerHTML = rows.length
-      ? `<b>影子对照（最近 ${rows.length} 条）</b><br>`
-        + rows.slice(-5).reverse().map((r) =>
-          `${esc(r.symbol || '')} 规则 ${esc(r.rule_action || '')} / LLM ${esc(r.llm_action || '')}`
-          + ` · 置信 ${Number(r.confidence || 0).toFixed(2)}${r.degraded ? ' · 降级' : ''}`
-          + `<br><span class="muted">${esc(r.reason || '')}</span>`
-        ).join('<br>')
-      : '暂无影子对照记录（开启「影子复核」并产生持仓动作后显示）';
   } catch (e) { console.error(e); }
 }
 
@@ -958,6 +949,22 @@ function renderPositionManagement(d) {
   html += `<p class="muted">守护线程${guard.running ? '运行中' : '未运行'}，
     每 ${guard.interval_sec || 30} 秒检查一次，不依赖自动交易循环。</p>`;
   $('posMgmtBody').innerHTML = html;
+}
+
+function renderDecisionShadow(d) {
+  const box = $('decisionShadowBox');
+  if (!box) return;
+  // 与设置页原「影子对照」同源（status.position_llm_shadow = llm_shadow_log[-10:]）：
+  // 记录规则动作与 LLM 独立意见对照，纯只读留档，不改 action。移到决策页后由状态轮询刷新。
+  const rows = (d && d.position_llm_shadow) || [];
+  box.innerHTML = rows.length
+    ? `<b>影子对照（最近 ${rows.length} 条）</b><br>`
+      + rows.slice(-5).reverse().map((r) =>
+        `${esc(r.symbol || '')} 规则 ${esc(r.rule_action || '')} / LLM ${esc(r.llm_action || '')}`
+        + ` · 置信 ${Number(r.confidence || 0).toFixed(2)}${r.degraded ? ' · 降级' : ''}`
+        + `<br><span class="muted">${esc(r.reason || '')}</span>`
+      ).join('<br>')
+    : '暂无影子对照记录（开启「影子复核」并产生持仓动作后显示）';
 }
 
 function renderResearchAuto(a) {

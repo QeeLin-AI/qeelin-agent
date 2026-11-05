@@ -221,6 +221,14 @@
       </div>
     </div>
 
+    <div class="card" id="decisionShadowCard">
+      <div class="card-head">
+        <h2>持仓管理员 · LLM 影子复核</h2>
+        <span class="muted">规则动作 vs LLM 独立意见（只读对照，不改平仓）</span>
+      </div>
+      <div id="decisionShadowBox" class="set-hint"></div>
+    </div>
+
     <div id="decisionBody" class="decision-body empty">还没有运行决策。点击右上角「运行决策」。</div>
   </section>
 
@@ -734,7 +742,6 @@
           </label>
         </div>
         <p class="set-hint">保存立即生效，无需重启。</p>
-        <div id="posLlmShadowBox" class="set-hint"></div>
         <div class="actions">
           <button id="posLlmSaveBtn" class="btn primary">保存</button>
         </div>
