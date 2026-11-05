@@ -1291,7 +1291,7 @@ function renderScan(data) {
       <td>${(r.size_pct * 100).toFixed(1)}%</td>
       <td>${fmt(r.leverage, 1)}x</td>
       <td>${verdict}</td>
-      <td class="muted">${esc((r.reasons || []).join('；') || '—')}</td>
+      <td class="muted scan-reason"><span class="reason-text">${esc((r.reasons || []).join('；') || '—')}</span><button class="reason-toggle" type="button" onclick="const c=this.closest('.scan-reason');const ex=c.classList.toggle('expanded');this.textContent=ex?'收起':'展开'">展开</button></td>
     </tr>`;
   }).join('');
 }

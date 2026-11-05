@@ -632,6 +632,8 @@ label.field > input, label.field > select { max-width: 420px; }
 .table td[class*="mono"], .table td.num { white-space: nowrap; }
 .table-scroll { overflow-x: auto; }
 .table-scroll table { min-width: 0; }
+/* 扫描表理由：PC 端完整显示、无折叠按钮；移动端才折叠+展开（见 860px 媒体块） */
+#scanTable .reason-toggle { display: none; }
 .col-2line { display: flex; flex-direction: column; line-height: 1.4; font-size: 11px; }
 .cell-tag { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; vertical-align: middle; }
 /* 品种名后的多空标志：仅手机端卡片显示，PC 表格保持独立「方向」列（默认隐藏） */
@@ -845,6 +847,19 @@ label.field > input, label.field > select { max-width: 420px; }
 .proposal-grid .item b { font-size: 16px; }
 .order-box { background: var(--surface-2); border: 1px solid var(--border-soft); border-left: 3px solid var(--down); border-radius: 10px; padding: 14px 16px; }
 .order-box.rejected { border-left-color: var(--amber); }
+
+/* 决策页紧凑化：只收紧本页卡片间距/内边距与说明文案，不影响其它页面 */
+#tab-decision .card { padding: 15px 18px; margin-bottom: 12px; }
+#tab-decision .card-head { padding-bottom: 9px; margin-bottom: 11px; }
+#tab-decision .card > p.muted:not(.center) { font-size: 12px; line-height: 1.5; margin: 0 0 11px; }
+#tab-decision .grid-2 { gap: 12px; margin-bottom: 12px; }
+#tab-decision .analyst-grid { gap: 9px; margin-bottom: 12px; }
+#tab-decision .analyst { padding: 12px 14px; }
+#tab-decision .analyst-body.collapsed { max-height: 4.4em; }
+#tab-decision .thesis { margin-top: 11px; padding: 11px 14px; }
+#tab-decision .proposal-grid { gap: 8px; margin: 11px 0; }
+#tab-decision .proposal-grid .item { padding: 10px 12px; }
+
 .sizing-trace { margin-top: 14px; border-top: 1px solid var(--border-soft); padding-top: 12px; font-size: 12px; }
 .sizing-trace > b { display: block; color: var(--muted); margin-bottom: 8px; }
 .st-row { display: grid; grid-template-columns: 90px 78px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 0; }
@@ -1093,6 +1108,53 @@ body.desktop .topbar .tag, body.desktop .topbar .badge, body.desktop .topbar .pr
   #fillsTable td:nth-child(5)::before { content: "数量"; }
   #fillsTable td:nth-child(7)::before { content: "成交价"; }
   #fillsTable td:nth-child(10)::before { content: "盈亏"; }
+
+  /* ---- 决策页·多品种扫描：手机端改为「一条记录 = 一张卡片」，理由列整行换行防溢出 ---- */
+  .table-scroll:has(#scanTable) { overflow: visible; }
+  #scanTable { display: block; width: 100%; }
+  #scanTable thead { display: none; }
+  #scanTable tbody { display: block; }
+  #scanTable tbody tr {
+    position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px 14px; align-items: start; padding: 11px 13px; margin-bottom: 10px;
+    border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-2);
+  }
+  #scanTable tbody td {
+    display: flex; flex-wrap: nowrap; align-items: baseline; justify-content: space-between;
+    gap: 8px; min-width: 0; padding: 1px 0; border: 0; text-align: right;
+    white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
+  }
+  #scanTable tbody td::before {
+    content: ""; flex: none; order: -1; color: var(--faint); font-size: 10px;
+    font-weight: 700; letter-spacing: .03em; text-align: left; white-space: nowrap;
+  }
+  #scanTable td:nth-child(1):not([colspan]) {
+    grid-column: 1 / -1; flex-wrap: wrap; justify-content: flex-start; gap: 2px 8px;
+    font-size: 13px; font-weight: 650; text-align: left; padding: 0 0 6px;
+    margin-bottom: 2px; border-bottom: 1px dashed var(--border);
+  }
+  #scanTable td:nth-child(1)::before { display: none; }
+  #scanTable td:nth-child(2)::before { content: "最新价"; }
+  #scanTable td:nth-child(3)::before { content: "方向"; }
+  #scanTable td:nth-child(4)::before { content: "仓位"; }
+  #scanTable td:nth-child(5)::before { content: "杠杆"; }
+  #scanTable td:nth-child(6)::before { content: "风控"; }
+  #scanTable td:nth-child(7):not([colspan]) {
+    grid-column: 1 / -1; display: block; text-align: left; white-space: normal;
+    overflow-wrap: anywhere; word-break: break-word; line-height: 1.55;
+  }
+  #scanTable td:nth-child(7) .reason-text {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  #scanTable td:nth-child(7).expanded .reason-text { -webkit-line-clamp: unset; overflow: visible; display: block; }
+  #scanTable td:nth-child(7)::before { content: "理由"; display: block; margin-bottom: 2px; }
+  #scanTable .reason-toggle {
+    display: inline-block; margin-top: 4px; font-size: 11px; color: var(--accent); background: none; border: 0;
+    padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+  }
+  #scanTable tbody tr:has(td[colspan]) { border: 0; background: transparent; padding: 4px 0; }
+  #scanTable td[colspan] { grid-column: 1 / -1; justify-content: center; text-align: center; font-size: 12px; font-weight: 400; }
+  #scanTable td[colspan]::before { display: none; }
 }
 @media (max-width: 720px) {
   .set-stats.three, .set-grid.four, .set-grid.risk-six, .set-grid.risk-eight, .set-grid.narrow { grid-template-columns: 1fr; }
