@@ -353,11 +353,17 @@ class TestManagementHeartbeat(unittest.TestCase):
 
     只认「当前品种」那份的话，一切到别的品种、当前品种又恰好空仓，时间戳就冻住，
     页面上看着像守护线程挂了——实际上它正在管别的仓。
+    反过来，已平仓品种的记录也不能当心跳：它留着平仓那轮的 action=close，直接用
+    就会显示很久以前的 close，同样像线程停了。
     """
 
+    @staticmethod
+    def _with_positions(e, *symbols):
+        e.state["positions"] = {s.upper(): {"symbol": s.upper()} for s in symbols}
+        return e
+
     def test_prefers_current_symbol(self):
-        e = _engine()
-        e.last_management = {"ts": 1.0, "action": "hold"}
+        e = self._with_positions(_engine(), "SOLUSDT", "ETHUSDT")
         e.last_management_by_symbol = {
             "SOLUSDT": {"ts": 30.0, "symbol": "SOLUSDT", "action": "hold"},
             "ETHUSDT": {"ts": 20.0, "symbol": "ETHUSDT", "action": "hold"},
@@ -365,9 +371,8 @@ class TestManagementHeartbeat(unittest.TestCase):
         self.assertEqual(e._latest_management("ETHUSDT")["symbol"], "ETHUSDT")
 
     def test_falls_back_to_newest_when_current_has_no_position(self):
-        e = _engine()
+        e = self._with_positions(_engine(), "SOLUSDT", "ETHUSDT")
         e.cfg.market.symbol = "BTCUSDT"          # 当前品种没有持仓
-        e.last_management = {"ts": 1.0, "action": "hold"}
         e.last_management_by_symbol = {
             "SOLUSDT": {"ts": 30.0, "symbol": "SOLUSDT", "action": "hold"},
             "ETHUSDT": {"ts": 20.0, "symbol": "ETHUSDT", "action": "hold"},
@@ -376,11 +381,32 @@ class TestManagementHeartbeat(unittest.TestCase):
         self.assertEqual(got["symbol"], "SOLUSDT")
         self.assertAlmostEqual(got["ts"], 30.0)
 
-    def test_empty_managements_returns_last(self):
-        e = _engine()
+    def test_ignores_closed_symbol_stale_close(self):
+        """回归：已平仓品种的陈旧 close 不能冒充心跳。"""
+        e = self._with_positions(_engine(), "XRPUSDT")
+        e.last_management_by_symbol = {
+            # ETH 早就平了，记录一直留着，时间戳还是最新的 —— 也不能选它
+            "ETHUSDT": {"ts": 9_000.0, "symbol": "ETHUSDT", "action": "close"},
+            "XRPUSDT": {"ts": 100.0, "symbol": "XRPUSDT", "action": "hold"},
+        }
+        got = e._latest_management("ETHUSDT")     # 当前品种恰是已平仓的 ETH
+        self.assertEqual(got["symbol"], "XRPUSDT")
+        self.assertAlmostEqual(got["ts"], 100.0)
+
+    def test_flat_market_returns_empty(self):
+        """完全空仓时没有心跳可报，返回空字典（前端显示「空仓」）。"""
+        e = _engine()                              # positions 为空
         e.last_management = {"ts": 5.0}
+        e.last_management_by_symbol = {
+            "ETHUSDT": {"ts": 9_000.0, "symbol": "ETHUSDT", "action": "close"},
+        }
+        self.assertEqual(e._latest_management("BTCUSDT"), {})
+
+    def test_open_position_without_record_returns_empty(self):
+        """刚开仓还没巡检过：返回空字典，前端显示「等待首轮巡检」。"""
+        e = self._with_positions(_engine(), "SOLUSDT")
         e.last_management_by_symbol = {}
-        self.assertEqual(e._latest_management("BTCUSDT"), {"ts": 5.0})
+        self.assertEqual(e._latest_management("SOLUSDT"), {})
 
 
 if __name__ == "__main__":

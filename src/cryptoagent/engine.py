@@ -633,20 +633,37 @@ class TradingEngine:
         return total
 
     def _latest_management(self, cur_sym: str = "") -> dict:
-        """心跳行用的「最近一次巡检」。
+        """心跳行用的「最近一次巡检」——只认**当前仍有持仓**的品种。
 
-        优先当前品种那份（有仓时它就是用户最关心的）；当前品种没仓时取所有持仓
-        里 ts 最新的一条。之前这里只认当前品种，一旦切到别的品种，心跳时间戳就
-        冻在上一次不动了，看起来像守护线程挂了——实际上它在管别的仓。
+        平仓不会清掉 `last_management_by_symbol` 里该品种的那条记录（它留着平仓
+        那轮的 `action=close`，供「各品种巡检」回看），但直接把它当心跳会显示
+        几十分钟前的 close，页面上看着像守护线程停在了平仓那一刻。所以按持仓过滤：
+
+          1) 当前品种仍有仓 → 用那一份（用户最关心的就是它）；
+          2) 否则在其它**持仓品种**里取 ts 最新的一条（守护线程本就逐仓轮转）；
+          3) 完全空仓或持仓还没巡检过 → 返回 `{}`，前端显示空仓/等待首轮，
+             绝不拿已平仓品种的历史记录冒充心跳。
+
+        为什么不用 `self.last_management` 兜底：那也是「某品种某一轮的快照」，
+        没有持仓约束，同样会冻结在历史 close 上。
         """
+        try:
+            open_syms = {str(s).upper() for s in self._positions_map()}
+        except Exception:  # noqa: BLE001 - 存档损坏也不能把 status() 拖垮
+            open_syms = set()
+        if not open_syms:
+            return {}
         m = getattr(self, "last_management_by_symbol", None) or {}
+        # 快照成 list 再筛：守护线程可能在另一个线程往里塞新品种
+        recs = [(str(k).upper(), v) for k, v in list(m.items())
+                if isinstance(v, dict) and str(k).upper() in open_syms]
+        if not recs:
+            return {}
         cur = str(cur_sym or self.cfg.market.symbol).upper()
-        hit = m.get(cur)
-        if hit:
-            return hit
-        if m:
-            return max(m.values(), key=lambda x: float(x.get("ts") or 0.0))
-        return getattr(self, "last_management", {})
+        for sym, rec in recs:
+            if sym == cur:
+                return rec
+        return max(recs, key=lambda kv: float(kv[1].get("ts") or 0.0))[1]
 
     def _stamp_price(self, symbol: str, price: float, ts: float | None = None) -> None:
         """记下某品种的最新价与写入时刻（_last_prices 是页面读的唯一来源）。"""
@@ -2550,7 +2567,8 @@ class TradingEngine:
                 # 分析师权重校准状态（样本不足时 calibrated=False，权重仍是默认值）
                 "analyst_calibration": calibration_summary(self.state.get("analyst_accuracy")),
                 # 持仓管理员最近一次判断 + 守护线程状态（手动模式下也能看到退出决策）
-                # position_management 只给「当前品种」，全量在 position_managements
+                # position_management 只给「当前仍有持仓的品种」里最新的一轮，全量在
+                # position_managements（含已平仓品种的历史记录，供回看）
                 "position_management": self._latest_management(cur_sym),
                 "position_managements": dict(self.last_management_by_symbol),
                 # 最近一次「有动作」（含 LLM 解释）单独保留，不会被下一轮 hold 冲掉
