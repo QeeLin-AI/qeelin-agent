@@ -1955,6 +1955,7 @@ class WebApp:
             "evolution_rollback_after_losses": int(getattr(p, "evolution_rollback_after_losses", 3)),
             "evolution_rollback_drawdown_r": float(getattr(p, "evolution_rollback_drawdown_r", 2.0)),
             "tuning": self.engine.position_tuning_status(),
+            "replay_job": self.engine.replay_validation_status(),
             "bars_from_index": bool(p.bars_from_index),
             "reversal_ema_bars": int(p.reversal_ema_bars),
             "composite_max_age_sec": int(p.composite_max_age_sec),
@@ -2526,6 +2527,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.set_sentiment_settings(payload)})
         if path == "/api/settings/notify":
             return self._json({"ok": True, "data": app.set_notify_settings(payload)})
+        if path == "/api/settings/position/replay":
+            return self._json({"ok": True, "data": app.engine.start_replay_validation()})
         if path == "/api/settings/position":
             return self._json({"ok": True, "data": app.set_position_settings(payload)})
         if path == "/api/settings/profile":

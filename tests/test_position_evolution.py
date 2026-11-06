@@ -236,3 +236,36 @@ def test_l3_rollback_after_consecutive_losses():
     assert e.cfg.position.evolution_mode == "stats"
     assert e.position_tuning["effective"] == pytest.approx(base)
     assert e.position_tuning["llm"]["rollbacks"]
+
+
+# ---------------------------------------------------------------- L2 手动验收
+def test_replay_validation_without_candidate_keeps_gate_false():
+    e, _base = _bare_engine("stats")
+    e.position_tuning["replay_cases"] = [{}] * 20
+    e._replay_gate = lambda b, c: (False, {"passed": False, "cases": 0,
+                                           "checks": {"enough_cases": False}})
+    e._replay_validation_job()
+    assert e.replay_validation_status()["passed"] is False
+    assert e.position_tuning["gate"]["l2_passed"] is False
+
+
+def test_replay_validation_applies_improved_candidate():
+    e, base = _bare_engine("stats")
+    e.position_tuning["replay_cases"] = [{}] * 20
+    calls = {"n": 0}
+
+    def fake_gate(_b, _c):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True, {"passed": True, "cases": 20, "median_delta": 0.15,
+                          "worst_delta": -0.05, "checks": {"enough_cases": True}}
+        return False, {"passed": False, "cases": 20, "median_delta": 0.0,
+                       "worst_delta": 0.0, "checks": {}}
+
+    e._replay_gate = fake_gate
+    e._replay_validation_job()
+    assert e.replay_validation_status()["passed"] is True
+    assert e.position_tuning["gate"]["l2_passed"] is True
+    assert e.position_tuning["effective"]["reversal_composite"] != pytest.approx(
+        base["reversal_composite"]
+    )

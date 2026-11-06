@@ -1832,6 +1832,113 @@ class TradingEngine:
         except Exception:  # noqa: BLE001
             pass
 
+    def _seed_replay_cases_from_history(self) -> None:
+        """用已有平仓历史补齐 L2 回放样本（老版本没有 replay_cases 字段）。"""
+        hist = self.state.get("position_history") or []
+        cases: list[dict] = []
+        for h in hist[-200:]:
+            try:
+                opened = time.mktime(time.strptime(str(h.get("opened_at")), "%Y-%m-%d %H:%M:%S"))
+                entry = float(h.get("entry") or 0.0)
+                stop = float(h.get("initial_stop") or 0.0)
+                r_pct = float(h.get("r_pct") or 0.0)
+                if opened <= 0 or entry <= 0 or stop <= 0 or r_pct <= 0:
+                    continue
+                cases.append({
+                    "symbol": str(h.get("symbol") or "").upper(),
+                    "side": str(h.get("side") or "LONG").upper(),
+                    "entry": entry, "stop": stop, "tp": 0.0,
+                    "opened_epoch": opened,
+                    "closed_epoch": time.mktime(time.strptime(str(h.get("closed_at")), "%Y-%m-%d %H:%M:%S")),
+                    "initial_r_pct": r_pct,
+                    "realized_r": float(h.get("realized_r") or 0.0),
+                    "mfe_r": h.get("mfe_r"),
+                })
+            except Exception:  # noqa: BLE001
+                continue
+        if cases:
+            self.position_tuning["replay_cases"] = cases[-200:]
+
+    def start_replay_validation(self) -> dict:
+        """手动触发一次 L2 验收（后台线程，不阻塞交易）。
+
+        候选来自对关键参数的 ±12% 小步探索；每个候选都要过回放门槛，
+        只有中位 R 有改善且最差单笔不恶化的才落地并置 gate。
+        """
+        th = getattr(self, "_replay_thread", None)
+        if th is not None and th.is_alive():
+            return {"running": True, "started_at": getattr(self, "_replay_started_at", 0.0)}
+        self._replay_result = {"running": True, "started_at": time.time(),
+                               "finished_at": 0.0, "passed": False}
+        self._replay_started_at = time.time()
+        self._replay_thread = threading.Thread(target=self._replay_validation_job, daemon=True)
+        self._replay_thread.start()
+        return dict(self._replay_result)
+
+    def replay_validation_status(self) -> dict:
+        return dict(getattr(self, "_replay_result", {}) or {})
+
+    def _replay_validation_job(self) -> None:
+        try:
+            cfg = self.cfg.position
+            base = self._tuning_base()
+            prev = dict(self.position_tuning.get("effective") or base)
+            min_cases = int(getattr(cfg, "evolution_replay_min_cases", 20) or 20)
+            if len(self.position_tuning.get("replay_cases") or []) < min_cases:
+                self._seed_replay_cases_from_history()
+            candidates: list[dict] = []
+            for key in ("reversal_composite", "trail_atr_mult", "max_hold_bars"):
+                lo, hi = TUNE_BOUNDS[key]
+                cur = float(prev.get(key, TUNE_DEFAULTS[key]))
+                for factor in (1 - 0.12, 1 + 0.12):
+                    cand = dict(prev)
+                    cand[key] = float(min(hi, max(lo, cur * factor)))
+                    if abs(cand[key] - cur) < 1e-9:
+                        continue
+                    passed, replay = self._replay_gate(prev, cand)
+                    candidates.append({
+                        "param": key, "factor": round(factor, 2),
+                        "from": round(cur, 4), "to": round(cand[key], 4),
+                        "passed": bool(passed), "replay": replay,
+                    })
+            improved = [c for c in candidates
+                        if c["passed"] and float((c["replay"] or {}).get("median_delta") or 0.0) > 0]
+            best = max(improved, key=lambda c: float((c["replay"] or {}).get("median_delta") or 0.0)) if improved else None
+            gate = dict(self.position_tuning.get("gate") or {})
+            if best is not None:
+                eff = dict(prev)
+                eff[best["param"]] = float(best["to"])
+                self.position_tuning["effective"] = eff
+                self.position_tuning["anchor"] = dict(base)
+                log = list(self.position_tuning.get("changes") or [])
+                log.append({
+                    "param": best["param"], "from": best["from"], "to": best["to"],
+                    "rule": "replay",
+                    "why": f"L2 回放验收：中位 R {best['replay'].get('median_delta'):+.2f}",
+                    "ts": time.time(),
+                })
+                self.position_tuning["changes"] = log[-10:]
+                gate["l2_passed"] = True
+                gate["l2_passed_at"] = gate.get("l2_passed_at") or time.time()
+                gate["l2_stable_since"] = gate.get("l2_stable_since") or time.time()
+            else:
+                gate["l2_passed"] = False
+            gate["l2_candidates"] = len(candidates)
+            gate["l2_checked_at"] = time.time()
+            self.position_tuning["gate"] = gate
+            self.position_tuning["replay"] = (best or (candidates[0] if candidates else {})).get("replay") or {}
+            self._sync_tuning_state()
+            self._save()
+            self._replay_result = {
+                "running": False, "finished_at": time.time(), "passed": bool(best),
+                "candidates": candidates, "best": best, "gate": gate,
+            }
+        except Exception as exc:  # noqa: BLE001 - 验收失败不影响交易
+            self._replay_result = {
+                "running": False, "finished_at": time.time(), "passed": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
 
     # ------------------------------------------------------------------
     # 持仓管理员：开仓之后的退出决策（移动止损 / 时间止损 / 趋势反转）

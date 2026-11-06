@@ -504,6 +504,13 @@ async function loadPositionLlmSettings() {
     $('posPeakDrawdownR').value = d.peak_drawdown_r;
     const off = d.offpeak || {};
     $('posLlmOffpeak').textContent = off.label || '--';
+    const rj = d.replay_job || {};
+    if ($('posReplayState')) {
+      $('posReplayState').textContent = rj.running
+        ? 'L2 验收运行中…'
+        : (rj.error ? `L2 验收出错：${rj.error}`
+          : (rj.finished_at ? (rj.passed ? 'L2 已通过' : 'L2 未通过') : 'L2 未运行'));
+    }
     const u = d.usage || {};
     $('posLlmUsage').textContent =
       `LLM 调用 ${u.calls ?? 0} 次 · 峰时跳过 ${u.skipped_offpeak ?? 0}` +
@@ -2849,6 +2856,15 @@ $('llmTestBtn').addEventListener('click', testLlmSettings);
 $('sentimentSaveBtn').addEventListener('click', () => saveSentimentSettings());
 $('notifySaveBtn').addEventListener('click', () => saveNotifySettings());
 $('posLlmSaveBtn').addEventListener('click', () => savePositionLlmSettings());
+$('posReplayBtn')?.addEventListener('click', async () => {
+  try {
+    await api('/api/settings/position/replay', 'POST', {});
+    toast('L2 验收已在后台运行，完成后状态会更新', 'ok');
+    setTimeout(loadPositionLlmSettings, 6000);
+  } catch (e) {
+    toast('L2 验收启动失败：' + e.message, 'err');
+  }
+});
 
 $('profileSelect').addEventListener('change', renderProfileDiff);
 $('profileApplyBtn').addEventListener('click', () => applyProfile($('profileSelect').value));
