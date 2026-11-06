@@ -465,6 +465,57 @@ def cmd_factors(args) -> int:
     return 0
 
 
+def cmd_accounts(args) -> int:
+    """按账户查看权益 / 盈亏 / 流水，支持跨账户汇总与明细查询。
+
+    `--json` 输出结构化结果，供 LLM / 脚本直接消费：
+      accounts                         → 每个账户摘要 + 合计 + 按日合并
+      accounts --scope okx:demo        → 单个账户
+      accounts --kind fills --since 2026-11-01 --json
+    """
+    from .accounts import AccountStore
+
+    cfg = load_config(args.config or DEFAULT_CONFIG_PATH)
+    store = AccountStore(Path(cfg.runs_dir) / "accounts")
+    detail = bool(args.scope or args.since or args.until or args.symbol)
+    if detail:
+        rows = store.query(
+            scope=args.scope or None,
+            kind=args.kind,
+            since=args.since,
+            until=args.until,
+            symbol=args.symbol,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps({"count": len(rows), "rows": rows}, ensure_ascii=False, indent=2))
+            return 0
+        _header(f"{args.kind}（{args.scope or '全部账户'}，{len(rows)} 条）")
+        for r in rows:
+            stamp = r.get("closed_at") or r.get("ts") or ""
+            pnl = r.get("pnl")
+            pnl_txt = f"{pnl:+.2f}" if isinstance(pnl, (int, float)) else "   —"
+            print(f"{stamp}  {r.get('account_scope',''):<14} {r.get('symbol',''):<10} {pnl_txt}")
+        return 0
+
+    snap = store.summarize_all()
+    if args.json:
+        print(json.dumps(snap, ensure_ascii=False, indent=2))
+        return 0
+    _header("按账户汇总")
+    for a in snap["accounts"]:
+        print(
+            f"{a['scope']:<14} 权益 {a['equity']:>10.2f}  峰值 {a['peak_equity']:>10.2f}  "
+            f"回撤 {a['drawdown_pct']:>7.2f}%  已实现 {a['realized']:>+9.2f}  "
+            f"笔数 {a['trades']:>3}  胜率 {a['win_rate'] if a['win_rate'] is not None else '—'}"
+        )
+    c = snap["combined"]
+    print(f"\n合计：已实现 {c['realized']:+.2f} · {c['trades']} 笔 · 胜率 {c['win_rate'] or '—'}")
+    for ex, v in (c.get("by_exchange") or {}).items():
+        print(f"  {ex:<10} 已实现 {v['realized']:+.2f} · {v['trades']} 笔")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cryptoagent", description="币圈合约多智能体交易与研究框架")
     p.add_argument("--config", help="配置文件路径（默认 config/default.json）")
@@ -534,6 +585,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     f = sub.add_parser("factors", help="列出内置因子")
     f.set_defaults(func=cmd_factors)
+
+    ac = sub.add_parser("accounts", help="按账户查看权益/盈亏/流水（支持跨账户汇总）")
+    ac.add_argument("--scope", default="", help="账户作用域，如 okx:demo；留空看全部")
+    ac.add_argument("--kind", default="position_history",
+                    choices=["position_history", "fills"], help="查平仓历史还是成交流水")
+    ac.add_argument("--since", default="", help="起始时间（YYYY-MM-DD 或完整时间）")
+    ac.add_argument("--until", default="", help="结束时间")
+    ac.add_argument("--symbol", default="", help="只看某个品种，如 BTCUSDT")
+    ac.add_argument("--limit", type=int, default=50, help="明细条数上限")
+    ac.add_argument("--json", action="store_true", help="输出 JSON（给 LLM / 脚本用）")
+    ac.set_defaults(func=cmd_accounts)
     return p
 
 

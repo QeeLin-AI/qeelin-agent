@@ -2262,6 +2262,7 @@ function renderPnl() {
   if (!totalEl || !statsEl || !tradesEl) return;
 
   // 已平仓记录：优先用「持仓历史」（新数据源），没有才退回成交里的 pnl
+  // 后端已按当前账户过滤，切到 OKX 模拟盘后不会混进币安模拟盘的记录。
   const hist = (lastStatus?.position_history || []).slice()
     .sort((a, b) => String(a.closed_at).localeCompare(String(b.closed_at)));
   const fills = hist.length
@@ -2269,18 +2270,28 @@ function renderPnl() {
     : (lastStatus?.fills || []).filter((f) => Math.abs(f.pnl || 0) > 1e-9)
       .slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
 
-  const total = fills.reduce((s, f) => s + (f.pnl || 0), 0);
+  // 累计值用后端按账户聚合的全量摘要（不受 status 只回 30 条的窗口限制）。
+  // 只有「摘要为空但成交里有 pnl」时才退回前端累加。
+  const summary = lastStatus?.pnl || null;
+  const useSummary = !!(summary && (Number(summary.trades) > 0 || !fills.length));
+  const trades = useSummary ? Number(summary.trades || 0) : fills.length;
+  const total = useSummary
+    ? Number(summary.realized || 0)
+    : fills.reduce((s, f) => s + (f.pnl || 0), 0);
   totalEl.textContent = `${total >= 0 ? '+' : ''}${fmt(total, 2)} U`;
   totalEl.className = total >= 0 ? 'up' : 'down';
 
-  const wins = fills.filter((f) => (f.pnl || 0) > 0);
-  const losses = fills.filter((f) => (f.pnl || 0) < 0);
-  const winRate = fills.length ? `${Math.round(wins.length / fills.length * 100)}%` : '--';
-  const grossWin = wins.reduce((s, f) => s + (f.pnl || 0), 0);
-  const grossLoss = Math.abs(losses.reduce((s, f) => s + (f.pnl || 0), 0));
+  const winCount = useSummary ? Number(summary.wins || 0) : fills.filter((f) => (f.pnl || 0) > 0).length;
+  const winRate = trades ? `${Math.round(winCount / trades * 100)}%` : '--';
+  const grossWin = useSummary
+    ? Number(summary.gross_win || 0)
+    : fills.filter((f) => (f.pnl || 0) > 0).reduce((s, f) => s + (f.pnl || 0), 0);
+  const grossLoss = useSummary
+    ? Number(summary.gross_loss || 0)
+    : Math.abs(fills.filter((f) => (f.pnl || 0) < 0).reduce((s, f) => s + (f.pnl || 0), 0));
   const pf = grossLoss > 0 ? fmt(grossWin / grossLoss, 2) : (grossWin > 0 ? '∞' : '--');
   statsEl.innerHTML = `
-    <div class="pnl-stat"><label>平仓笔数</label><b>${fills.length}</b></div>
+    <div class="pnl-stat"><label>平仓笔数</label><b>${trades}</b></div>
     <div class="pnl-stat"><label>胜率</label><b>${winRate}</b></div>
     <div class="pnl-stat"><label>盈亏比</label><b>${pf}</b></div>`;
 
@@ -2758,6 +2769,31 @@ $('syncBtn').addEventListener('click', async () => {
     $('livePos').textContent = d.positions.length ? d.positions.map((p) => `${sideCn(p.side)} ${p.qty}`).join(' / ') : '无';
     toast(d.connected ? '同步成功' : `同步失败：${d.error}`, d.connected ? 'ok' : 'err');
   } catch (e) { toast(e.message, 'err'); }
+});
+
+$('resetRecordsBtn').addEventListener('click', async () => {
+  // scope 为空时由后端按当前账户处理；label 只用于提示文案
+  const scope = (lastStatus?.pnl || {}).scope || '';
+  const label = scope || '当前账户';
+  const trades = Number(lastStatus?.pnl?.trades || 0);
+  const fills = (lastStatus?.fills || []).length;
+  // 两次确认：第一次说明范围，第二次确认不可撤销，避免误点
+  if (!confirm(
+    `将清空【${label}】的权益盈亏记录、交易记录与持仓历史。\n` +
+    `当前约有 ${trades} 笔平仓记录、${fills} 条成交流水。\n\n` +
+    '只清这三类数据：风控 / 仓位 / 模型等设置不变，真实持仓也不会被平掉，其它账户不受影响。\n\n继续？'
+  )) return;
+  if (!confirm(`再次确认：清空后无法恢复。\n\n确定重置【${label}】的记录吗？`)) return;
+  try {
+    const d = await api('/api/accounts/reset', 'POST', scope ? { scope } : {});
+    if ($('resetRecordsState')) {
+      $('resetRecordsState').textContent =
+        `已重置 ${d.scope || label}：清空 ${d.fills} 条流水 / ${d.position_history} 笔平仓 / ` +
+        `${d.equity_history} 个权益点，基准权益 ${fmt(d.equity, 2)} U`;
+    }
+    toast('已重置当前账户记录', 'ok');
+    poll();
+  } catch (e) { toast(`重置失败：${e.message}`, 'err'); }
 });
 
 $('autoStart').addEventListener('click', async () => {

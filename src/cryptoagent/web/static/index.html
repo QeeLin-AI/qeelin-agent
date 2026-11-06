@@ -477,6 +477,15 @@
         <button id="syncBtn" class="btn ghost">同步交易所账户</button>
         <button id="selftestBtn" class="btn ghost">连接自检</button>
       </div>
+      <div class="set-group-title" style="margin-top:16px">测试数据</div>
+      <p class="set-hint" style="margin-top:0">
+        清空<b>当前账户</b>的权益盈亏记录、交易记录与持仓历史，方便用同一套设置对比不同参数下的表现。
+        只清这三类数据：<b>不改风控 / 仓位 / 模型等设置，也不动真实持仓</b>，其它账户的记录同样不受影响。
+      </p>
+      <div class="actions">
+        <button id="resetRecordsBtn" class="btn danger">重置当前账户记录</button>
+      </div>
+      <p id="resetRecordsState" class="muted"></p>
     </div>
     </div>
 

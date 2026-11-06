@@ -1591,7 +1591,9 @@ class WebApp:
             POSITION_KEYS, build_context, funnel_stats, perf_stats, propose, sanitize,
         )
         apply_now = bool(payload.get("apply"))
-        perf = perf_stats(self.engine.state.get("position_history") or [])
+        # 只拿当前账户的平仓样本：切到 OKX 模拟盘后，不能再用币安模拟盘的
+        # 战绩去推断参数该往哪调。
+        perf = perf_stats(self.engine._scoped_rows("position_history"))
         funnel = funnel_stats(Path(self.cfg.runs_dir) / "decisions")
         ctx = build_context(self.cfg, perf, funnel)
         prop = propose(self.engine._position_llm_client(), ctx)
@@ -2388,6 +2390,27 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         if path == "/api/status":
             return self._json({"ok": True, "data": app.status()})
+        if path == "/api/accounts":
+            # 每个账户一份摘要 + 跨账户合计（LLM 与「账户对比」共用）
+            return self._json({"ok": True, "data": app.engine.accounts_snapshot()})
+        if path == "/api/accounts/trades":
+            # 明细查询：?scope=okx:demo&kind=fills&since=2026-11-01&symbol=BTCUSDT
+            scope = (query.get("scope", [""])[0] or "").strip()
+            kind = (query.get("kind", ["position_history"])[0] or "position_history").strip()
+            rows = app.engine.accounts.query(
+                scope=scope or None,
+                kind=kind,
+                since=(query.get("since", [""])[0] or "").strip(),
+                until=(query.get("until", [""])[0] or "").strip(),
+                symbol=(query.get("symbol", [""])[0] or "").strip(),
+                limit=_as_int(query.get("limit", ["200"])[0], "limit", 200, 1, 1000),
+            )
+            return self._json(
+                {
+                    "ok": True,
+                    "data": {"scope": scope or "*", "kind": kind, "count": len(rows), "rows": rows},
+                }
+            )
         if path == "/api/klines":
             return self._json(
                 {
@@ -2461,6 +2484,12 @@ class Handler(BaseHTTPRequestHandler):
             res = eng.disarm()
             app.reset_exchange_view()
             return self._json({"ok": True, "data": res})
+        if path == "/api/accounts/reset":
+            # 只清当前账户（或指定账户）的权益曲线 / 成交 / 持仓历史
+            scope = str(payload.get("scope") or "").strip()
+            if scope and (scope.count(":") != 1 or scope.split(":")[1] not in ("demo", "live")):
+                raise ApiError("scope 格式应为 exchange:demo 或 exchange:live", 400)
+            return self._json({"ok": True, "data": eng.reset_account_records(scope or None)})
         if path == "/api/trading/execute":
             res = eng.execute(price=app.live_price, reason="web")
             app.invalidate_exchange_cache()

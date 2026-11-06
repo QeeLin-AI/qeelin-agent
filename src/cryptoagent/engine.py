@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .accounts import AccountStore, scope_of
 from .agents.calibration import record_accuracy, summary as calibration_summary, weights_from_accuracy
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
 from .agents.position_calibration import (
@@ -59,8 +60,12 @@ class TradingEngine:
         # （重启会丢 arm 状态、清空缓存，很多异常排查的第一步就是确认这个）。
         self.started_at = time.time()
         self.state_path = Path(cfg.runs_dir) / "engine_state.json"
+        # 一账户一文件的账本（权益 / 成交 / 平仓历史）。engine_state.json 仍是
+        # 「当前账户的工作副本 + 运行时状态」，账户文件才是长期账本。
+        self.accounts = AccountStore(Path(cfg.runs_dir) / "accounts")
         self.state = self._default_state()
         self._load()
+        self._init_account_store()
         # 打开/重启后默认不自动运行交易循环：线程只在用户点「启动」时由 start_auto 创建。
         # 先把「上次是否是运行中」记下来，供 CRYPTOAGENT_AUTO_RESUME=on 时在模拟盘下恢复。
         _prev_auto = dict(self.state.get("auto") or {})
@@ -234,6 +239,32 @@ class TradingEngine:
         # 视图不能是 None：有仓位时 `position` 为 None 会让老前端显示「空仓」
         if self.state["positions"] and not self.state.get("position"):
             self.state["position"] = next(iter(self.state["positions"].values()))
+        # 注意：这里不能给旧流水补账户标签。标签必须由 `_init_account_store()`
+        # 在「按时间边界拆账」之后补，否则币安时期的历史会被先钉成当前账户。
+
+    def _init_account_store(self) -> None:
+        """初始化分账户账本。
+
+        首次启动（runs/accounts 还没有 marker）把旧的单文件账本按账户拆开；
+        之后每次启动只把当前账户的账本灌进 state。拆账失败就退回单文件模式，
+        绝不因为迁移失败而清空流水。
+        """
+        try:
+            result = self.accounts.migrate(self.state, self.state_path)
+        except Exception as exc:  # noqa: BLE001 - 迁移失败不能挡住启动
+            print(f"[accounts] 账本拆分失败，沿用单文件模式：{type(exc).__name__}: {exc}")
+            return
+        if result.get("migrated"):
+            print(f"[accounts] 已按账户拆分旧流水：{result.get('accounts')}")
+            self._save()
+        scope = self._scope()
+        try:
+            self.accounts.apply_to_state(scope, self.state)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[accounts] 加载 {scope} 账本失败：{type(exc).__name__}: {exc}")
+            return
+        # 兜底：拆账后仍无标签的行只能是当前账户运行时产生的
+        self._tag_legacy_ledger()
 
     def _prune_decisions(self, out: Path) -> None:
         """清掉过期决策快照，每小时最多跑一次。
@@ -263,6 +294,13 @@ class TradingEngine:
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.state, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(self.state_path)
+        # 同步当前账户的长期账本：进程被 kill 也不会丢成交与权益曲线
+        store = getattr(self, "accounts", None)
+        if store is not None:
+            try:
+                store.save_state(self._scope(), self.state)
+            except Exception:  # noqa: BLE001 - 账户账本写失败不影响主流程
+                pass
         self._backup_state()
 
     def _backup_state(self) -> None:
@@ -445,6 +483,107 @@ class TradingEngine:
         return str(self.state.get("account_scope") or "") or self._account_scope(
             self.state.get("exchange", "binance"), bool(self.state.get("testnet", True))
         )
+
+    @staticmethod
+    def _row_in_scope(row: dict, scope: str) -> bool:
+        """流水行是否属于该账户。
+
+        没带标签的行按「属于当前账户」处理：升级前的旧记录无法逐笔还原，
+        加载时已由 `_tag_legacy_ledger()` 统一补标，这里只是运行时兜底。
+        """
+        if not scope:
+            return True
+        tag = str(row.get("account_scope") or "")
+        return not tag or tag == scope
+
+    def _scoped_rows(self, key: str, scope: str | None = None) -> list[dict]:
+        """按账户取流水（fills / position_history），保持原有顺序。"""
+        scope = self._scope() if scope is None else scope
+        return [
+            r for r in (self.state.get(key) or [])
+            if isinstance(r, dict) and self._row_in_scope(r, scope)
+        ]
+
+    def _pnl_summary(self, scope: str | None = None) -> dict:
+        """当前账户的累计已实现盈亏。
+
+        必须用全量 `position_history` 聚合，不能拿 `status()` 里那 30 条算：
+        页面上写的是「累计」，只加最近 30 笔会随窗口滚动而变小。
+        """
+        scope = self._scope() if scope is None else scope
+        rows = self._scoped_rows("position_history", scope)
+        pnls = [float(r.get("pnl") or 0.0) for r in rows]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+        return {
+            "scope": scope,
+            "realized": round(sum(pnls), 4),
+            "trades": len(pnls),
+            "wins": len(wins),
+            "losses": len(losses),
+            "gross_win": round(sum(wins), 4),
+            "gross_loss": round(abs(sum(losses)), 4),
+            "first_at": str(rows[0].get("closed_at") or "") if rows else "",
+            "last_at": str(rows[-1].get("closed_at") or "") if rows else "",
+        }
+
+    def _accounts_summary(self) -> dict:
+        """跨账户摘要（每个账户一份 + 合计 + 按日），给页面和 LLM 共用。
+
+        每 5 秒最多读一次盘：`status()` 每 3 秒被轮询，逐次读文件没必要。
+        """
+        now = time.time()
+        hit = getattr(self, "_accounts_cache", None)
+        if hit and now - float(hit[0]) < 5.0:
+            return hit[1]
+        try:
+            data = self.accounts.summarize_all()
+        except Exception:  # noqa: BLE001 - 摘要失败不能影响 status
+            data = {"accounts": [], "combined": {}}
+        cur = self._scope()
+        for row in data.get("accounts") or []:
+            if row.get("scope") != cur:
+                continue
+            # 当前账户的权益以内存为准：status 不写盘，文件可能落后几十秒
+            eq = float(self.state.get("equity") or 0.0)
+            peak = max(float(self.state.get("peak_equity") or 0.0), eq)
+            row["equity"] = round(eq, 2)
+            row["peak_equity"] = round(peak, 2)
+            row["drawdown_pct"] = round((eq / peak - 1) * 100, 3) if peak > 0 else 0.0
+            break
+        self._accounts_cache = (now, data)
+        return data
+
+    def accounts_snapshot(self) -> dict:
+        """跨账户数据快照：账户摘要 + 合计 + 按日合并。
+
+        Web（/api/accounts）与 LLM 多账户分析共用这一个入口，避免各自拼文件。
+        """
+        return self._accounts_summary()
+
+    def _tag_legacy_ledger(self) -> None:
+        """给没有账户标签的旧流水补上「当时的账户」，并落盘一次。
+
+        为什么必须钉住而不是每次按「当前账户」算：同一批旧记录如果没有标签，
+        切到另一个交易所后会被新账户再算一遍，两个账户都显示同一份历史盈亏，
+        永远归不了零。补标之后每笔只属于一个账户。
+        局限：升级前如果已经跨交易所用过，旧记录无法逐笔还原，统一归给存档里
+        最后使用的那个账户。
+        """
+        scope = self._scope()
+        if not scope:
+            return
+        changed = 0
+        for key in ("fills", "position_history"):
+            for row in self.state.get(key) or []:
+                if isinstance(row, dict) and not row.get("account_scope"):
+                    row["account_scope"] = scope
+                    changed += 1
+        if changed:
+            try:
+                self._save()
+            except Exception:  # noqa: BLE001 - 补标失败不能挡住启动
+                pass
 
     # ------------------------------------------------------------------
     # 多品种持仓
@@ -813,35 +952,115 @@ class TradingEngine:
             self._save()
 
     def _reset_account_scope(self, acct: dict | None = None, scope: str = "") -> None:
-        """切换账户后重置「账户级」状态。
+        """切换账户：旧账户落盘、新账户换血、权益基准以交易所为准。
 
         peak_equity / day_start_equity / consecutive_losses 都是绑定在某个账户上的：
         换了账户还沿用旧值，会得到「旧账户峰值 vs 新账户余额」的伪回撤，以及旧账户
         留下的伪连亏（会一路写进风控官提示词并压低仓位）。
 
-        保留：position_history / fills（审计流水，新记录带 account_scope 标签）、
-        K 线缓存（进程内 _KL_CACHE 与磁盘 CSV 都按交易所隔离，切换账户不影响行情）。
+        流水（fills / position_history / 权益曲线）不再是「保留在同一个 state 里」，
+        而是各自写进 `runs/accounts/<scope>.json`：切到 OKX 模拟盘后加载的是 OKX
+        自己的账本，币安模拟盘的历史留在币安文件里，两边互不影响。
+        K 线缓存与账户无关，完全不动。
         """
+        old_scope = str(self.state.get("account_scope") or "") or self._scope()
+        new_scope = str(scope or "") or old_scope
         equity: float | None = None
         if acct:
             try:
                 equity = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
             except (TypeError, ValueError):
                 equity = None
+        store = getattr(self, "accounts", None)
         with self.lock:
+            # 1) 旧账户先落盘（权益基准 + 权益曲线 + 成交/平仓历史）
+            if store is not None and old_scope:
+                try:
+                    store.save_state(old_scope, self.state)
+                except Exception:  # noqa: BLE001 - 落盘失败也不能阻断切换
+                    pass
+            if scope:
+                self.state["account_scope"] = str(scope)
+            # 2) 换血：只加载新账户自己的账本；新账户没有账本就是空历史
+            existed = False
+            if store is not None:
+                try:
+                    existed = store.apply_to_state(new_scope, self.state)
+                except Exception:  # noqa: BLE001
+                    self.state["fills"] = []
+                    self.state["position_history"] = []
+                    self.state["history"] = []
+            else:
+                # 分账户账本不可用（迁移失败）：退回「清空流水」的旧行为
+                self.state["history"] = []
+            # 3) 权益基准：能取到交易所余额就以它为准；新账户取不到就用初始权益
             if equity and equity > 0:
                 self.state["equity"] = float(equity)
-                self.state["peak_equity"] = float(equity)
+                # 新账户首连不能沿用上一个账户的峰值，否则回撤从第一天就是假的；
+                # 已有账户则保留它自己的历史峰值（回撤要跨会话延续）。
+                prev_peak = float(self.state.get("peak_equity") or 0.0) if existed else 0.0
+                self.state["peak_equity"] = max(prev_peak, float(equity))
                 self.state["day_start_equity"] = float(equity)
+                self.state["day"] = _today()
+            elif not existed:
+                base_eq = float(self.cfg.backtest.initial_equity)
+                self.state["equity"] = base_eq
+                self.state["peak_equity"] = base_eq
+                self.state["day_start_equity"] = base_eq
                 self.state["day"] = _today()
             self.state["consecutive_losses"] = 0
             self.state["live_baseline_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            if scope:
-                self.state["account_scope"] = str(scope)
-            # 账户级权益曲线不能跨账户拼接；审计流水（position_history/fills）保留
-            self.state["history"] = []
             self._live_eq_cache = None
+            # 账户摘要缓存必须失效：否则切完账户 5 秒内页面还读到旧账户的汇总
+            self._accounts_cache = None
             self._save()
+
+    def reset_account_records(self, scope: str | None = None) -> dict:
+        """清空某个账户的权益曲线 / 成交记录 / 持仓历史。
+
+        重置范围严格限定这三类数据：
+        - 不动配置（风控、仓位、模型、通知都不变）；
+        - 不动真实持仓（交易所仓位与本地 positions 都保留）；
+        - 不动其它账户的文件；
+        - 不动 K 线缓存、因子库、决策快照。
+
+        当前账户还会把权益基准对齐到交易所余额（取不到就用当前权益），
+        这样「重置后重新统计」的起点是真实权益，而不是旧账户累计出的数字。
+        """
+        target = str(scope or "").strip() or self._scope()
+        before = self.accounts.reset(target)
+        is_current = target == self._scope()
+        if is_current:
+            with self.lock:
+                self.state["fills"] = []
+                self.state["position_history"] = []
+                self.state["history"] = []
+                self.state["consecutive_losses"] = 0
+                eq: float | None = None
+                client = getattr(self, "live_client", None)
+                if client is not None:
+                    try:
+                        acct = client.account()
+                        eq = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+                    except Exception:  # noqa: BLE001 - 取不到余额就用当前权益
+                        eq = None
+                if not eq or eq <= 0:
+                    eq = float(self.state.get("equity") or self.cfg.backtest.initial_equity)
+                self.state["equity"] = float(eq)
+                self.state["peak_equity"] = float(eq)
+                self.state["day_start_equity"] = float(eq)
+                self.state["day"] = _today()
+                self._live_eq_cache = None
+                self._accounts_cache = None
+                self._save()
+        else:
+            self._accounts_cache = None
+        return {
+            **before,
+            "current": is_current,
+            "equity": round(float(self.state.get("equity") or 0.0), 2) if is_current else None,
+            "reset_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     def _live_fill(self, symbol: str, order_id: str) -> dict | None:
         """按 orderId 回读交易所成交，拿真实成交均价 / 手续费 / 已实现盈亏。
@@ -1210,7 +1429,9 @@ class TradingEngine:
                     "reason": "exchange",
                     "order_id": order_id,
                     "backfilled": True,
-                    "account_scope": self._scope(),
+                    # 补记的是这笔仓位自己的账户：切过账户后不能按「当前」打标，
+                    # 否则旧账户的平仓会被算进新账户的盈亏。
+                    "account_scope": pos.get("account_scope") or self._scope(),
                 }
             )
             self.state["fills"] = self.state["fills"][-500:]
@@ -1892,8 +2113,12 @@ class TradingEngine:
             pass
 
     def _seed_replay_cases_from_history(self) -> None:
-        """用已有平仓历史补齐 L2 回放样本（老版本没有 replay_cases 字段）。"""
-        hist = self.state.get("position_history") or []
+        """用已有平仓历史补齐 L2 回放样本（老版本没有 replay_cases 字段）。
+
+        只取当前账户：回放样本决定参数怎么调，混入另一个交易所的行情与
+        成交，会把参数往不合适的方向带。
+        """
+        hist = self._scoped_rows("position_history")
         cases: list[dict] = []
         for h in hist[-200:]:
             try:
@@ -3075,14 +3300,11 @@ class TradingEngine:
     def _daily_pnl(self, days: int = 120, scope: str | None = None) -> list[dict]:
         """按平仓日期聚合已实现盈亏，返回最近 N 天（有交易的日子）。
 
-        `scope` 非空时只统计该账户的流水；旧记录没有 `account_scope` 标签，
-        归入当前 scope（升级兼容），不会因为加标签而凭空消失。
+        与累计盈亏、持仓历史共用 `_scoped_rows`：三者口径必须一致，
+        否则会出现「累计 +120 / 日历 -30」这种自相矛盾的页面。
         """
         agg: dict[str, dict] = {}
-        for h in self.state.get("position_history", []):
-            tag = str(h.get("account_scope") or "")
-            if scope and tag and tag != scope:
-                continue
+        for h in self._scoped_rows("position_history", scope):
             day = str(h.get("closed_at") or "")[:10]
             if len(day) != 10:
                 continue
@@ -3166,14 +3388,19 @@ class TradingEngine:
                 "position_limit": self.position_limit(),
                 "fills": [
                     {**f, "symbol": f.get("symbol") or self.cfg.market.symbol}
-                    for f in self.state["fills"][-30:][::-1]
+                    for f in self._scoped_rows("fills")[-30:][::-1]
                 ],
                 # 持仓历史（最近 30 笔平仓，最新在前）+ 每日已实现盈亏（最近 14 天）
+                # 只回当前账户的：切到 OKX 模拟盘后不能还显示币安模拟盘的成交与平仓。
                 "position_history": sorted(
-                    self.state.get("position_history", [])[-200:],
+                    self._scoped_rows("position_history")[-200:],
                     key=lambda x: str(x.get("closed_at") or ""),
                     reverse=True,
                 )[:30],
+                # 累计已实现盈亏：全量聚合当前账户，不受上面 30 条窗口影响
+                "pnl": self._pnl_summary(),
+                # 跨账户汇总：页面「账户对比」与 LLM 多账户分析都读这一份
+                "accounts": self._accounts_summary(),
                 "daily": self._daily_pnl(scope=self._scope()),
                 "consecutive_losses": self.state["consecutive_losses"],
                 "last_decision": self.state.get("last_decision"),
