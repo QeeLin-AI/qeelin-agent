@@ -12,6 +12,7 @@ Python 的 ssl 默认会用它，于是访问币安时报
 from __future__ import annotations
 
 import ssl
+import urllib.request
 
 _CTX: ssl.SSLContext | None = None
 
@@ -26,3 +27,12 @@ def ssl_context() -> ssl.SSLContext:
         except Exception:  # noqa: BLE001 - 没装 certifi 就退回系统库
             _CTX = ssl.create_default_context()
     return _CTX
+
+
+def open_url(req, timeout: float = 8.0):
+    """统一外呼入口：带上 CA 上下文与超时。
+
+    通知 / 新闻源以前直接 `urlopen`，不传 context，在根证书缺失的 Windows
+    上会「行情能用、告警全失败」；统一走这里就不会再有第二套 SSL 行为。
+    """
+    return urllib.request.urlopen(req, timeout=timeout, context=ssl_context())

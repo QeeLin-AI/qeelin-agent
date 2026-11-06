@@ -1908,3 +1908,37 @@ class TestAnalystCalibration(unittest.TestCase):
                         weights=[0.1, 0.8, 0.1], calibrated=True)
         self.assertGreater(d1.score, d2.score)     # 把权重从技术挪向资金费率
         self.assertIn("校准", d2.thesis)
+
+
+class TestRegressionFixes(unittest.TestCase):
+    """2026-11-06 全量审查修复的回归：跨日基准、衍生品长历史。"""
+
+    def test_roll_day_resets_day_start_equity(self):
+        import threading
+
+        from cryptoagent.engine import TradingEngine, _today
+
+        e = object.__new__(TradingEngine)
+        e.state = {"day": "2000-01-01", "equity": 1234.0}
+        e.lock = threading.RLock()
+        e._roll_day()
+        self.assertEqual(e.state["day"], _today())
+        self.assertAlmostEqual(e.state["day_start_equity"], 1234.0)
+
+    def test_enrich_derivatives_survives_long_history(self):
+        import time as _t
+
+        import pandas as pd
+
+        from cryptoagent import derivatives
+
+        idx = pd.date_range("2026-01-01", periods=6000, freq="h", tz="UTC")
+        df = pd.DataFrame({"close": 100.0}, index=idx)
+        rows = [(int(ts.timestamp() * 1000), 0.01) for ts in idx[-500:]]
+        derivatives._CACHE.clear()
+        derivatives._CACHE[("BTCUSDT", "1h", 500)] = (_t.time(), {
+            "basis": (rows, lambda r: r[0], lambda r: r[1]),
+        })
+        out = derivatives.enrich_derivatives(df, "BTCUSDT", "1h", enabled=True)
+        self.assertIn("basis", out.columns)
+        self.assertGreater(int(out["basis"].notna().sum()), 0)

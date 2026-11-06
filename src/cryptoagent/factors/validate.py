@@ -29,17 +29,6 @@ from .sandbox import FactorError, check_lookahead, run_factor, run_factors_batch
 VALIDATED_PATH = Path(__file__).with_name("validated.json")
 
 
-def load_validated(path: Path | str | None = None) -> set[str]:
-    """读已通过 OOS 验证的因子名单；文件不存在/损坏时返回空集合。"""
-    p = Path(path) if path else VALIDATED_PATH
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        names = data.get("validated", [])
-        return {str(n) for n in names}
-    except (OSError, ValueError, TypeError, AttributeError):
-        return set()
-
-
 def candidates(names: list[str] | None = None,
                include_validated: bool = False) -> list[dict]:
     """待验证的候选因子（默认只要 validated=False），可指定名单缩小范围。

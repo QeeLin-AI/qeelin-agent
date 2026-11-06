@@ -130,7 +130,7 @@ def main():
     lookahead = []
     if checks > 0:
         n = len(df)
-        for frac in [0.45, 0.6, 0.75, 0.9][:checks]:
+        for frac in [0.40, 0.55, 0.70, 0.80, 0.90, 0.97][:checks]:
             k = max(60, int(n * frac))
             part = compute(df.iloc[:k])
             a, b = float(full.iloc[k - 1]), float(part.iloc[-1])
@@ -252,7 +252,7 @@ def run_factor(
     code: str,
     df: pd.DataFrame,
     timeout: int = DEFAULT_TIMEOUT,
-    lookahead_checks: int = 4,
+    lookahead_checks: int = 6,
 ) -> tuple[pd.Series, dict]:
     """在子进程里执行因子代码，返回 (因子序列, 元信息)。
 

@@ -644,6 +644,10 @@ def fetch_klines(
         raise DataError(f"不支持的周期 {interval}，可选 {', '.join(KL_INTERVALS)}")
     limit = max(20, min(int(limit), 1000))
     prefer = (prefer or "binance").lower()
+    if prefer == "okx":
+        # OKX 单次最多返回 300 根：limit 更大时，落盘文件永远凑不够
+        # `len(cached) >= limit-5` 的命中条件，盘缓存等于失效且每次重写。
+        limit = min(limit, 300)
     key = (symbol, interval, limit, prefer)
     now = time.time()
     disk_path = (

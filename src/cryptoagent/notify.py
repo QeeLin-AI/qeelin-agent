@@ -37,29 +37,14 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .config import NotifyConfig
+from .netutil import open_url
+
 _log = logging.getLogger("notify")
 
 
-@dataclass
-class NotifyConfig:
-    """通知配置。
-
-    各 env 字段仅声明「从哪个环境变量读取」，实际读取在对应适配器内进行，
-    这样未启用该通道时完全不会触碰相关环境变量。
-    """
-
-    channels: list[str] = field(default_factory=lambda: ["console", "inapp"])
-    enabled: bool = True
-    webhook_url_env: str = "CRYPTOAGENT_WEBHOOK_URL"
-    telegram_token_env: str = "CRYPTOAGENT_TG_TOKEN"
-    telegram_chat_env: str = "CRYPTOAGENT_TG_CHAT"
-    email_smtp_host_env: str = "CRYPTOAGENT_SMTP_HOST"
-    email_smtp_port_env: str = "CRYPTOAGENT_SMTP_PORT"
-    email_user_env: str = "CRYPTOAGENT_SMTP_USER"
-    email_pass_env: str = "CRYPTOAGENT_SMTP_PASS"
-    email_to_env: str = "CRYPTOAGENT_SMTP_TO"
-    inapp_path: str = "runs/notifications.jsonl"
-
+# 配置类型单点定义：AppConfig 用的是 config.NotifyConfig，这里不再重复一份，
+# 避免两边字段漂移（duck typing 能跑，但默认值会悄悄分叉）。
 
 @dataclass
 class Notification:
@@ -193,7 +178,7 @@ class Notifier:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with open_url(req, timeout=8) as resp:
             _ = resp.read()  # 不关心响应体，只确认不抛错
 
     def _telegram(self, n: Notification) -> None:
@@ -206,7 +191,7 @@ class Notifier:
         qs = urllib.parse.urlencode({"chat_id": chat, "text": text})
         url = f"https://api.telegram.org/bot{token}/sendMessage?{qs}"
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with open_url(req, timeout=8) as resp:
             _ = resp.read()
 
     def _email(self, n: Notification) -> None:

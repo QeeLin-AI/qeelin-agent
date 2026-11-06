@@ -223,6 +223,15 @@ class BinanceFuturesClient:
             time.sleep(0.05 - delta)
         self._last_call = time.time()
 
+    def _read_guard(self) -> None:
+        """只读接口守卫：只校验凭据，不要求 armed。
+
+        成交查询是 GET；disarm 后守护线程仍要补记交易所侧已成交的平仓，
+        沿用写守卫会让补记静默失败、持仓流水缺失。
+        """
+        if not self.api_key or not self.api_secret:
+            raise ExchangeError("缺少 API Key / Secret")
+
     def _guard(self) -> None:
         if not self.armed:
             raise ExchangeError("客户端未解锁（armed=False），拒绝任何写操作")
@@ -415,7 +424,7 @@ class BinanceFuturesClient:
         symbol 传 None 时拉全部品种：用户切了品种后，「最近成交」仍要能看到上一笔交易
         （币安 userTrades 省略 symbol 即返回全品种最近成交）。
         """
-        self._guard()
+        self._read_guard()
         # 币安 userTrades 默认按时间升序返回：只给 limit 拿到的是「最早」的 N 笔，
         # 最新成交反而被截掉。这里限定最近 3 天并放大条数，取回后按时间倒序截断。
         params: dict = {
@@ -544,6 +553,11 @@ class OKXClient:
         if delta < 0.05:
             time.sleep(0.05 - delta)
         self._last_call = time.time()
+
+    def _read_guard(self) -> None:
+        """只读接口守卫：只校验凭据，不要求 armed（理由同 BinanceFuturesClient）。"""
+        if not self.api_key or not self.api_secret or not self.passphrase:
+            raise ExchangeError("缺少 API Key / Secret / Passphrase")
 
     def _guard(self) -> None:
         if not self.armed:
@@ -830,7 +844,7 @@ class OKXClient:
 
     def trades(self, symbol: str | None = None, limit: int = 30) -> list[dict]:
         """账户在交易所的真实成交。symbol 为空时拉全部品种（切换品种后仍能看到上一笔）。"""
-        self._guard()
+        self._read_guard()
         params: dict = {"instType": "SWAP", "limit": max(1, min(limit, 100))}
         if symbol:
             params["instId"] = to_okx_inst(symbol)

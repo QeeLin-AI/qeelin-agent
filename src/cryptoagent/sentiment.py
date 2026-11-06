@@ -28,22 +28,14 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from .config import SentimentConfig
+from .netutil import open_url
+
 
 # --------------------------------------------------------------------------
 # 配置与结果
 # --------------------------------------------------------------------------
-@dataclass
-class SentimentConfig:
-    """情绪源配置。
-
-    通过 source 字段在「价格行为代理」与「真实新闻源」之间切换；
-    enabled=False 时强制回退到本地代理。
-    """
-
-    source: str = "price_action"  # "price_action" | "cryptopanic"
-    cryptopanic_api_key_env: str = "CRYPTOPANIC_API_KEY"
-    cache_ttl_sec: int = 600
-    enabled: bool = True
+# 配置类型单点定义：AppConfig 用的是 config.SentimentConfig，这里不再重复一份。
 
 
 @dataclass
@@ -234,7 +226,7 @@ class CryptoPanicSentiment(SentimentSource):
 
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "crypto-agent/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with open_url(req, timeout=8) as resp:
                 payload = json.loads(resp.read().decode("utf-8", "replace"))
             results = payload.get("results") or []
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError, json.JSONDecodeError):
