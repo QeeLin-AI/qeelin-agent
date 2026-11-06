@@ -1832,7 +1832,18 @@ function renderStatus(s) {
     // 持仓管理员的常态是 hold——不产生任何动作，而「持仓管理员」卡片只在真改止损/
     // 平仓时才出现，于是页面上长期看不到它在工作。这里把「上一轮巡检」常态化显示：
     // 状态点 + 高亮时间戳徽标 + 距今秒数。守护线程 30 秒一轮，秒数不涨即说明停了。
-    const pm = s.position_management || {};
+    // 只认「当前仍有持仓」的巡检记录：当前品种可能已平仓，position_managements 里会
+    // 留着平仓那轮的 action=close；直接拿它当心跳会显示很久以前的 close（像线程挂了）。
+    // 因此在所有持仓品种里取 ts 最新的一条，取不到才退回 position_management。
+    const mgMap = s.position_managements || {};
+    let pm = s.position_management || {};
+    let pmTs = Number(pm.ts) || 0;
+    for (const _p of posAll) {
+      const _sym = String(_p.symbol || s.symbol || '').toUpperCase();
+      const _e = mgMap[_sym];
+      const _t = _e ? (Number(_e.ts) || 0) : 0;
+      if (_e && _t > pmTs) { pm = _e; pmTs = _t; }
+    }
     const gd = s.position_guard || {};
     const ts = Number(pm.ts) || 0;
     let guardLine;
