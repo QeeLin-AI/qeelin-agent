@@ -1365,10 +1365,10 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .trade-main > .muted { font-size: 11.5px; line-height: 1.5; }
   .auto-controls { gap: 12px; margin: 0 0 2px; align-items: flex-end; }
   .auto-controls .field { flex: 0 1 auto; min-width: 0; }
-  .auto-controls .field input { width: 128px; }
+  .auto-controls .field input { width: 128px; height: 36px; }
   .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; flex-basis: 100%; order: 2; }
-  .auto-controls .auto-actions { flex: 1 1 auto; gap: 10px; margin-top: 0; }
-  .auto-controls .auto-actions .btn { flex: 1 1 0; min-width: 0; height: 42px; padding: 0; font-size: 13.5px; }
+  .auto-controls .auto-actions { flex: 0 0 auto; margin-left: auto; gap: 10px; }
+  .auto-controls .auto-actions .btn { height: 36px; padding: 0 16px; font-size: 13px; }
   .auto-meta { display: block; width: 100%; margin: 12px 0 0; font-size: 11.5px; overflow-wrap: anywhere; }
   .trade-main .divider { margin: 12px 0 8px; }
   .trade-main .actions { gap: 8px; }
