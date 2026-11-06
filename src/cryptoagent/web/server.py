@@ -2017,12 +2017,16 @@ class WebApp:
                     "L3 需要先通过 L2 反事实回放门控：请先切到 replay、积累平仓样本并让门控通过",
                     400,
                 )
-            enabled = bool(staged.get("evolution_llm_enabled",
-                                      getattr(p, "evolution_llm_enabled", False)))
+            enabled = bool(payload.get(
+                "evolution_llm_enabled",
+                staged.get("evolution_llm_enabled", getattr(p, "evolution_llm_enabled", False)),
+            ))
             if not enabled:
                 raise ApiError("L3 需要显式开启 evolution_llm_enabled", 400)
-            days = int(staged.get("evolution_l2_stable_days",
-                                  getattr(p, "evolution_l2_stable_days", 14)))
+            days = int(payload.get(
+                "evolution_l2_stable_days",
+                staged.get("evolution_l2_stable_days", getattr(p, "evolution_l2_stable_days", 14)),
+            ))
             since = float(gate.get("l2_stable_since") or 0.0)
             if days > 0 and since and (time.time() - since) < days * 86400:
                 raise ApiError(f"L2 需稳定运行 {days} 天后再评估 L3", 400)
