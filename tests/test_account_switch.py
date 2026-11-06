@@ -56,6 +56,39 @@ def test_scope_uses_exchange_and_env():
     assert TradingEngine._account_scope("OKX", False) == "okx:live"
 
 
+def test_arm_switch_keeps_target_account_records(tmp_path):
+    """切到已有账本的账户：必须加载它的历史，不能被当前空 state 覆盖。
+
+    回归：arm 曾经先写 state["account_scope"]=新值再调 _reset_account_scope，
+    后者把新账户文件当成旧账户、用当前空流水覆盖，币安 54 笔平仓直接丢失。
+    """
+    from cryptoagent.accounts import AccountStore
+
+    e = _engine("okx:demo")
+    e.accounts = AccountStore(tmp_path / "accounts")
+    e.accounts.save_state("binance:demo", {
+        "fills": [{"ts": "2026-11-01 10:00:00", "action": "CLOSE", "pnl": 7.0,
+                   "account_scope": "binance:demo"}],
+        "position_history": [{"symbol": "BTCUSDT", "side": "LONG", "pnl": 7.0,
+                              "closed_at": "2026-11-01 10:00:00",
+                              "account_scope": "binance:demo"}],
+        "equity": 5000.0,
+        "peak_equity": 5000.0,
+        "day_start_equity": 5000.0,
+    })
+    e.connect = lambda **kw: _FakeClient()
+
+    res = e.arm("testnet", "", exchange="binance")
+    assert res["exchange"] == "binance"
+    assert e.state["account_scope"] == "binance:demo"
+    assert len(e.state["position_history"]) == 1
+    assert len(e.state["fills"]) == 1
+    assert e._pnl_summary()["realized"] == 7.0
+    # 目标账户文件没被覆盖
+    assert e.accounts.summarize("binance:demo")["realized"] == 7.0
+    assert e.accounts.summarize("binance:demo")["trades"] == 1
+
+
 def test_same_exchange_env_change_resets_account_state(monkeypatch):
     """binance demo -> binance live 也必须重置，不能沿用 demo 的峰值/日基准。"""
     monkeypatch.setenv("CRYPTOAGENT_I_UNDERSTAND_THE_RISK", "yes")

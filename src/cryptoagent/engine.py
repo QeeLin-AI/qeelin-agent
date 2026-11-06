@@ -951,7 +951,9 @@ class TradingEngine:
             self._live_eq_cache = (float(equity), time.time())
             self._save()
 
-    def _reset_account_scope(self, acct: dict | None = None, scope: str = "") -> None:
+    def _reset_account_scope(
+        self, acct: dict | None = None, scope: str = "", old_scope: str = ""
+    ) -> None:
         """切换账户：旧账户落盘、新账户换血、权益基准以交易所为准。
 
         peak_equity / day_start_equity / consecutive_losses 都是绑定在某个账户上的：
@@ -962,8 +964,15 @@ class TradingEngine:
         而是各自写进 `runs/accounts/<scope>.json`：切到 OKX 模拟盘后加载的是 OKX
         自己的账本，币安模拟盘的历史留在币安文件里，两边互不影响。
         K 线缓存与账户无关，完全不动。
-        """
-        old_scope = str(self.state.get("account_scope") or "") or self._scope()
+
+        `old_scope` 必须由调用方在**改动 state 之前**取好：如果先写
+        `state["account_scope"] = 新值` 再进来，这里会把「新账户文件」当成旧账户
+        落盘，用当前（旧账户的）空流水覆盖掉它的历史。"""
+        old_scope = (
+            str(old_scope or "")
+            or str(self.state.get("account_scope") or "")
+            or self._scope()
+        )
         new_scope = str(scope or "") or old_scope
         equity: float | None = None
         if acct:
@@ -1307,11 +1316,14 @@ class TradingEngine:
             self.state["mode"] = "live"
             self.state["testnet"] = True
             self.state["exchange"] = exchange
-            self.state["account_scope"] = new_scope
-            self._save()
+            # 顺序很重要：先让 _reset_account_scope 用旧 scope 落盘再换血。
+            # 提前写 account_scope 会让它把新账户文件当成旧账户覆盖掉。
             if reset_needed:
-                self._reset_account_scope(acct, scope=new_scope)
+                self._reset_account_scope(acct, scope=new_scope, old_scope=prev_scope)
                 self.reload_for_exchange()
+            else:
+                self.state["account_scope"] = new_scope
+                self._save()
             return {
                 "mode": "testnet",
                 "armed": True,
@@ -1334,11 +1346,12 @@ class TradingEngine:
         self.state["mode"] = "live"
         self.state["testnet"] = testnet
         self.state["exchange"] = exchange
-        self.state["account_scope"] = new_scope
-        self._save()
         if reset_needed:
-            self._reset_account_scope(acct, scope=new_scope)
+            self._reset_account_scope(acct, scope=new_scope, old_scope=prev_scope)
             self.reload_for_exchange()
+        else:
+            self.state["account_scope"] = new_scope
+            self._save()
         return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
     def _backfill_closed_from_exchange(self, pos: dict) -> dict | None:
