@@ -1,6 +1,6 @@
 {
   "name": "qeelin-agent",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "description": "QeeLin-Agent 桌面客户端 —— 币圈永续合约多智能体交易框架",
   "main": "main.js",
   "author": "QeeLin-Agent contributors",

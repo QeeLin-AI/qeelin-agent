@@ -142,6 +142,19 @@ async function api(path, method = 'GET', body = null) {
   return json.data;
 }
 
+// 账户切换：后端在「有实盘持仓 / 自动交易运行中」时会拒绝（403）。
+// 这里让用户显式确认后带 force 重试；取消则把原始错误继续抛给调用方。
+async function armAccount(payload) {
+  try {
+    return await api('/api/trading/arm', 'POST', payload);
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (!/实盘持仓|自动交易正在运行/.test(msg)) throw e;
+    if (!window.confirm(`${msg}\n\n确认继续切换？旧账户的仓位将不再由本程序管理。`)) throw e;
+    return await api('/api/trading/arm', 'POST', { ...payload, force: true });
+  }
+}
+
 let toastTimer = null;
 
 // opts.sticky = true：常驻不自动消失，直到下一次 toast() 顶掉它（用于「正在测试…」这类长任务）
@@ -559,9 +572,18 @@ async function loadProfiles() {
       `<option value="${esc(p.name)}">${esc(p.label)}${p.matches ? ' · 当前' : ''}</option>`
     ).join('');
     const cur = (d.profiles || []).find((p) => p.matches);
-    $('profileCurrent').value = cur ? cur.label : '自定义组合';
-    if (keep && (d.profiles || []).some((p) => p.name === keep)) sel.value = keep;
-    else if (cur) sel.value = cur.name;
+    $('profileCurrent').value = cur ? cur.label : '自定义';
+    // 当前配置不匹配任何方案时，下拉显示「自定义」并选中它；
+    // 此时不展示任何方案的改动预览（收起），用户主动选方案后才显示。
+    sel.innerHTML = (cur ? '' : '<option value="">自定义</option>')
+      + (d.profiles || []).map((p) =>
+        `<option value="${esc(p.name)}">${esc(p.label)}${p.matches ? ' · 当前' : ''}</option>`
+      ).join('');
+    if (cur) {
+      sel.value = (keep && (d.profiles || []).some((p) => p.name === keep)) ? keep : cur.name;
+    } else {
+      sel.value = '';
+    }
     renderProfileDiff();
   } catch (e) { console.error(e); }
 }
@@ -664,7 +686,8 @@ function renderProfileDiff() {
   const box = $('profileDiff');
   if (!sel || !box || !profilesCache) return;
   const p = (profilesCache.profiles || []).find((x) => x.name === sel.value);
-  if (!p) { box.textContent = ''; return; }
+  if (!p) { box.hidden = true; box.textContent = ''; return; }
+  box.hidden = false;
   const diff = p.diff || [];
   if (!diff.length) {
     box.innerHTML = `<b>${esc(p.summary)}</b><br>当前配置已与该方案一致。`;
@@ -2529,7 +2552,7 @@ $('testnetBtn').addEventListener('click', async () => {
     const btn = $('testnetBtn');
     btn.disabled = true;
     try {
-      const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
+      const res = await armAccount({ mode: 'testnet', exchange: ex });
       toast(`已连上${exCn(ex)}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
       closeModePanels();
       poll();
@@ -2580,7 +2603,7 @@ $('tnSwitchBtn').addEventListener('click', async () => {
     try {
       await api('/api/trading/disarm', 'POST', {});
       closeModePanels();
-      toast('已断开交易所，回到本地模拟', 'ok');
+      toast('已断开交易所并停止自动交易，回到本地模拟', 'ok');
       poll();
     } catch (e) { toast(e.message, 'err'); }
   });
@@ -2613,7 +2636,7 @@ $('connDisarmBtn').addEventListener('click', async () => {
   try {
     await api('/api/trading/disarm', 'POST', {});
     closeModePanels();
-    toast('已断开交易所，回到本地模拟', 'ok');
+    toast('已断开交易所并停止自动交易，回到本地模拟', 'ok');
     poll();
   } catch (e) { toast(e.message, 'err'); }
 });
@@ -2639,7 +2662,7 @@ if (setConnDisarm) {
     try {
       await api('/api/trading/disarm', 'POST', {});
       closeModePanels();
-      toast('已断开交易所，回到本地模拟', 'ok');
+      toast('已断开交易所并停止自动交易，回到本地模拟', 'ok');
       poll();
     } catch (e) { toast(e.message, 'err'); }
   });
@@ -2658,7 +2681,7 @@ $('tnSaveBtn').addEventListener('click', async () => {
     $('tnKey').value = ''; $('tnSecret').value = ''; $('tnPass').value = '';
     $('tnStatus').textContent = formatSelftest(d);
     if (d.ok) {
-      const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
+      const res = await armAccount({ mode: 'testnet', exchange: ex });
       toast(`已连上${ex === 'okx' ? 'OKX' : '币安'}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
       closeModePanels();     // 连上了就把配置框收起来，只留徽章状态
       poll();
@@ -2715,7 +2738,7 @@ $('armBtn').addEventListener('click', async () => {
       if (!d.ok) { toast(`Key 校验失败：${d.error || '未知错误'}`, 'err'); return; }
     }
     // 这个面板只负责真钱：testnet 显式传 false（服务端默认是 true，不传会静默进模拟盘）
-    await api('/api/trading/arm', 'POST', {
+    await armAccount({
       mode: 'live', exchange: ex,
       confirm: $('confirmText').value,
       testnet: false,

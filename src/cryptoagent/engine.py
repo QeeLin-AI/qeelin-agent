@@ -201,6 +201,8 @@ class TradingEngine:
             # 老前端 / 老存档 / 单仓调用方都还在读它。
             "positions": {},
             "position": None,
+            # 账户作用域（exchange:demo / exchange:live）：切换账户时据此重置账户级状态
+            "account_scope": "",
             "fills": [],
             "position_history": [],
             "consecutive_losses": 0,
@@ -371,10 +373,11 @@ class TradingEngine:
         def _worker() -> None:
             try:
                 self.data_loading = True
-                from .data import _DEAD_UNTIL, _KL_CACHE
+                from .data import _DEAD_UNTIL
 
-                _KL_CACHE.clear()          # 短周期图也别再吐旧交易所的缓存
-                _DEAD_UNTIL.clear()        # 手动切换要重新探测，别被 10 分钟熔断挡住
+                # 保留 K 线缓存：进程内缓存 key 带交易所，磁盘文件名带 .binance/.okx
+                # 后缀，天然隔离，不需要清。只重置「失败熔断」，让新交易所重新探测。
+                _DEAD_UNTIL.clear()
                 self.refresh_data(force=True)
                 print(f"[data] 行情源已切到 {exchange}：{self.data_source}")
             except Exception as exc:  # noqa: BLE001
@@ -424,6 +427,24 @@ class TradingEngine:
             self._notifier.send(level, title, message, meta)
         except Exception:  # noqa: BLE001 - 通知是旁路，任何异常都不应影响主流程
             pass
+
+    # ------------------------------------------------------------------
+    # 账户作用域
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _account_scope(exchange: str, testnet: bool) -> str:
+        """账户作用域：交易所 + 真假钱。
+
+        demo 与 testnet 共用同一套「模拟盘」Key（`read_api_keys` 只分
+        testnet / live 两套），因此归为同一作用域；主网是独立账户。
+        """
+        return f"{str(exchange or 'binance').lower()}:{'demo' if testnet else 'live'}"
+
+    def _scope(self) -> str:
+        """当前生效的账户作用域；旧存档没有该字段时按 exchange + testnet 推导。"""
+        return str(self.state.get("account_scope") or "") or self._account_scope(
+            self.state.get("exchange", "binance"), bool(self.state.get("testnet", True))
+        )
 
     # ------------------------------------------------------------------
     # 多品种持仓
@@ -491,6 +512,8 @@ class TradingEngine:
         m = self._positions_map()
         sym = self._pos_symbol(pos, self.cfg.market.symbol)
         pos["symbol"] = sym
+        # 开仓时固化账户作用域：平仓写进流水时据此归户，旧存档缺该字段不补
+        pos.setdefault("account_scope", self._scope())
         m[sym] = pos
         self._sync_position_view()
 
@@ -789,13 +812,15 @@ class TradingEngine:
             self._live_eq_cache = (float(equity), time.time())
             self._save()
 
-    def _reset_account_scope(self, acct: dict | None = None) -> None:
-        """切换交易所/账户后重置「账户级」状态。
+    def _reset_account_scope(self, acct: dict | None = None, scope: str = "") -> None:
+        """切换账户后重置「账户级」状态。
 
         peak_equity / day_start_equity / consecutive_losses 都是绑定在某个账户上的：
         换了账户还沿用旧值，会得到「旧账户峰值 vs 新账户余额」的伪回撤，以及旧账户
         留下的伪连亏（会一路写进风控官提示词并压低仓位）。
-        position_history 属于审计流水，保留不动。
+
+        保留：position_history / fills（审计流水，新记录带 account_scope 标签）、
+        K 线缓存（进程内 _KL_CACHE 与磁盘 CSV 都按交易所隔离，切换账户不影响行情）。
         """
         equity: float | None = None
         if acct:
@@ -811,6 +836,10 @@ class TradingEngine:
                 self.state["day"] = _today()
             self.state["consecutive_losses"] = 0
             self.state["live_baseline_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if scope:
+                self.state["account_scope"] = str(scope)
+            # 账户级权益曲线不能跨账户拼接；审计流水（position_history/fills）保留
+            self.state["history"] = []
             self._live_eq_cache = None
             self._save()
 
@@ -880,6 +909,7 @@ class TradingEngine:
             "slippage_bps": slip_bps,
             "fee": round(fee, 4),
             "reason": reason,
+            "account_scope": self._scope(),
         }
         self.state["fills"].append(fill_rec)
         self.state["fills"] = self.state["fills"][-500:]
@@ -930,6 +960,8 @@ class TradingEngine:
                 "realized_r": realized_r,
                 "mfe_r": round(float(pos.get("mfe_r")), 4) if pos.get("mfe_r") is not None else None,
                 "rule": str(rule or ""),
+                # 账户标签：审计流水跨账户保留，但绩效统计要能按账户过滤
+                "account_scope": pos.get("account_scope") or self._scope(),
                 "opened_at": pos.get("opened_at", ""),
                 "closed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "mode": mode,
@@ -964,6 +996,7 @@ class TradingEngine:
             "fee": round(fee, 4),
             "pnl": round(pnl - fee, 4),
             "reason": reason,
+            "account_scope": self._scope(),
         }
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
@@ -999,7 +1032,8 @@ class TradingEngine:
             )
         return self.live_client
 
-    def arm(self, mode: str, confirm: str, testnet: bool = True, exchange: str | None = None) -> dict:
+    def arm(self, mode: str, confirm: str, testnet: bool = True,
+            exchange: str | None = None, force: bool = False) -> dict:
         """解锁交易所下单。
 
         三种模式：
@@ -1008,18 +1042,43 @@ class TradingEngine:
         - live    ：主网真钱，需要确认文本 + 环境变量（主网还要 ack 文件）
 
         exchange 决定接币安还是 OKX（对应不同的 Key / 域名 / 签名方式）。
+
+        force：账户作用域改变且仍有实盘持仓 / 自动交易在跑时，默认拒绝切换；
+        只有显式 force 才放行，并保留告警（旧账户仓位将失去本地管理）。
         """
         if mode not in {"paper", "testnet", "demo", "live"}:
             raise ValueError("mode 只能是 paper / testnet / demo / live")
         exchange = (exchange or self.state.get("exchange", "binance")).lower()
         if exchange not in ("binance", "okx"):
             raise ValueError("exchange 只能是 binance / okx")
-        prev_exchange = self.state.get("exchange", "binance")
+        prev_scope = str(self.state.get("account_scope") or "")
+        # demo / testnet 都是假钱，共用一套模拟盘 Key，归为同一作用域
+        new_scope = self._account_scope(exchange, mode in {"testnet", "demo"} or testnet)
+        reset_needed = prev_scope != new_scope
         if mode == "paper":
             self.armed = False
             self.state["mode"] = "paper"
             self._save()
             return {"mode": "paper", "armed": False, "exchange": exchange}
+        # 只在「已有一个明确的旧作用域，且新作用域不同」时拦截；
+        # 首次解锁（旧存档没有 scope）无法判断是否同账户，不拦。
+        if reset_needed and prev_scope and not force:
+            live_positions = [
+                p for p in self._positions_map().values() if p.get("mode") == "live"
+            ]
+            if live_positions:
+                syms = "、".join(
+                    str(p.get("symbol") or "?") for p in live_positions
+                )
+                raise PermissionError(
+                    f"当前有 {len(live_positions)} 笔实盘持仓（{syms}）。切换账户后这些仓位"
+                    "会失去本地的移动止损 / 时间止损管理，请先平仓；"
+                    "确认仍要切换请传 force=true"
+                )
+            if (self.state.get("auto") or {}).get("running"):
+                raise PermissionError(
+                    "自动交易正在运行，请先停止再切换账户；确认仍要切换请传 force=true"
+                )
         if mode in {"testnet", "demo"}:
             client = self.connect(testnet=True, env=("demo" if mode == "demo" else "testnet"), exchange=exchange)
             client.armed = True
@@ -1029,9 +1088,10 @@ class TradingEngine:
             self.state["mode"] = "live"
             self.state["testnet"] = True
             self.state["exchange"] = exchange
+            self.state["account_scope"] = new_scope
             self._save()
-            if prev_exchange != exchange:
-                self._reset_account_scope(acct)
+            if reset_needed:
+                self._reset_account_scope(acct, scope=new_scope)
                 self.reload_for_exchange()
             return {
                 "mode": "testnet",
@@ -1055,9 +1115,10 @@ class TradingEngine:
         self.state["mode"] = "live"
         self.state["testnet"] = testnet
         self.state["exchange"] = exchange
+        self.state["account_scope"] = new_scope
         self._save()
-        if prev_exchange != exchange:
-            self._reset_account_scope(acct)
+        if reset_needed:
+            self._reset_account_scope(acct, scope=new_scope)
             self.reload_for_exchange()
         return {"mode": "live", "armed": True, "testnet": testnet, "exchange": exchange}
 
@@ -1149,6 +1210,7 @@ class TradingEngine:
                     "reason": "exchange",
                     "order_id": order_id,
                     "backfilled": True,
+                    "account_scope": self._scope(),
                 }
             )
             self.state["fills"] = self.state["fills"][-500:]
@@ -1246,10 +1308,18 @@ class TradingEngine:
         }
 
     def disarm(self) -> dict:
+        """断开交易所：停止自动交易、切断真钱，回到本地模拟。
+
+        只切 `armed` 不够——自动循环还会继续跑并在 paper 账本里开模拟仓，
+        用户看到的「已断开」与实际行为不一致。这里一并停掉自动交易。
+        """
+        if (self.state.get("auto") or {}).get("running"):
+            self.stop_auto()
         self.armed = False
         if self.live_client:
             self.live_client.armed = False
         self.state["mode"] = "paper"
+        self._live_eq_cache = None
         self._save()
         return {"mode": "paper", "armed": False}
 
@@ -2697,6 +2767,7 @@ class TradingEngine:
                             ) if plan_px else None,
                             "fee": round(fee, 6),
                             "reason": f"live:{res.order_id}",
+                            "account_scope": self._scope(),
                         }
                     )
                     self._save()
@@ -2778,6 +2849,7 @@ class TradingEngine:
                             "pnl": round(pnl, 4),
                             "reason": reason,
                             "order_id": res.order_id,
+                            "account_scope": self._scope(),
                         }
                     )
                     self.state["fills"] = self.state["fills"][-500:]
@@ -3000,10 +3072,17 @@ class TradingEngine:
     # ------------------------------------------------------------------
     # 状态输出
     # ------------------------------------------------------------------
-    def _daily_pnl(self, days: int = 120) -> list[dict]:
-        """按平仓日期聚合已实现盈亏，返回最近 N 天（有交易的日子）。"""
+    def _daily_pnl(self, days: int = 120, scope: str | None = None) -> list[dict]:
+        """按平仓日期聚合已实现盈亏，返回最近 N 天（有交易的日子）。
+
+        `scope` 非空时只统计该账户的流水；旧记录没有 `account_scope` 标签，
+        归入当前 scope（升级兼容），不会因为加标签而凭空消失。
+        """
         agg: dict[str, dict] = {}
         for h in self.state.get("position_history", []):
+            tag = str(h.get("account_scope") or "")
+            if scope and tag and tag != scope:
+                continue
             day = str(h.get("closed_at") or "")[:10]
             if len(day) != 10:
                 continue
@@ -3095,7 +3174,7 @@ class TradingEngine:
                     key=lambda x: str(x.get("closed_at") or ""),
                     reverse=True,
                 )[:30],
-                "daily": self._daily_pnl(),
+                "daily": self._daily_pnl(scope=self._scope()),
                 "consecutive_losses": self.state["consecutive_losses"],
                 "last_decision": self.state.get("last_decision"),
                 "auto": {

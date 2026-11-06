@@ -1214,8 +1214,15 @@ class WebApp:
         self._ex_pnl_at = 0.0
 
     def reset_exchange_view(self) -> None:
-        """连权益曲线一起清（切品种 / 切回模拟盘时调用）。"""
+        """清账户级视图（快照 / 当日盈亏 / 成交 / 条件单 / 权益曲线）。
+
+        切品种与切账户都调用；K 线缓存不在这里，账户切换不会影响行情数据。
+        """
         self.invalidate_exchange_cache()
+        self._ex_trades = None
+        self._ex_trades_at = 0.0
+        self._ex_orders = None
+        self._ex_orders_at = 0.0
         self._ex_history = []
         self._ex_hist_at = 0.0
         try:
@@ -2150,7 +2157,10 @@ class WebApp:
         if mode == "testnet":
             mode = "demo"
         try:
-            return self.engine.arm(mode, confirm, testnet=testnet, exchange=exchange)
+            return self.engine.arm(
+                mode, confirm, testnet=testnet, exchange=exchange,
+                force=bool(payload.get("force", False)),
+            )
         except PermissionError as exc:
             raise ApiError(str(exc), 403) from exc
         except ExchangeError as exc:
@@ -2214,7 +2224,7 @@ class WebApp:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "QeeLin-Agent/1.1.8"
+    server_version = "QeeLin-Agent/1.1.9"
     app: WebApp  # 由 serve() 注入
 
     # -- 基础 ---------------------------------------------------------
@@ -2440,12 +2450,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/research/auto":
             return self._json({"ok": True, "data": app.set_research_auto(payload)})
         if path == "/api/trading/arm":
-            prev_exchange = eng.state.get("exchange")
+            prev_scope = str(eng.state.get("account_scope") or "")
             res = app.arm(payload)
             app.invalidate_exchange_cache()   # 刚解锁：总览页要立刻改读交易所
-            if eng.state.get("exchange") != prev_exchange:
-                # 换了交易所/账户：旧账户的权益曲线不能接在新账户上，否则
-                # 峰值还是旧账户的，会算出伪回撤（实例：4619 → 3000 显示 -35%）
+            if str(eng.state.get("account_scope") or "") != prev_scope:
+                # 账户作用域变了（含首次解锁）：旧账户的权益曲线不能接在新账户上
                 app.reset_exchange_view()
             return self._json({"ok": True, "data": res})
         if path == "/api/trading/disarm":
