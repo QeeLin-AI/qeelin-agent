@@ -231,7 +231,9 @@ async function poll() {
     const s = await api('/api/status');
     lastStatus = s;
     renderStatus(s);
-    renderPositionManagement(s && s.data);
+    // api() 已经把 {ok,data} 解包成 data，这里不能再取 .data——多写一层会让整张
+    // 「持仓管理员」卡片永远拿到 undefined、一直 hidden（曾经的实际故障）。
+    renderPositionManagement(s);
     renderDecisionShadow(s);
   } catch (e) {
     console.error(e);
