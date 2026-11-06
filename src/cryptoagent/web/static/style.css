@@ -1363,11 +1363,12 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 自动交易卡紧凑化：收紧内部间距与控件尺寸，整体更短 */
   .trade-split { gap: 14px; }
   .trade-main > .muted { font-size: 11.5px; line-height: 1.5; }
-  .auto-controls { gap: 12px; margin: 0 0 2px; }
-  .auto-controls .field { flex: 1 1 130px; min-width: 0; }
-  .auto-controls .field input { width: 100%; }
+  .auto-controls { gap: 12px; margin: 0 0 2px; align-items: flex-end; }
+  .auto-controls .field { flex: 0 1 auto; min-width: 0; }
+  .auto-controls .field input { width: 128px; }
   .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; flex-basis: 100%; order: 2; }
-  .auto-controls .auto-actions { margin-top: 2px; }
+  .auto-controls .auto-actions { flex: 1 1 auto; gap: 10px; margin-top: 0; }
+  .auto-controls .auto-actions .btn { flex: 1 1 0; min-width: 0; height: 42px; padding: 0; font-size: 13.5px; }
   .auto-meta { display: block; width: 100%; margin: 12px 0 0; font-size: 11.5px; overflow-wrap: anywhere; }
   .trade-main .divider { margin: 12px 0 8px; }
   .trade-main .actions { gap: 8px; }
