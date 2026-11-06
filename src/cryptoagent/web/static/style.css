@@ -1394,6 +1394,17 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 .pm-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; font-size: 11.5px; padding: 3px 0; }
 .pm-row b { font-weight: 650; min-width: 78px; }
 
+/* 移动端：表单控件字号提到 16px —— iOS Safari / 部分安卓浏览器在聚焦 font-size < 16px
+   的输入框时会自动放大整页（zoom-on-focus），16px 是触发阈值。仅窄屏生效，桌面字号不变。 */
+@media (max-width: 860px) {
+  input[type="number"], input[type="text"], input[type="password"],
+  input[type="email"], input[type="tel"], input[type="search"],
+  input[type="url"], input[type="date"], input[type="time"], input[type="datetime-local"],
+  select, textarea, .sym-add-row input {
+    font-size: 16px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
