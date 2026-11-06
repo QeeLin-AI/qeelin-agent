@@ -212,15 +212,16 @@ document.getElementById('posCard')?.addEventListener('click', () => {
   const list = (lastStatus && Array.isArray(lastStatus.positions)) ? lastStatus.positions : [];
   if (list.length < 2) return;
   showTab('trading');
-  const tbl = document.getElementById('posTable');
-  if (!tbl) return;
+  // 确保停在「当前持仓」分段，并从持仓卡顶部开始看（不是滚到表格中间）
+  const cur = document.querySelector('[data-pos-tab="cur"]');
+  if (cur && !cur.classList.contains('sel')) cur.click();
+  const panel = document.getElementById('posPanel');
+  if (!panel) return;
   // 等一帧再滚：panel 刚从 display:none 变 block，同一帧里量到的位置不准
   requestAnimationFrame(() => {
-    tbl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    tbl.classList.remove('flash');
-    void tbl.offsetWidth;          // 强制重排，否则同一张表连续点两次不会重放动画
-    tbl.classList.add('flash');
-    setTimeout(() => tbl.classList.remove('flash'), 1800);
+    const topH = document.querySelector('.topbar')?.offsetHeight || 64;
+    const y = panel.getBoundingClientRect().top + window.scrollY - topH - 12;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
   });
 });
 
