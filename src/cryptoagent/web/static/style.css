@@ -1178,10 +1178,14 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
     border: 1px solid currentColor; border-radius: 5px;
     vertical-align: baseline; line-height: 1.5;
   }
-  /* 盈亏跨整行、稍大字，作为卡片的结果行 */
+  /* 盈亏跨整行、稍大字，作为卡片的结果行（持仓 / 持仓历史） */
   #posTable td:nth-child(8):not([colspan]),
-  #posHistTable td:nth-child(6):not([colspan]),
-  #fillsTable td:nth-child(10):not([colspan]) { grid-column: 1 / -1; font-size: 13px; }
+  #posHistTable td:nth-child(6):not([colspan]) { grid-column: 1 / -1; font-size: 13px; }
+  /* 最近成交：四字段两行两列 —— 第一行 成交价+数量，第二行 动作+盈亏 */
+  #fillsTable td:nth-child(7):not([colspan]) { grid-column: 1; grid-row: 2; }   /* 成交价 */
+  #fillsTable td:nth-child(5):not([colspan]) { grid-column: 2; grid-row: 2; }   /* 数量 */
+  #fillsTable td:nth-child(3):not([colspan]) { grid-column: 1; grid-row: 3; }   /* 动作 */
+  #fillsTable td:nth-child(10):not([colspan]) { grid-column: 2; grid-row: 3; font-size: 13px; } /* 盈亏 */
   /* 行内「平仓」跨整行，触控区放大到 34px */
   #posTable td:nth-child(9):not([colspan]) {
     grid-column: 1 / -1; padding-top: 8px; border-top: 1px dashed var(--border);
