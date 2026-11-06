@@ -550,8 +550,8 @@ label.field > input, label.field > select { max-width: 420px; }
   .ov-side > #posMgmtCard { order: 3; flex: 1.05 1 0; }
   /* 卡片内的滚动区：占满卡片剩余高度，内容多了自己滚，不再回头撑高卡片 */
   .ov-side .notif-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 6px; }
-  .ov-side .opp-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 4px; }
-  .ov-side #posMgmtBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; }
+  .ov-side .opp-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 4px; overscroll-behavior: contain; }
+  .ov-side #posMgmtBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; overscroll-behavior: contain; }
 }
 
 /* 盈亏 */
