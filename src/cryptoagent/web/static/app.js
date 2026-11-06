@@ -162,7 +162,7 @@ function showTab(name, push = true) {
   btn.classList.add('active');
   $(`tab-${name}`).classList.add('active');
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
-  if (name === 'overview') { renderPnl(); fitNotifHeight(); }
+  if (name === 'overview') { renderPnl(); }
   if (name === 'decision') { requestAnimationFrame(fitScanReasons); }
   if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); loadProfiles(); loadEvolveState(); }
 }
@@ -259,13 +259,12 @@ async function renderNotifications() {
       el.dataset.sig = '';
       el.innerHTML = '<div class="muted center">暂无通知。风控拦截、平仓盈亏、熔断都会推送到这里（也可配置 Telegram / 邮件）。</div>';
     }
-    fitNotifHeight();
     return;
   }
   // 3 秒一次轮询，内容没变就不要重建 DOM：innerHTML 一清空，列表的滚动位置就被顶回顶部，
   // 用户正在翻历史消息时会一直被拽回去。
   const sig = items.map((n) => `${n.ts}|${n.level}|${n.title}|${n.message || ''}`).join('~');
-  if (el.dataset.sig === sig) { fitNotifHeight(); return; }
+  if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   const keepTop = el.scrollTop;
   const lvlCls = { critical: 'down', warn: 'amber', info: 'muted' };
@@ -281,39 +280,38 @@ async function renderNotifications() {
     </div>`;
   }).join('');
   el.scrollTop = keepTop;
-  fitNotifHeight();
 }
 
-/* 通知卡片定高：底端与左侧「盈亏」卡片对齐，超出的消息在卡片内部滚动。
-   不用固定像素——左侧卡片高度随成交条数、日历行数变化，这里用「机会榜底端 − 盈亏卡底端」
-   的差值反推列表还能用多高：差值为正说明已经探出左卡底部，按超出量缩；
-   为负说明还有空间，放到内容自然高度为止（所以消息少时卡片不会凭空变高）。
-   scrollHeight 必须先把 max-height 摘掉再读，否则它会被 clientHeight 顶住、永远缩不回去；
-   读完立刻写回，同一帧内完成，用户看不到跳动，滚动位置也会还原。 */
-const NOTIF_MIN_H = 120;   // 再挤也留一条消息的高度
+/* 总览右栏定高：通知 / 机会榜 / 持仓管理员三张卡合起来恰好等于左侧「盈亏」卡高度，
+   超出的内容各自在卡片内部滚动（CSS 负责把这段高度按比例分给三张卡），绝不撑高页面。
+   不用固定像素——左卡高度随平仓笔数、日历行数变化，窗口缩放也会改变换行，只能实测。
+   写完高度不会再触发重排循环：右栏高度对左卡自身的布局没有影响。 */
+let _sideFitRaf = 0;
 
-function fitNotifHeight() {
-  const list = $('notifList');
-  const card = list && list.closest('.notif-card');
-  const board = document.querySelector('.opp-panel');
-  const left = document.querySelector('.pnl-card');
-  if (!list || !card || !board || !left) return;
-  // ≤1180px 时总览是单列、机会榜另起一行，「对齐左卡底部」不成立，交还给自然高度
+function fitOverviewSide() {
+  const side = document.querySelector('.ov-side');
+  const main = document.querySelector('.pnl-card');
+  if (!side || !main) return;
+  // ≤1180px 总览是单列，右栏与左卡不再左右并排，「底部对齐」不成立，交还自然高度
   if (window.matchMedia('(max-width: 1180px)').matches) {
-    list.style.maxHeight = '';
+    if (side.style.height) side.style.height = '';
     return;
   }
-  // 切到别的页签时元素 display:none，rect 全是 0，算出来的高度会把卡片压扁
-  if (!card.offsetParent) return;
-  const cur = list.getBoundingClientRect().height;
-  if (!cur) return;
-  const overflow = board.getBoundingClientRect().bottom - left.getBoundingClientRect().bottom;
-  const keepTop = list.scrollTop;
-  list.style.maxHeight = 'none';
-  const natural = list.scrollHeight;
-  const height = Math.max(NOTIF_MIN_H, Math.min(natural, cur - overflow));
-  list.style.maxHeight = `${Math.round(height)}px`;
-  list.scrollTop = keepTop;   // 摘掉 max-height 时会被夹成 0，这里还原
+  // 切到别的页签时元素 display:none，rect 全是 0，量出来会把整栏压扁
+  if (!side.offsetParent || !main.offsetParent) return;
+  const h = Math.round(main.getBoundingClientRect().height);
+  // 高度没变就别写：这段会被 3 秒轮询反复调用，避免无谓的样式重算
+  const next = h > 0 ? `${h}px` : '';
+  if (side.style.height !== next) side.style.height = next;
+}
+
+/* 合并同一帧内的多次请求：renderPnl 里在 DOM 改完之后调用，rAF 保证量到的是最终布局 */
+function scheduleSideFit() {
+  if (_sideFitRaf) return;
+  _sideFitRaf = requestAnimationFrame(() => {
+    _sideFitRaf = 0;
+    try { fitOverviewSide(); } catch (_) { /* 布局异常不能连累状态轮询 */ }
+  });
 }
 
 /* ---------------- LLM 设置 ---------------- */
@@ -2196,6 +2194,8 @@ function shiftMonth(delta) {
 }
 
 function renderPnl() {
+  // 盈亏卡是右栏高度的基准：本函数会改成交条数与日历行数，改完（rAF 后）重算右栏
+  scheduleSideFit();
   const totalEl = $('pnlTotal');
   const statsEl = $('pnlStats');
   const tradesEl = $('pnlTrades');
@@ -2858,7 +2858,6 @@ function renderOpportunities(rows) {
         api('/api/opportunity', 'POST', {}).catch(() => {});
       }
     }
-    fitNotifHeight();
     return;
   }
   const maxScore = Math.max(...data.map((r) => r.score || 0), 0.0001);
@@ -2877,7 +2876,7 @@ function renderOpportunities(rows) {
   if ($('rotateToggle')) $('rotateToggle').checked = !!lastStatus?.auto_rotate;
   if ($('rotateMinScore')) $('rotateMinScore').value = lastStatus?.rotate_min_score ?? 0.2;
   if ($('rotateEvery')) $('rotateEvery').value = lastStatus?.rotate_every_cycles ?? 1;
-  fitNotifHeight();   // 榜单高度变了，通知卡的上限要跟着重算
+  scheduleSideFit();   // 榜单行数变了，三卡的高度分配跟着重算
 }
 
 $('rotateToggle').addEventListener('change', async () => {
@@ -2913,7 +2912,7 @@ $('rotateRefresh').addEventListener('click', async () => {
   } catch (e) { toast(e.message, 'err'); }
 });
 
-window.addEventListener('resize', () => { renderPnl(); fitNotifHeight(); });
+window.addEventListener('resize', () => { renderPnl(); scheduleSideFit(); });
 $('calPrev').addEventListener('click', () => shiftMonth(-1));
 $('calNext').addEventListener('click', () => shiftMonth(1));
 
@@ -2954,6 +2953,10 @@ $('themeBtn').addEventListener('click', () => {
   const hash = location.hash.replace('#', '');
   if (['overview', 'decision', 'research', 'trading', 'settings'].includes(hash)) showTab(hash, false);
   await poll();
+  // 字体加载完字宽会变（盈亏卡可能换行），右栏高度要再校一次
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => scheduleSideFit()).catch(() => {});
+  }
   try {
     const r = await api('/api/research/latest');
     if (r) renderResearch({ ...r, rows: r.rows || [] });

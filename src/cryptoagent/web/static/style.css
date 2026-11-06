@@ -529,6 +529,29 @@ label.field > input, label.field > select { max-width: 420px; }
 .ov-side .card { margin-bottom: 18px; }
 .ov-side .card:last-child { margin-bottom: 0; }
 
+/* ---------------------------------------------- 右栏三卡：与「盈亏」卡等高（PC）
+   通知 / 机会榜 / 持仓管理员 合起来恰好等于左侧盈亏卡的高度：三张卡都不撑高，
+   超出部分各自在卡片内部滚动。总高度由 app.js 的 fitOverviewSide() 实测左卡后
+   写进 .ov-side 的 style.height —— 左卡高度随平仓笔数与日历行数变化，写死像素
+   一换分辨率就错位；这里只负责「按比例把可用高度分给三张卡」。 */
+@media (min-width: 1181px) {
+  .ov-side { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+  .ov-side > .card {
+    margin-bottom: 0; min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  /* 顺序：通知 → 机会榜 → 持仓管理员（DOM 里持仓管理员排第一，用 order 挪到底部）。
+     flex-grow 只在「剩余空间」里按比例分，所以换缩放/分辨率时底部依旧齐平。 */
+  .ov-side > .notif-card { order: 1; flex: 1 1 0; }
+  .ov-side > .opp-panel { order: 2; flex: 1 1 0; }
+  /* 持仓管理员：高度跟内容走（内容少时不虚撑），最多占栏高 40%，再多就内部滚动 */
+  .ov-side > #posMgmtCard { order: 3; flex: 0 1 auto; max-height: 40%; }
+  /* 卡片内的滚动区：占满卡片剩余高度，内容多了自己滚，不再回头撑高卡片 */
+  .ov-side .notif-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 6px; }
+  .ov-side .opp-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 4px; }
+  .ov-side #posMgmtBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; }
+}
+
 /* 盈亏 */
 .pnl-hero { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .pnl-total {
@@ -594,6 +617,9 @@ label.field > input, label.field > select { max-width: 420px; }
 }
 .opp-filters input[type="number"] { height: 26px; width: 58px; }
 .opp-list { display: flex; flex-direction: column; max-height: 268px; overflow-y: auto; }
+/* 列表是纵向 flex 容器：内容超长时必须整块滚动，不能把每一条压扁，
+   否则多行正文会被裁成半截（滚动区里的内容必须完整可读） */
+.opp-list > *, .notif-list > * { flex: 0 0 auto; }
 .opp-row {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: "sym sig score" "bar bar bar";
@@ -1026,7 +1052,11 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .pnl-split { grid-template-columns: 1fr; }
   .ov-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
   .ov-side .card { margin-bottom: 0; }
-  .ov-side .opp-panel { grid-column: 1 / -1; }
+  /* 窄屏单列时右栏与左卡不再左右并排，「底部对齐」不成立；顺序仍按
+     通知 → 机会榜 → 持仓管理员（持仓管理员整行压在最底部）。 */
+  .ov-side > .notif-card { order: 1; }
+  .ov-side > .opp-panel { order: 2; grid-column: auto; }
+  .ov-side > #posMgmtCard { order: 3; grid-column: 1 / -1; }
 }
 @media (max-width: 1080px) {
   .settings-tabs { gap: 5px; padding-bottom: 10px; }
@@ -1341,12 +1371,14 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .stat-row > #posCard { grid-column: 1 / -1; }
 
   /* 通知 / 告警卡移到四张指标卡正下方：打平两栏容器，用 order 提到最前。
-     其余卡片保持原有相对顺序（盈亏 → 持仓管理员 → 机会榜）。
+     其余卡片顺序：盈亏 → 机会榜 → 持仓管理员（持仓管理员见下方 order:3）。
      align-items 必须覆盖基础样式的 start → stretch，否则 flex column 下子项不拉伸、
      各卡宽度随内容变化而参差不齐；间距统一只由 gap 控制。 */
   .overview-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
   .ov-main, .ov-side { display: contents; }
   .ov-side .notif-card { order: -1; }
+  /* 持仓管理员固定压在三卡最底部（手机端是纯竖向堆叠，只调整顺序） */
+  #posMgmtCard { order: 3; }
   /* 基础 .card 带 margin-bottom:18px，≤1180 只清了 .ov-side .card；
      盈亏卡在 .ov-main 内没被清，会与 flex gap 叠成 34px。这里统一清零。 */
   .overview-grid .card { margin-bottom: 0; }
