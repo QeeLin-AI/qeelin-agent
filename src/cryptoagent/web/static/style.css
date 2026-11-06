@@ -793,7 +793,8 @@ label.field > input, label.field > select { max-width: 420px; }
   font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
   color: var(--muted); margin: 0 0 12px; padding-top: 14px; border-top: 1px solid var(--border-soft);
 }
-.set-group:first-child > .set-group-title { border-top: 0; padding-top: 0; }
+.set-group:first-child > .set-group-title,
+.card-head + .set-group > .set-group-title { border-top: 0; padding-top: 0; }
 .set-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .set-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .set-grid.risk-six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -861,6 +862,9 @@ label.field > input, label.field > select { max-width: 420px; }
 .set-stat > b { font-size: 14px; font-weight: 650; color: var(--text); word-break: break-all; }
 .set-stats.three { grid-template-columns: repeat(3, minmax(140px, 200px)); justify-content: start; }
 .set-account .actions { margin-top: 14px; }
+/* 配置方案按钮组：上方是「方案」下拉 + 空白的差异提示，没有自带上边距，
+   不加会紧贴下拉框 */
+#set-params .actions { margin-top: 14px; }
 
 /* ---------------------------------------------------------------- 决策页 */
 .decision-body.empty {
