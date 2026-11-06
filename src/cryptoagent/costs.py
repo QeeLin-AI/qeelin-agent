@@ -173,5 +173,8 @@ def evaluate_execution_cost(
         res.details["stop_loss_pct"] = stop
         return res
     except Exception as exc:  # noqa: BLE001 - 成本闸是旁路，算不出来就放行
+        # 放行是既定策略（成本闸绝不误拒），但必须留下可审计的痕迹：
+        # 静默放行会让「最后一道成本防线失效」完全不可见。
+        res.details["error"] = f"{type(exc).__name__}: {exc}"
         res.reasons.append(f"成本估算失败，保守放行：{type(exc).__name__}")
         return res

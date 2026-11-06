@@ -248,6 +248,9 @@ class Debate:
     bear_case: str
     thesis: str
     score: float
+    # 辩论环节的 LLM 降级也要能被上层看到：之前只汇总分析师/交易员/风控官，
+    # 辩论降级时报告仍显示「全链正常」。
+    degraded: bool = False
 
 
 def run_debate(
@@ -260,6 +263,7 @@ def run_debate(
 ) -> Debate:
     # 权重默认仍是经验值；接入事后校准后由 engine 传入校准过的权重
     w = list(weights) if weights and len(weights) == 3 else [0.50, 0.30, 0.20]
+    debate_degraded = False
     score = sum(w[i] * reports[i].stance for i in range(min(3, len(reports))))
     positives = [r for r in reports if r.stance > 0.1]
     negatives = [r for r in reports if r.stance < -0.1]
@@ -319,6 +323,7 @@ def run_debate(
         bear_resp = llm.text(SYSTEM_RESEARCHER, bear_user, bear_mock_i)
 
         bull_case, bear_case = bull_resp.content, bear_resp.content
+        debate_degraded = debate_degraded or bool(bull_resp.degraded or bear_resp.degraded)
         last_bull, last_bear = bull_resp.content, bear_resp.content
         history.append({"round": i + 1, "side": "多头", "text": bull_resp.content})
         history.append({"round": i + 1, "side": "空头", "text": bear_resp.content})
@@ -335,12 +340,19 @@ def run_debate(
         f"多头核心：{positives[0].role if positives else '无'}；"
         f"空头核心：{negatives[0].role if negatives else '无'}。"
     )
-    return Debate(rounds=history, bull_case=bull_case, bear_case=bear_case, thesis=thesis, score=score)
+    return Debate(rounds=history, bull_case=bull_case, bear_case=bear_case,
+                  thesis=thesis, score=score, degraded=debate_degraded)
 
 
 # --------------------------------------------------------------------------
 # 交易员
 # --------------------------------------------------------------------------
+# 止损/止盈的合法区间只在这里定义一次：schema 提示词与 _sanitize_proposal
+# 共用同一组常量，避免「提示词说 0.004~0.20、解析却按 0~1」的错位。
+STOP_MIN, STOP_MAX = 0.002, 0.10
+TP_MIN, TP_MAX = 0.004, 0.20
+
+
 def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30) -> str:
     """交易员的输出 schema。上下限跟着风控配置走。
 
@@ -354,8 +366,8 @@ def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30) -> 
         f"size_pct: 0.0 到 {pos_cap:.2f} 之间的小数（保证金占账户权益的比例）\n"
         f"leverage: 1.0 到 {lev_cap:.0f}（止损越近可以给越高；杠杆只改变保证金占用，"
         "单笔风险由 仓位×杠杆×止损 决定）\n"
-        "stop_loss_pct: 0.002 到 0.10\n"
-        "take_profit_pct: 0.004 到 0.20\n"
+        f"stop_loss_pct: {STOP_MIN} 到 {STOP_MAX}\n"
+        f"take_profit_pct: {TP_MIN} 到 {TP_MAX}\n"
         "confidence: 0.0 到 1.0\n"
         "rationale: 一句话理由"
     )
@@ -368,6 +380,7 @@ reasons: 字符串数组"""
 def _fallback_proposal(snap: MarketSnapshot, debate: Debate, caps: dict | None = None) -> dict:
     caps = caps or {}
     lev_cap = max(1.0, float(caps.get("max_leverage") or 3.0))
+    pos_cap = min(max(float(caps.get("max_position_pct") or 0.30), 0.02), 1.0)
     score = debate.score
     if abs(score) < 0.15:
         return {
@@ -381,7 +394,7 @@ def _fallback_proposal(snap: MarketSnapshot, debate: Debate, caps: dict | None =
         }
     direction = "long" if score > 0 else "short"
     confidence = float(np.clip(0.5 + abs(score) * 0.55, 0.5, 0.92))
-    size = float(np.clip((confidence - 0.45) * 0.6, 0.02, 0.30))
+    size = float(np.clip((confidence - 0.45) * 0.6, 0.02, max(0.02, pos_cap)))
     stop = float(np.clip(1.5 * snap.atr_pct, 0.006, 0.03))
     # 杠杆不再写死 2x：止损越近给越高（同样风险下，高杠杆只是少占保证金）
     lev = float(np.clip(0.06 / max(stop, 0.002), 1.0, lev_cap))
@@ -425,7 +438,7 @@ def propose_trade(
 def _sanitize_proposal(data: dict, fallback: dict, caps: dict | None = None) -> dict:
     """模型输出不可全信：类型、范围、枚举全部重新校验。"""
     caps = caps or {}
-    lev_cap = max(1.0, float(caps.get("max_leverage") or 20.0))
+    lev_cap = max(1.0, float(caps.get("max_leverage") or 3.0))
     pos_cap = min(max(float(caps.get("max_position_pct") or 0.30), 0.01), 1.0)
     out = dict(fallback)
     action = str(data.get("action", fallback["action"])).lower()
@@ -440,8 +453,8 @@ def _sanitize_proposal(data: dict, fallback: dict, caps: dict | None = None) -> 
 
     out["size_pct"] = _num("size_pct", 0.0, pos_cap)
     out["leverage"] = _num("leverage", 1.0, lev_cap)
-    out["stop_loss_pct"] = _num("stop_loss_pct", 0.0, 0.5)
-    out["take_profit_pct"] = _num("take_profit_pct", 0.0, 1.0)
+    out["stop_loss_pct"] = _num("stop_loss_pct", STOP_MIN, STOP_MAX)
+    out["take_profit_pct"] = _num("take_profit_pct", TP_MIN, TP_MAX)
     out["confidence"] = _num("confidence", 0.0, 1.0)
     out["rationale"] = str(data.get("rationale", fallback["rationale"]))[:500]
     return out
@@ -510,9 +523,15 @@ def risk_review(
     # LLM 无权放大仓位
     mult = float(np.clip(mult, 0.0, 1.0))
     mult = min(mult, multiplier) if multiplier < 1.0 else mult
+    raw_reasons = data.get("reasons") or reasons
+    # 模型偶尔把 reasons 输出成一个字符串：直接迭代会得到单字数组
+    if isinstance(raw_reasons, str):
+        raw_reasons = [raw_reasons]
+    if not isinstance(raw_reasons, (list, tuple)):
+        raw_reasons = reasons
     out = {
         "verdict": verdict,
         "size_multiplier": mult,
-        "reasons": [str(r)[:200] for r in (data.get("reasons") or reasons)][:6],
+        "reasons": [str(r)[:200] for r in raw_reasons][:6],
     }
     return out, resp.degraded

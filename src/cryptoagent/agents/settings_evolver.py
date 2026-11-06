@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +33,10 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # 这是「LLM 接入」里唯一适合让模型自己调的数值项——开关一律不动。
     "llm_min_interval_sec": (300.0, 7200.0),
 }
-# 整数型键（结果取整）
-INT_KEYS = {"max_concurrent_positions", "auto_top_k", "llm_min_interval_sec"}
+# 整数型键（结果取整）。llm_min_interval_sec 不在这里：它的 BOUNDS 跨度是
+# 300~7200 秒，若按「单轮最多 ±1」裁决，从 900 调到 7200 需要 6300 轮，
+# 这个可调项等于形同虚设；它按比例步长（MAX_STEP）调整。
+INT_KEYS = {"max_concurrent_positions", "auto_top_k"}
 # 归 position 组的键（其余走 risk / market）
 POSITION_KEYS = {"llm_min_interval_sec"}
 # 单轮最多改几个键：改多了无法归因，也没法判断是哪一项起作用

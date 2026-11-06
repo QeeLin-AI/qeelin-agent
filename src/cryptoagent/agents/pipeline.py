@@ -233,6 +233,7 @@ class TradingPipeline:
         if officer["verdict"] == "reject":
             adjusted["action"] = "flat"
             adjusted["size_pct"] = 0.0
+            adjusted["officer_veto"] = True
         else:
             adjusted["size_pct"] = float(adjusted.get("size_pct", 0.0)) * officer["size_multiplier"]
         sizing_trace.append({"step": "风控官", "size_pct": round(float(adjusted["size_pct"]), 6),
@@ -271,10 +272,38 @@ class TradingPipeline:
                 decision.checks.append({"check": "cost_gate", "passed": False,
                                         "detail": f"成本 {gate.cost_pct:.3%} / 止盈 {gate.expected_pct:.2%}"})
             elif gate.size_multiplier < 1.0:
-                decision.size_pct = round(decision.size_pct * gate.size_multiplier, 6)
-                decision.reasons.append(
-                    f"执行成本闸：参与率 {gate.participation:.1%} 偏高，最终仓位 ×{gate.size_multiplier:.2f}"
-                )
+                before = decision.size_pct
+                decision.size_pct = round(before * gate.size_multiplier, 6)
+                # 缩仓后必须重检「最小仓位」：风控引擎的 size<0.005 闸在 check() 内部，
+                # 发生在缩仓之前；不重检会生成 0.0006 这种交易所都懒得接的迷你单。
+                if decision.size_pct < 0.005:
+                    decision.approved = False
+                    decision.action = "flat"
+                    decision.size_pct = 0.0
+                    decision.reasons.append(
+                        "执行成本闸缩仓后低于最小仓位 0.5%，放弃本次开仓"
+                    )
+                    decision.checks.append({
+                        "check": "cost_gate_min_size", "passed": False,
+                        "detail": f"缩仓前 {before:.4f} → 低于 0.005，已置 flat",
+                    })
+                else:
+                    note = (
+                        "（risk 模式下这是二次缩仓，最终仓位不再等于风险反推值）"
+                        if self.cfg.risk.sizing_mode == "risk" else ""
+                    )
+                    decision.reasons.append(
+                        f"执行成本闸：参与率 {gate.participation:.1%} 偏高，"
+                        f"最终仓位 ×{gate.size_multiplier:.2f}{note}"
+                    )
+        if officer["verdict"] == "reject":
+            # 风控官否决与「策略主动观望」是两件事：前者要能在报告里被审计到，
+            # 否则页面只显示「风控引擎：通过」，看起来像风控放行了。
+            decision.checks.append({
+                "check": "risk_officer", "passed": False,
+                "detail": "风控官否决（veto），最终动作为 flat",
+            })
+            decision.reasons.insert(0, "风控官否决：交易提案被拒绝")
         sizing_trace.append({"step": "执行成本闸", "size_pct": round(decision.size_pct, 6),
                              "detail": f"成本 {gate.cost_pct:.3%} / 止盈 {gate.expected_pct:.2%}"})
         proposal["sizing_trace"] = sizing_trace
@@ -300,7 +329,8 @@ class TradingPipeline:
             risk_officer=officer,
             risk_decision=decision.to_dict(),
             order=order,
-            degraded=deg_trader or deg_risk or any("LLM 降级" in " ".join(r.data_flags) for r in reports),
+            degraded=(deg_trader or deg_risk or debate.degraded
+                      or any("LLM 降级" in " ".join(r.data_flags) for r in reports)),
         )
         if persist:
             self._persist(result)

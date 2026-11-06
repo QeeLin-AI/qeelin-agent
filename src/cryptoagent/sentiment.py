@@ -22,6 +22,7 @@ import abc
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -178,15 +179,31 @@ _BEAR_WORDS = [
 ]
 
 
+def _word_hit(word: str, low: str, words: set[str]) -> bool:
+    """英文词按「整词 + 常见词形」匹配，中文词仍按子串。
+
+    子串匹配会把 "second" 里的 "sec"、"bank" 里的 "ban"、"against" 里的
+    "gain" 全算成情绪词，实测一条中性标题会被打成 -0.24。
+    """
+    w = word.lower()
+    if not w.isascii():
+        return w in low
+    return any(form in words for form in (w, w + "s", w + "es", w + "ed", w + "ing"))
+
+
 def _score_headline(text: str) -> float:
     """对单个标题做简单关键词打分，返回大致落在 [-1, 1] 的局部分。"""
     low = text.lower()
-    bull = sum(1 for w in _BULL_WORDS if w.lower() in low)
-    bear = sum(1 for w in _BEAR_WORDS if w.lower() in low)
+    words = set(re.findall(r"[a-z]+", low))
+    bull = sum(1 for w in _BULL_WORDS if _word_hit(w, low, words))
+    bear = sum(1 for w in _BEAR_WORDS if _word_hit(w, low, words))
     if bull == 0 and bear == 0:
         return 0.0
     # 净多空比例，用 tanh 压缩
     return math.tanh((bull - bear) / 4.0)
+
+
+_SENT_CACHE: dict[tuple[str, str], tuple[float, SentimentResult]] = {}
 
 
 class CryptoPanicSentiment(SentimentSource):
@@ -207,6 +224,12 @@ class CryptoPanicSentiment(SentimentSource):
 
         # 归一化交易对符号（CryptoPanic 用不带 USDT 的基础币，如 BTC）
         base = symbol.upper().replace("USDT", "").replace("USD", "").strip() or symbol.upper()
+        # 按品种缓存：cache_ttl_sec 之前是死字段，每轮决策都真实打一次新闻源。
+        cache_key = ("cryptopanic", base)
+        ttl = float(getattr(self.cfg, "cache_ttl_sec", 600) or 600)
+        hit = _SENT_CACHE.get(cache_key)
+        if hit and (time.time() - float(hit[0])) < ttl:
+            return hit[1]
         url = f"{self._BASE_URL}?auth_token={api_key}&currencies={base}&kind=news"
 
         try:
@@ -236,7 +259,7 @@ class CryptoPanicSentiment(SentimentSource):
 
         avg = sum(scores) / len(scores)
         score = _clamp_score(avg)
-        return SentimentResult(
+        result = SentimentResult(
             score=score,
             label=_label_from_score(score),
             headlines=headlines,
@@ -244,6 +267,8 @@ class CryptoPanicSentiment(SentimentSource):
             fresh=True,
             note=f"来自 CryptoPanic 的 {len(headlines)} 条头条",
         )
+        _SENT_CACHE[cache_key] = (time.time(), result)
+        return result
 
 
 # --------------------------------------------------------------------------

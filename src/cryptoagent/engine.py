@@ -36,7 +36,7 @@ from .data import (
     set_kl_cache_dir,
 )
 from .derivatives import enrich_derivatives
-from .execution import BinanceFuturesClient, OKXClient, build_client, ExchangeError, read_api_keys
+from .execution import BinanceFuturesClient, OKXClient, ExchangeError, read_api_keys
 from .notify import get_notifier
 from .risk import AccountState
 
@@ -216,6 +216,10 @@ class TradingEngine:
         legacy = self.state.get("position")
         if isinstance(legacy, dict) and not self.state["positions"]:
             sym = str(legacy.get("symbol") or self.cfg.market.symbol).upper()
+            # 必须把品种写回仓位本体：老存档只有 map key、没有 symbol 字段，
+            # 一旦 auto_rotate 换过品种，close()/撤单就会拿到「当前品种」而平错对象。
+            legacy.setdefault("symbol", sym)
+            legacy["symbol"] = sym
             self.state["positions"][sym] = legacy
         # 视图不能是 None：有仓位时 `position` 为 None 会让老前端显示「空仓」
         if self.state["positions"] and not self.state.get("position"):
@@ -420,6 +424,16 @@ class TradingEngine:
     def _pos_symbol(pos: dict | None, fallback: str = "") -> str:
         return str((pos or {}).get("symbol") or fallback or "").upper()
 
+    @staticmethod
+    def _pos_side(pos: dict | None) -> str:
+        """统一方向读取：老存档可能没有 side、历史数据可能写成小写。
+
+        返回值只可能是 "LONG" / "SHORT"，避免各处硬索引 `pos["side"]` 在缺字段时
+        抛 KeyError 被外层宽 except 吞成「静默 hold」。
+        """
+        raw = str((pos or {}).get("side") or "LONG").strip().upper()
+        return "SHORT" if raw.startswith("S") else "LONG"
+
     def _positions_map(self) -> dict[str, dict]:
         """全部持仓（key = 品种）。`state["positions"]` 是唯一真相。
 
@@ -433,7 +447,9 @@ class TradingEngine:
             self.state["positions"] = m
         single = self.state.get("position")
         if not m and isinstance(single, dict):
-            m[self._pos_symbol(single, self.cfg.market.symbol)] = single
+            sym = self._pos_symbol(single, self.cfg.market.symbol)
+            single["symbol"] = sym
+            m[sym] = single
         return m
 
     def _sync_position_view(self) -> None:
@@ -567,11 +583,14 @@ class TradingEngine:
         保证金 = 名义 / 杠杆，这才是交易所拒单时看的量。
         """
         rows: list[dict] = []
-        for pos in self._positions_map().values():
+        for sym, pos in self._positions_map().items():
             entry = float(pos.get("entry") or price)
             qty = float(pos.get("qty") or 0.0)
             lev = float(pos.get("leverage") or 1.0) or 1.0
-            notional = qty * entry
+            # 敞口按**当前标记价**算：用开仓价会在浮盈时系统性低估组合风险，
+            # 让组合层上限形同虚设。取不到标记价时才退回成本价。
+            mark = self._mark_price(sym, price)
+            notional = qty * (mark if mark > 0 else entry)
             rows.append({
                 "symbol": self._pos_symbol(pos, self.cfg.market.symbol),
                 "side": pos.get("side"),
@@ -581,10 +600,20 @@ class TradingEngine:
             })
         return rows
 
-    def _roll_day(self) -> None:
-        if self.state["day"] != _today():
-            self.state["day"] = _today()
-            self.state["day_start_equity"] = self.state["equity"]
+    def _roll_day(self, equity: float | None = None) -> None:
+        """跨日重置「当日权益基准」。
+
+        当日亏损限额（daily_loss_limit_pct）与页面 day_pnl_pct 都以
+        day_start_equity 为分母。这个方法必须由 account_state / cycle 每轮调用，
+        否则基准会永远停在首次启动那一天。
+        """
+        today = _today()
+        if self.state.get("day") == today:
+            return
+        base = float(equity) if equity and float(equity) > 0 else float(self.state.get("equity") or 0.0)
+        with self.lock:
+            self.state["day"] = today
+            self.state["day_start_equity"] = base
 
     def account_state(self, price: float | None = None) -> AccountState:
         price = price if price is not None else self.price()
@@ -595,15 +624,25 @@ class TradingEngine:
             # 注意：不能拿 peak 与 live 比 —— 那样真实回撤超过 33%（peak/live > 1.5）就会
             # 把峰值重置成当前权益，回撤瞬间归零，max_drawdown_pct 熔断永远触发不了。
             ledger = float(self.state.get("equity") or 0.0)
-            if ledger <= 0 or abs(ledger - live) / live > 0.5:
-                self._rebase_ledger(live)
+            # 首次切换到实盘（还没有 live_baseline_at）时，旧 peak 属于模拟账本，
+            # 重置成实盘权益是对的；已经对齐过之后的偏离属于手续费/资金费漂移，
+            # 此时保留 peak，否则历史回撤会被抹掉、max_drawdown_pct 永远不触发。
+            first_live = not bool(self.state.get("live_baseline_at"))
+            if ledger <= 0:
+                self._rebase_ledger(live, reset_peak=True)
+            elif abs(ledger - live) / live > 0.5:
+                self._rebase_ledger(live, reset_peak=first_live)
             equity = live
         else:
             equity = self._equity(price)
+        # 跨日先滚动基准，再用同一口径返回 peak / day_start：
+        # 实盘 equity 来自交易所，peak / day_start 若仍读内部账本，回撤与日亏
+        # 会变成「交易所分子 ÷ 账本分母」的混合值，熔断可能误触发或漏触发。
+        self._roll_day(equity)
         return AccountState(
             equity=equity,
-            peak_equity=max(self.state["peak_equity"], equity),
-            day_start_equity=self.state["day_start_equity"] or equity,
+            peak_equity=max(float(self.state.get("peak_equity") or 0.0), equity),
+            day_start_equity=float(self.state.get("day_start_equity") or equity),
             position_notional=self._position_notional(price),
             consecutive_losses=self.state["consecutive_losses"],
         )
@@ -621,7 +660,7 @@ class TradingEngine:
             px = self._mark_price(symbol, price)
             if px <= 0:
                 return 0.0
-            direction = 1.0 if pos["side"] == "LONG" else -1.0
+            direction = 1.0 if self._pos_side(pos) == "LONG" else -1.0
             return (px - float(pos["entry"])) * float(pos["qty"]) * direction
         total = 0.0
         for sym, pos in self._positions_map().items():
@@ -724,11 +763,18 @@ class TradingEngine:
         self._live_eq_cache = (equity, now)
         return equity
 
-    def _rebase_ledger(self, equity: float) -> None:
-        """把内部账本对齐到交易所真实权益（发现量级不符时调用）。"""
+    def _rebase_ledger(self, equity: float, reset_peak: bool = False) -> None:
+        """把内部账本对齐到交易所真实权益（发现量级不符时调用）。
+
+        reset_peak 只在「首次切到实盘 / 账户切换」时为 True：那时旧 peak 属于
+        另一个账户，重置是必要的；运行期漂移校准必须保留历史峰值。
+        """
         with self.lock:
+            peak = float(equity) if reset_peak else max(
+                float(self.state.get("peak_equity") or 0.0), float(equity)
+            )
             self.state["equity"] = float(equity)
-            self.state["peak_equity"] = float(equity)
+            self.state["peak_equity"] = peak
             self.state["day_start_equity"] = float(equity)
             self.state["day"] = _today()
             self.state["live_baseline_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -892,8 +938,8 @@ class TradingEngine:
         if not pos:
             return None
         slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
-        direction = 1.0 if pos["side"] == "LONG" else -1.0
-        fill = price * (1 - slip) if pos["side"] == "LONG" else price * (1 + slip)
+        direction = 1.0 if self._pos_side(pos) == "LONG" else -1.0
+        fill = price * (1 - slip) if self._pos_side(pos) == "LONG" else price * (1 + slip)
         pnl = (fill - pos["entry"]) * pos["qty"] * direction
         fee = pos["qty"] * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
         self.state["equity"] += pnl - fee
@@ -903,7 +949,7 @@ class TradingEngine:
         rec = {
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "action": "CLOSE",
-            "side": pos["side"],
+            "side": self._pos_side(pos),
             "symbol": self._pos_symbol(pos, self.cfg.market.symbol),
             "qty": round(pos["qty"], 6),
             "price": round_price(fill),
@@ -1042,7 +1088,9 @@ class TradingEngine:
             if hits:
                 open_ts = max(int(r.get("ts_ms") or 0) for r in hits)
         if not open_ts:
-            open_ts = _parse_ts_ms(pos.get("opened_at"))
+            # 既没有开仓 orderId 命中的成交、opened_at 也解析失败：时间下界缺失，
+            # 继续补记会把上一笔仓位的平仓成交算进来，宁可不补。
+            return None
         closes = [r for r in closes if int(r.get("ts_ms") or 0) >= open_ts]
         if not closes:
             return None
@@ -1069,7 +1117,7 @@ class TradingEngine:
         gross = sum(float(r.get("pnl") or 0.0) for r in picked)
         if not gross:
             # OKX 部分场景 pnl 为空：退回按开仓价自己算价格差
-            direction = 1.0 if str(pos.get("side")) == "LONG" else -1.0
+            direction = 1.0 if self._pos_side(pos) == "LONG" else -1.0
             gross = (exit_px - float(pos.get("entry") or 0.0)) * qty * direction
         pnl = gross - fee
         ts_ms = max(int(r.get("ts_ms") or 0) for r in picked)
@@ -1167,6 +1215,11 @@ class TradingEngine:
             self._sync_position_view()
             self._save()
         df, src = self.refresh_data()
+        if df is None or not len(df):
+            # 品种已经切过去了，但行情没拿到：宁可 price 返回 None，也不要拿
+            # self.df 里的旧品种价格冒充新品种（那是错价下单的源头）。
+            return {"symbol": symbol, "changed": True, "data_source": src,
+                    "price": None, "bars": 0}
         # 切完之后，原持仓品种就成了「非活跃品种」，它的行情不再由 self.df 提供，
         # 只靠 _last_prices。这里立刻补一次报价，否则页面上的标记价会显示 --，
         # 直到守护线程下一轮（最长 30 秒）才恢复。
@@ -1197,9 +1250,6 @@ class TradingEngine:
 
         纯本地计算、不下单、不调 LLM；结果缓存到 self.opportunities 供页面排行榜展示。
         """
-        from dataclasses import replace
-
-        from .data import load_market
         from .factors.signal import compute_factor_signal
 
         rows: list[dict] = []
@@ -1494,13 +1544,16 @@ class TradingEngine:
         hit = cache.get(symbol)
         if hit and now - float(hit[0]) < 90.0:
             return float(hit[1])
-        if self.df is None:
+        # 必须用「这个品种自己的行情」：self.df 是当前活跃品种，多品种持仓时
+        # 拿它算另一个品种的 composite，会按错误的因子值触发反向退出平仓。
+        df = self._frame_for(symbol)
+        if df is None or not len(df):
             return None
         try:
             from .factors.signal import compute_factor_signal
 
             val = float(
-                compute_factor_signal(self.cfg.research.factor_library, self.df)
+                compute_factor_signal(self.cfg.research.factor_library, df)
                 .get("composite", 0.0) or 0.0
             )
         except Exception:  # noqa: BLE001 - 因子算不出来就退回纯价格规则
@@ -1518,7 +1571,7 @@ class TradingEngine:
         client = self.live_client
         if client is None or not self.armed:
             return False
-        close_side = "SELL" if pos["side"] == "LONG" else "BUY"
+        close_side = "SELL" if self._pos_side(pos) == "LONG" else "BUY"
         try:
             client.cancel_all(sym)
             try:
@@ -1562,7 +1615,7 @@ class TradingEngine:
         if client is None or not self.armed or pos.get("mode") != "live":
             return
         sym = pos.get("symbol") or self.cfg.market.symbol
-        close_side = "SELL" if pos["side"] == "LONG" else "BUY"
+        close_side = "SELL" if self._pos_side(pos) == "LONG" else "BUY"
         try:
             client.place_stop_market(sym, close_side, float(pos["tp"]),
                                      order_type="TAKE_PROFIT_MARKET")
@@ -1795,11 +1848,29 @@ class TradingEngine:
         if gap and now - last < gap:
             self.position_llm_usage["skipped_cooldown"] += 1
             return False
+        # 先占位：即使调用失败，也不会在同一秒被反复放行；
+        # _commit_position_llm_call 会在成功后把时间戳刷新、失败时回拨到
+        # 「gap - 60」，即失败只冷却 60 秒而不是整段 15 分钟。
         self._position_llm_at[sym] = now
         self.state["position_llm_at"] = dict(self._position_llm_at)
-        self.position_llm_usage["calls"] += 1
-        self.state["position_llm_usage"] = dict(self.position_llm_usage)
         return True
+
+    def _commit_position_llm_call(self, sym: str, ok: bool) -> None:
+        """LLM 调用结束后才落冷却与用量：失败不该白锁一整段冷却，也不该计成功。"""
+        now = time.time()
+        # 用基础配置而不是 effective_position_config()：后者依赖实例状态，
+        # 测试里用 object.__new__ 构造的轻量实例没有该方法。
+        gap = max(0, int(getattr(getattr(self.cfg, "position", None),
+                                 "llm_min_interval_sec", 900) or 0))
+        if ok:
+            self._position_llm_at[sym] = now
+            self.position_llm_usage["calls"] += 1
+        else:
+            # 失败只冷却 60 秒，避免网关抖动时立刻重试，也不把 15 分钟全浪费掉
+            self._position_llm_at[sym] = now - max(0, gap - 60)
+            self.position_llm_usage["errors"] += 1
+        self.state["position_llm_at"] = dict(self._position_llm_at)
+        self.state["position_llm_usage"] = dict(self.position_llm_usage)
 
     def _manage_open_position(self, pos: dict, price: float | None = None) -> dict:
         """包装：抢锁防重入（自动循环与守护线程可能同时进入）。"""
@@ -1809,7 +1880,14 @@ class TradingEngine:
             out["ts"] = time.time()
             return out
         if not lock.acquire(blocking=False):
-            return {"action": "hold", "reason": "持仓管理已在另一线程执行", "details": {}}
+            # 抢锁失败不是「巡检结论」，必须显式标记 skipped，否则 run_decision
+            # 会把这条假 hold 当成最新巡检写进页面，掩盖真正的心跳。
+            sym = self._pos_symbol(pos, self.cfg.market.symbol)
+            out = {"action": "hold", "reason": "持仓管理已在另一线程执行",
+                   "details": {"contended": True}, "skipped": True,
+                   "ts": time.time(), "symbol": sym}
+            self.last_management_by_symbol[sym] = out
+            return out
         try:
             out = self._manage_open_position_inner(pos, price)
             # 每轮都刷新时间戳。hold 不产生动作，没有时间戳就分不清
@@ -1921,6 +1999,7 @@ class TradingEngine:
             if want_llm and self._position_llm_allowed(sym):
                 try:
                     review = review_management(self._position_llm_client(), cfg, dec, pos)
+                    self._commit_position_llm_call(sym, True)
                     dec.explanation = review.get("explanation") or ""
                     sh = review.get("shadow")
                     if sh:
@@ -1939,7 +2018,7 @@ class TradingEngine:
                         dec.details["shadow_action"] = sh.get("action")
                     self._save()
                 except Exception:  # noqa: BLE001 - LLM 是旁路，绝不阻断退出动作
-                    self.position_llm_usage["errors"] += 1
+                    self._commit_position_llm_call(sym, False)
                     self.state["position_llm_usage"] = dict(self.position_llm_usage)
             return dec.to_dict()
         except Exception as exc:  # noqa: BLE001 - 持仓管理绝不阻断主流程
@@ -1995,7 +2074,9 @@ class TradingEngine:
 
         # A2：决策被风控引擎拒绝时告警（approved=False 且 action=flat 才是真拒绝）
         # 同一品种 + 同一原因 30 分钟内只提醒一次：否则每轮都会刷一条相同的拦截通知。
-        if not decision.risk_decision["approved"] and decision.risk_decision["action"] == "flat":
+        if (not decision.risk_decision["approved"] and decision.risk_decision["action"] == "flat") \
+                or any(c.get("check") == "risk_officer" and not c.get("passed")
+                       for c in (decision.risk_decision.get("checks") or [])):
             reasons = decision.risk_decision.get("reasons", [])
             sig = f"{decision.symbol}|{(reasons[0] if reasons else '未通过风控检查')[:60]}"
             now = time.time()
@@ -2047,7 +2128,9 @@ class TradingEngine:
         order = decision.order if decision is not None else self.pending_order
         if order is None:
             return {"ok": False, "error": "还没有决策，请先运行一次决策"}
-        price = price if price is not None else self.price()
+        price = price if (price is not None and float(price) > 0) else self.price()
+        if not price or float(price) <= 0:
+            return {"ok": False, "error": "拿不到有效的最新价，拒绝下单"}
 
         if not decision and not order.get("quantity"):
             return {"ok": False, "error": "当前决策没有订单（风控未通过或策略观望）"}
@@ -2122,6 +2205,16 @@ class TradingEngine:
                             self.last_error += "；已立即反向平仓保护（不留裸仓）"
                         except ExchangeError as exc2:
                             self.last_error += f"；紧急平仓也失败：{exc2}"
+                            # 主单已成交、止损与紧急平仓都失败：这是真正的裸仓。
+                            # 不能只写一行 last_error 就当作处理完了——落一条待处置记录，
+                            # 由守护线程/人工在下一轮看到（_reconcile 也会核对交易所持仓）。
+                            self.state["unmanaged_exposure"] = {
+                                "symbol": sym, "side": side, "qty": qty,
+                                "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "detail": str(exc2)[:200],
+                            }
+                            self._notify("critical", f"{sym} 出现无保护敞口",
+                                         f"止损与紧急平仓均失败：{exc2}", {"symbol": sym})
                         self._consume_plan()
                         return {"ok": False, "error": self.last_error}
                     # 止盈单（锁利）：触发价在开仓价盈利侧；失败不影响持仓与止损
@@ -2136,11 +2229,14 @@ class TradingEngine:
                     detail = self._live_fill(self.cfg.market.symbol, res.order_id)
                     fill_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
                     fee = float(detail["fee"]) if detail else 0.0
+                    # 数量必须用交易所回读的成交量：下单量会被 stepSize 量化，
+                    # 用未量化的 qty 记账会让本地仓位与交易所长期偏离。
+                    fill_qty = float(detail["qty"]) if detail and detail.get("qty") else float(res.qty or qty)
                     plan_px = float(order.get("entry_ref_price") or 0.0) or None
                     self._put_position({
                         "symbol": sym,
                         "side": side,
-                        "qty": qty,
+                        "qty": fill_qty,
                         "entry": fill_px,
                         "leverage": lev,
                         "stop": stop,
@@ -2158,7 +2254,7 @@ class TradingEngine:
                             "action": "OPEN",
                             "side": side,
                             "symbol": sym,
-                            "qty": qty,
+                            "qty": fill_qty,
                             "price": round_price(fill_px),
                             "plan_price": round_price(plan_px),
                             "slippage_bps": round(
@@ -2169,7 +2265,7 @@ class TradingEngine:
                         }
                     )
                     self._save()
-                    self._log_live("OPEN", side, qty, res.price or price, res.order_id)
+                    self._log_live("OPEN", side, fill_qty, res.price or price, res.order_id)
                     self._consume_plan()
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
@@ -2186,6 +2282,9 @@ class TradingEngine:
     def _consume_plan(self) -> None:
         """订单计划一旦执行就作废，避免重复下单。"""
         self.pending_order = None
+        # 进程内的 last_decision 也必须清掉：execute() 优先读它，只清 pending_order
+        # 的话，交易所侧快速平仓 + 本地对账清掉幽灵仓后，同一份订单会被二次执行。
+        self.last_decision = None
         # 立场已经写进仓位，清掉待办避免下一笔误用旧立场
         self.state["pending_stances"] = []
         ld = self.state.get("last_decision")
@@ -2202,9 +2301,17 @@ class TradingEngine:
                 if symbol:
                     return {"ok": False, "error": f"{symbol} 当前没有持仓"}
                 return {"ok": False, "error": "当前没有持仓"}
-            # 用仓位自己的品种：auto_rotate 切过品种后，cfg.market.symbol 已经变了，
-            # 拿当前品种去撤单/平仓会平错对象（与「幽灵仓位」同源的坑）。
-            sym = str(pos.get("symbol") or self.cfg.market.symbol)
+            # 用仓位自己的品种。优先读 pos["symbol"]；老存档可能没有该字段，
+            # 此时反查 map 的 key（而不是退回 cfg.market.symbol —— 切过品种后
+            # 那会指向另一个品种，实盘会平错对象、模拟盘会删错 key 留幽灵仓）。
+            sym = self._pos_symbol(pos, "")
+            if not sym:
+                for key, val in self._positions_map().items():
+                    if val is pos:
+                        sym = key
+                        break
+            sym = sym or str(self.cfg.market.symbol).upper()
+            pos_side = self._pos_side(pos)
             if pos.get("mode") == "live" and self.state["mode"] == "live":
                 if not self.armed or self.live_client is None:
                     return {"ok": False, "error": "实盘未解锁"}
@@ -2212,13 +2319,13 @@ class TradingEngine:
                     self.live_client.cancel_all(sym)
                     res = self.live_client.place_market(
                         sym,
-                        "SELL" if pos["side"] == "LONG" else "BUY",
+                        "SELL" if self._pos_side(pos) == "LONG" else "BUY",
                         float(pos["qty"]),
                         reduce_only=True,
                     )
                     detail = self._live_fill(sym, res.order_id)
                     exit_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
-                    direction = 1.0 if pos["side"] == "LONG" else -1.0
+                    direction = 1.0 if self._pos_side(pos) == "LONG" else -1.0
                     gross = (exit_px - float(pos["entry"])) * float(pos["qty"]) * direction
                     if detail is not None:
                         gross = float(detail["pnl"])  # 交易所口径的已实现盈亏（不含手续费）
@@ -2228,7 +2335,7 @@ class TradingEngine:
                         {
                             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                             "action": "CLOSE",
-                            "side": pos["side"],
+                            "side": self._pos_side(pos),
                             "symbol": pos.get("symbol") or self.cfg.market.symbol,
                             "qty": round(float(pos["qty"]), 6),
                             "price": round_price(exit_px),
@@ -2243,7 +2350,7 @@ class TradingEngine:
                     self._record_close(pos, exit_px, pnl, reason, "live", rule=rule)
                     self._drop_position(sym)
                     self._save()
-                    self._log_live("CLOSE", pos["side"], pos["qty"], exit_px, res.order_id)
+                    self._log_live("CLOSE", self._pos_side(pos), pos["qty"], exit_px, res.order_id)
                     # A2：平仓后报告已实现盈亏
                     self._notify("info" if pnl >= 0 else "critical",
                                  f"{pos['side']} 平仓（实盘）",
@@ -2253,6 +2360,8 @@ class TradingEngine:
                 except ExchangeError as exc:
                     return {"ok": False, "error": str(exc)}
             rec = self._paper_close(price, reason, symbol=sym, rule=rule)
+            if rec is None:
+                return {"ok": False, "error": f"{sym} 平仓失败：仓位记录已不存在"}
             self._save()
             # A2：平仓后报告已实现盈亏
             self._notify("info" if rec["pnl"] >= 0 else "critical",
@@ -2276,7 +2385,7 @@ class TradingEngine:
             if px <= 0:
                 continue
             hit = None
-            if pos["side"] == "LONG":
+            if self._pos_side(pos) == "LONG":
                 if px <= pos["stop"]:
                     hit = "stop_loss"
                 elif px >= pos["tp"]:
@@ -2352,6 +2461,9 @@ class TradingEngine:
 
     def cycle(self) -> dict:
         with self._cycle_lock:
+            # 跨日先把「当日权益基准」滚动到今天：daily_loss_limit_pct 与
+            # 页面 day_pnl_pct 都以它为分母，不滚动就永远是启动那天的基准。
+            self._roll_day()
             # 数据还没加载好（后台 K 线下载中）时拒绝决策，返回友好提示，
             # 不触发同步 refresh_data 把请求阻塞几十秒。
             if self.df is None:
@@ -2406,15 +2518,15 @@ class TradingEngine:
                     continue
                 if sym_u != str(self.cfg.market.symbol).upper():
                     try:
-                        self.switch_symbol(sym_u)
+                        sw = self.switch_symbol(sym_u)
                     except Exception as exc:  # noqa: BLE001 - 单个品种切换失败不影响其它
                         self.last_error = f"切换 {sym_u} 失败：{exc}"
                         continue
-                    df, _src = self.refresh_data()
-                    if df is None or not len(df):
+                    # switch_symbol 内部已经 refresh_data 并写好了 self.df，
+                    # 用它返回的最新价即可；重复刷新会再拉一次行情、再预热一次。
+                    price = sw.get("price")
+                    if not price:
                         continue
-                    # 换品种后必须用新品种的价格：拿旧价下单会直接错单
-                    price = float(df["close"].iloc[-1])
                     if self.live_price_provider is not None:
                         try:
                             lp = float(self.live_price_provider() or 0.0)
@@ -2478,7 +2590,19 @@ class TradingEngine:
                     price = price_override if price_override else self.price()
                 except Exception:  # noqa: BLE001
                     pass
-            eq = self._equity(price) if price else self.state["equity"]
+            # 展示口径必须与风控一致：实盘直接读交易所权益（_live_equity 自带
+            # 20 秒缓存且只读）。这里**不能**调 account_state()——它会触发账本
+            # 重基（写 state），展示接口不应有交易副作用。
+            live_eq = self._live_equity()
+            if live_eq is not None:
+                eq = live_eq
+            elif price:
+                eq = self._equity(price)
+            else:
+                eq = self.state["equity"]
+            self._roll_day(eq)
+            peak_eq = max(float(self.state.get("peak_equity") or 0.0), float(eq))
+            day_base = float(self.state.get("day_start_equity") or eq) or float(eq)
             # 逐仓算标记价与浮盈。多品种下「当前价」只对当前品种成立，
             # 其它品种用守护线程缓存的报价；没报价的 unrealized 给 None（前端显示 —），
             # 绝不拿当前品种的价格去套。
@@ -2519,11 +2643,9 @@ class TradingEngine:
                 "price": price,
                 "equity": round(eq, 2),
                 "cash_equity": round(self.state["equity"], 2),
-                "peak_equity": round(self.state["peak_equity"], 2),
-                "day_pnl_pct": round((eq / self.state["day_start_equity"] - 1) * 100, 3)
-                if self.state["day_start_equity"]
-                else 0.0,
-                "drawdown_pct": round((eq / max(self.state["peak_equity"], 1e-9) - 1) * 100, 3),
+                "peak_equity": round(peak_eq, 2),
+                "day_pnl_pct": round((eq / day_base - 1) * 100, 3) if day_base else 0.0,
+                "drawdown_pct": round((eq / max(peak_eq, 1e-9) - 1) * 100, 3),
                 "position": pos,
                 # 多品种：完整持仓列表（前端阶段化改造中，position 仍是「当前品种」兼容视图）
                 "positions": positions,

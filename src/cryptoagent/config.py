@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
@@ -314,6 +315,35 @@ def load_dotenv(path: str | Path | None = None) -> dict[str, str]:
     return loaded
 
 
+def config_problems(cfg: AppConfig) -> list[str]:
+    """检查跨字段的硬约束，返回人类可读的问题列表。
+
+    Web 设置页保存时有前后端双重校验，但「直接改 config/default.json」
+    这条路径以前完全没有校验：0.8 × 3 > 0.95 也能被静默加载，直到运行时
+    风控逐笔拒单才暴露。这里在加载时给出明确告警（不阻塞启动，避免历史
+    配置直接导致服务起不来）。
+    """
+    out: list[str] = []
+    r = cfg.risk
+    if r.max_position_pct <= 0 or r.max_margin_usage_pct <= 0:
+        out.append("max_position_pct / max_margin_usage_pct 必须大于 0")
+        return out
+    slots = max(1, int(r.max_concurrent_positions or 1))
+    if r.max_position_pct * slots > r.max_margin_usage_pct + 1e-9:
+        out.append(
+            f"max_position_pct({r.max_position_pct}) × max_concurrent_positions({slots}) "
+            f"> max_margin_usage_pct({r.max_margin_usage_pct})：多仓时保证金必然不够"
+        )
+    single_notional = r.max_position_pct * r.max_leverage
+    for name in ("max_portfolio_notional_pct", "correlated_exposure_pct"):
+        cap = float(getattr(r, name, 0.0) or 0.0)
+        if cap + 1e-9 < single_notional:
+            out.append(
+                f"{name}({cap}) 小于单笔最大名义敞口 {single_notional:.2f}：正常交易会被组合层全部拒绝"
+            )
+    return out
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     cfg = AppConfig()
@@ -327,6 +357,11 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         cfg.llm.model = os.environ["CRYPTOAGENT_LLM_MODEL"]
     if os.getenv("CRYPTOAGENT_LLM_BASE_URL"):
         cfg.llm.base_url = os.environ["CRYPTOAGENT_LLM_BASE_URL"]
+    problems = config_problems(cfg)
+    if problems:
+        import sys
+        for item in problems:
+            print(f"[config] 警告：{item}", file=sys.stderr)
     return cfg
 
 
@@ -367,9 +402,18 @@ def save_config(cfg: AppConfig, path: str | Path) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     # 先写临时文件再原子替换：设置页保存时若中途失败（磁盘满、进程被 kill），
     # 直接 write_text 会留下半截 JSON，下次启动整站直接起不来。
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(p)
+    # 临时名必须唯一：两个保存请求并发时，固定 .tmp 会互相覆盖。
+    tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex[:12]}.tmp")
+    try:
+        tmp.write_text(json.dumps(asdict(cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.json"

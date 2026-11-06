@@ -1,0 +1,148 @@
+{
+  "market": {
+    "symbol": "BTCUSDT",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT"
+    ],
+    "pinned": [],
+    "symbol_exchanges": {},
+    "interval": "1h",
+    "bars": 6000,
+    "seed": 7,
+    "source": "synthetic",
+    "cache_dir": "data/cache",
+    "short_interval": "5m",
+    "short_bars": 200,
+    "klines_cache": true,
+    "klines_prewarm": true,
+    "klines_prewarm_intervals": [
+      "15m"
+    ],
+    "auto_rotate": false,
+    "rotate_min_score": 0.2,
+    "rotate_every_cycles": 1,
+    "auto_top_k": 1,
+    "cache_all_symbols": true,
+    "cache_warm_interval_sec": 15,
+    "cache_warm_main_sec": 300,
+    "derivatives_enabled": true,
+    "derivatives_ttl_sec": 300
+  },
+  "backtest": {
+    "initial_equity": 10000.0,
+    "leverage": 3.0,
+    "maintenance_margin_rate": 0.005,
+    "costs": {
+      "fee_bps": 5.0,
+      "slippage_bps": 2.0,
+      "funding_interval_hours": 8,
+      "cost_gate_enabled": true,
+      "max_cost_ratio": 0.35,
+      "max_participation": 0.1,
+      "max_participation_hard": 0.5
+    }
+  },
+  "risk": {
+    "max_leverage": 3.0,
+    "leverage_override": 0.0,
+    "max_position_pct": 0.3,
+    "max_loss_per_trade_pct": 0.01,
+    "max_concurrent_positions": 1,
+    "max_margin_usage_pct": 0.95,
+    "sizing_mode": "llm",
+    "min_leverage": 1.0,
+    "daily_loss_limit_pct": 0.03,
+    "max_drawdown_pct": 0.15,
+    "min_confidence": 0.55,
+    "kill_switch_file": "runs/TRADING_HALT",
+    "max_portfolio_notional_pct": 1.2,
+    "correlated_exposure_pct": 0.9,
+    "correlation_groups": [
+      [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT"
+      ],
+      [
+        "XRPUSDT",
+        "DOGEUSDT"
+      ]
+    ]
+  },
+  "research": {
+    "iterations": 6,
+    "train_frac": 0.55,
+    "valid_frac": 0.2,
+    "min_oos_sharpe": 0.3,
+    "max_lookback": 500,
+    "out_dir": "runs/research",
+    "factor_library": "factors_library",
+    "auto_interval_sec": 0
+  },
+  "llm": {
+    "provider": "mock",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key_env": "OPENAI_API_KEY",
+    "temperature": 0.3,
+    "max_tokens": 1500,
+    "timeout": 60,
+    "retries": 2,
+    "offpeak_research_only": true,
+    "peak_mode": "full",
+    "peak_holidays": []
+  },
+  "sentiment": {
+    "enabled": true,
+    "source": "price_action",
+    "cryptopanic_api_key_env": "CRYPTOPANIC_API_KEY",
+    "cache_ttl_sec": 600
+  },
+  "notify": {
+    "enabled": true,
+    "channels": [
+      "console",
+      "inapp"
+    ],
+    "webhook_url_env": "CRYPTOAGENT_WEBHOOK_URL",
+    "telegram_token_env": "CRYPTOAGENT_TG_TOKEN",
+    "telegram_chat_env": "CRYPTOAGENT_TG_CHAT",
+    "email_smtp_host_env": "CRYPTOAGENT_SMTP_HOST",
+    "email_smtp_port_env": "CRYPTOAGENT_SMTP_PORT",
+    "email_user_env": "CRYPTOAGENT_SMTP_USER",
+    "email_pass_env": "CRYPTOAGENT_SMTP_PASS",
+    "email_to_env": "CRYPTOAGENT_SMTP_TO",
+    "inapp_path": "runs/notifications.jsonl"
+  },
+  "position": {
+    "enabled": true,
+    "trail_activate_r": 1.0,
+    "trail_atr_mult": 2.0,
+    "trail_min_gap_pct": 0.003,
+    "max_hold_bars": 48,
+    "min_progress_r": 0.3,
+    "reversal_enabled": true,
+    "reversal_min_hold_bars": 3,
+    "reversal_composite": 0.7,
+    "live_stop_adjust": true,
+    "min_adjust_interval_sec": 300,
+    "llm_explain": false,
+    "llm_shadow": false,
+    "llm_offpeak_only": true,
+    "llm_min_interval_sec": 900,
+    "auto_tune": true,
+    "reversal_ema_bars": 48,
+    "bars_from_index": true,
+    "composite_max_age_sec": 300,
+    "peak_drawdown_exit_enabled": false,
+    "peak_drawdown_r": 1.0
+  },
+  "runs_dir": "runs",
+  "decision_keep_days": 7
+}

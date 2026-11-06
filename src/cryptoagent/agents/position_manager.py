@@ -219,14 +219,19 @@ def manage_position(
         }
 
         # 机会扫描的 composite 有缓存：过期信号不该拿来触发「提前平仓」。
-        # 没带时间戳时保持旧行为（调用方还拿不到 ts），有 ts 才做新鲜度校验。
+        # 没有时间戳时按「不可信」处理——宁可不用因子退出，也不拿未知时效的
+        # 信号平掉一个正常仓位。
         max_age = int(getattr(cfg, "composite_max_age_sec", 300) or 0)
-        if composite is not None and composite_ts is not None and max_age > 0:
-            age = max(0.0, time.time() - float(composite_ts))
-            details["composite_age_sec"] = round(age, 1)
-            if age > max_age:
+        if composite is not None and max_age > 0:
+            if composite_ts is None:
                 composite = None
                 details["composite_stale"] = True
+            else:
+                age = max(0.0, time.time() - float(composite_ts))
+                details["composite_age_sec"] = round(age, 1)
+                if age > max_age:
+                    composite = None
+                    details["composite_stale"] = True
 
         # 1) 时间止损：横盘耗时间、资金效率太低
         if st["bars"] >= int(cfg.max_hold_bars) and st["fav"] < cfg.min_progress_r * st["r_pct"]:

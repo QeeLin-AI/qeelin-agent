@@ -1,7 +1,9 @@
 import sys, os, urllib.request, urllib.error, json, base64
+from pathlib import Path
 
 REPO = "QeeLin-AI/qeelin-agent"
-ROOT = r"D:\Programs\DSH\crypto-agent"
+# 跟着脚本位置走，换机器/换目录不用改代码
+ROOT = str(Path(__file__).resolve().parents[1])
 BASE = f"https://api.github.com/repos/{REPO}/git"
 
 token = None
@@ -60,21 +62,9 @@ st, js = api("/trees", "POST", {"base_tree": base_tree, "tree": blobs})
 new_tree = js["sha"]
 print("tree", new_tree)
 
-def _head_message() -> str:
-    """默认沿用本地 HEAD 的提交信息，避免脚本里的旧文案盖掉本次改动（可用 GIT_MSG 覆盖）。"""
-    try:
-        import subprocess
-
-        out = subprocess.run(
-            ["git", "-C", ROOT, "log", "-1", "--pretty=%B"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return out.stdout.strip()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-msg = os.environ.get("GIT_MSG") or _head_message() or "chore: 同步更新"
+# 默认用固定文案：本机 git HEAD 与远端 origin/main 经常不同步（推送走 Data API），
+# 沿用本地 HEAD 的提交信息会描述另一批改动。需要精确文案时用 GIT_MSG 覆盖。
+msg = os.environ.get("GIT_MSG") or "chore: sync via GitHub Data API"
 
 st, js = api("/commits", "POST", {"message": msg, "tree": new_tree, "parents": [head]})
 commit = js["sha"]

@@ -6,8 +6,8 @@
 # 只动代码与依赖。config/default.json、.env、runs/、data/、factors_library/
 # 都是运行数据，不会被覆盖、也不会被删除：
 #   - .env / runs / data / factors_library 在 .gitignore 里，git 根本看不见；
-#   - config/default.json 虽然被仓库跟踪，但这里先打了 skip-worktree 标记，
-#     reset 时 git 会跳过它，保留服务器上的运行时参数。
+#   - config/default.json 已改为「不入库」的运行时文件：reset 前先备份、
+#     reset 后立刻恢复，既跟随代码更新又保住服务器上的风控参数。
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/crypto-agent}"
@@ -18,11 +18,29 @@ LEGACY_SERVICE="${LEGACY_SERVICE:-cryptoagent}"
 
 cd "$APP_DIR"
 
-# 运行时参数由设置页改写，不能被仓库版本盖掉
-sudo -u "$SERVICE_USER" git update-index --skip-worktree config/default.json 2>/dev/null || true
+# 老版本曾把 config/default.json 纳入索引并打 skip-worktree；现在它已不入库，
+# 先清掉旧标记，否则 reset 时 git 会拒绝处理这个路径。
+sudo -u "$SERVICE_USER" git update-index --no-skip-worktree config/default.json 2>/dev/null || true
+
+# 备份运行时配置（git reset --hard 会删掉「新提交里不存在」的被跟踪文件）
+CFG_BAK="$(mktemp)"
+HAS_CFG=0
+if [ -f config/default.json ]; then
+  cp config/default.json "$CFG_BAK"
+  HAS_CFG=1
+fi
+
+# 记录当前版本：后面任何一步失败都能回到更新前，而不是留下半套代码。
+OLD_HEAD="$(sudo -u "$SERVICE_USER" git rev-parse HEAD)"
 
 sudo -u "$SERVICE_USER" git fetch --prune origin
 sudo -u "$SERVICE_USER" git reset --hard origin/main
+
+if [ "$HAS_CFG" = "1" ]; then
+  install -m 600 "$CFG_BAK" config/default.json
+  chown "$SERVICE_USER":"$SERVICE_USER" config/default.json
+fi
+rm -f "$CFG_BAK"
 
 sudo -u "$SERVICE_USER" "$APP_DIR/.venv/bin/pip" install -q -r requirements.txt
 
@@ -48,4 +66,9 @@ systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
 systemctl restart "${SERVICE_NAME}"
 sleep 2
-systemctl --no-pager --lines=10 status "${SERVICE_NAME}" || true
+if ! systemctl --no-pager --lines=10 status "${SERVICE_NAME}"; then
+  echo "服务启动失败，回滚到更新前的版本（$OLD_HEAD）" >&2
+  sudo -u "$SERVICE_USER" git reset --hard "$OLD_HEAD"
+  systemctl restart "${SERVICE_NAME}" || true
+  exit 1
+fi

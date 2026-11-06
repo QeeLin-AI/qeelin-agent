@@ -321,7 +321,11 @@ class ResearchLoop:
         ev = Evaluation(proposal=proposal)
         try:
             validate_factor_code(proposal.code)
-            values, meta = run_factor(proposal.code, self.train)
+            # 在**完整历史**上算一次因子值，再按时间边界切三段。
+            # 分段各自重算会让 valid/test 段开头缺少 rolling/ewm 的 warmup，
+            # 因子值与实盘不一致、OOS 夏普被系统性压低——那是方法学产物，
+            # 不能据此判定因子无效。
+            values_all, meta = run_factor(proposal.code, self.df)
             problems = check_lookahead(meta)
             ev.lookahead = problems
             if problems:
@@ -329,16 +333,13 @@ class ResearchLoop:
                 ev.elapsed = time.time() - t0
                 return ev
 
-            target = factor_to_target(values, window=200, cap=1.0)
+            def _seg(seg):
+                return values_all.reindex(seg.index)
+
+            target = factor_to_target(_seg(self.train), window=200, cap=1.0)
             train_res = run_backtest(self.train, target, self.cfg.backtest, self.cfg.market.interval)
 
-            # 在 valid 上重算（用 valid 自己的数据窗口，避免跨段泄漏）
-            values_v, meta_v = run_factor(proposal.code, self.valid)
-            if check_lookahead(meta_v):
-                ev.error = "前视偏差（valid 段复现）"
-                ev.elapsed = time.time() - t0
-                return ev
-            target_v = factor_to_target(values_v, window=200, cap=1.0)
+            target_v = factor_to_target(_seg(self.valid), window=200, cap=1.0)
             valid_res = run_backtest(self.valid, target_v, self.cfg.backtest, self.cfg.market.interval)
 
             ev.train = _metrics_subset(train_res)
@@ -377,8 +378,9 @@ class ResearchLoop:
 
         holdout = None
         if best is not None:
-            # 留出集只跑这一次
-            values_t, _ = run_factor(best.proposal.code, self.test)
+            # 留出集只跑这一次（同样用全历史算值、再切 test 段）
+            values_all, _ = run_factor(best.proposal.code, self.df)
+            values_t = values_all.reindex(self.test.index)
             target_t = factor_to_target(values_t, window=200, cap=1.0)
             res_t = run_backtest(self.test, target_t, self.cfg.backtest, self.cfg.market.interval)
             holdout = _metrics_subset(res_t)

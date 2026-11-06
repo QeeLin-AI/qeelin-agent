@@ -207,6 +207,10 @@ def test_llm_cooldown_blocks_second_call():
     assert e._position_llm_allowed("BTCUSDT") is False
     assert e.position_llm_usage["skipped_cooldown"] == 1
     assert e._position_llm_allowed("ETHUSDT") is True   # 冷却按品种独立
+    # 闸门本身不记「成功调用」：只有真正发起并结束调用后才计次，
+    # 否则失败调用也会被算进 calls，账单估算偏乐观。
+    e._commit_position_llm_call("BTCUSDT", True)
+    e._commit_position_llm_call("ETHUSDT", True)
     assert e.position_llm_usage["calls"] == 2
 
 

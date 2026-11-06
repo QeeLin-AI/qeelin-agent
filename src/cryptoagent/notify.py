@@ -30,6 +30,7 @@ import logging
 import os
 import smtplib
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -135,10 +136,21 @@ class Notifier:
             if method is None:
                 _log.warning("未知通知通道，已跳过: %s", channel)
                 continue
-            try:
-                method(n)
-            except Exception as exc:  # noqa: BLE001 - 单通道失败绝不向上传播
-                _log.error("通知通道 %s 投递失败: %s: %s", channel, type(exc).__name__, exc)
+            # 单次 URL 请求遇到 429/网络抖动就永久丢告警；退避重试 2 次，
+            # 仍失败才记日志。绝不向上传播（通知失败不能影响交易主循环）。
+            last_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    method(n)
+                    last_exc = None
+                    break
+                except Exception as exc:  # noqa: BLE001 - 单通道失败绝不向上传播
+                    last_exc = exc
+                    if attempt == 0:
+                        time.sleep(0.5)
+            if last_exc is not None:
+                _log.error("通知通道 %s 投递失败: %s: %s",
+                           channel, type(last_exc).__name__, last_exc)
         return n
 
     # ------------------------------------------------------------------

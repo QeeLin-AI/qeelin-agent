@@ -1,10 +1,14 @@
 """本地 Web 服务：零依赖 HTTP 服务器 + JSON API。
 
-只监听 127.0.0.1（默认），没有登录鉴权——这是本机工具，不是公网服务。
+默认只监听 127.0.0.1；绑定非回环地址时**强制**要求 CRYPTOAGENT_WEB_TOKEN
+（见 serve() 的启动闸门），请求通过 Authorization / Cookie / ?token= 任一方式鉴权。
 任何写操作（下单/解锁）都必须由浏览器显式触发，且服务端再校验一次。
 """
 from __future__ import annotations
 
+import functools
+import hmac
+import html as _html
 import json
 import math
 import mimetypes
@@ -60,11 +64,38 @@ class ApiError(Exception):
         self.status = status
 
 
+def _as_int(value, name: str, default: int,
+            lo: int | None = None, hi: int | None = None) -> int:
+    """路由层整数参数：非法值返回 400，而不是让 ValueError 冒泡成 500。"""
+    try:
+        out = int(value if value not in (None, "") else default)
+    except (TypeError, ValueError) as exc:
+        raise ApiError(f"{name} 必须是整数", 400) from exc
+    if lo is not None:
+        out = max(lo, out)
+    if hi is not None:
+        out = min(hi, out)
+    return out
+
+
+def _serialized(fn):
+    """配置写操作串行化：同一时刻只允许一个请求改 cfg 并落盘。"""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self.cfg_lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class WebApp:
     def __init__(self, cfg: AppConfig, live: bool = False, live_interval: float = 5.0) -> None:
         self.cfg = cfg
         self.engine = TradingEngine(cfg)
         self.research_lock = threading.Lock()
+        # 配置写锁：ThreadingHTTPServer 的多个请求线程 + 自动 evolve 线程共享
+        # 同一个 AppConfig。逐字段 mutate 后全量 save 必须串行，否则会观察到
+        # 「仓位上限已改、保证金上限没改」的中间态，回滚也会抹掉并发写入。
+        self.cfg_lock = threading.RLock()
         self.last_research: dict | None = None
         self.last_decision: dict | None = None
         self.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -768,7 +799,7 @@ class WebApp:
         from ..config import config_path, save_config
 
         on = bool(payload.get("on", False))
-        interval = int(payload.get("interval_sec", 86400))
+        interval = _as_int(payload.get("interval_sec", 86400), "interval_sec", 86400, 60, 604800)
         self.cfg.research.auto_interval_sec = max(300, interval) if on else 0
         if "iterations" in payload:
             self.cfg.research.iterations = max(1, min(int(payload["iterations"]), 30))
@@ -1057,7 +1088,8 @@ class WebApp:
         # 2) 行情能不能真的拉到（且必须来自这家交易所，别拿别家的数据充数）
         #    use_disk=False：这是连通性校验，必须真的打一次交易所，不能读盘缓存
         try:
-            df, src = fetch_klines(sym, self.cfg.market.interval, 60, prefer=exchange, use_disk=False)
+            df, src = fetch_klines(sym, self.cfg.market.interval, 60,
+                                   prefer=exchange, use_disk=False, force=True)
         except Exception as exc:  # noqa: BLE001
             raise ApiError(f"{ex_cn} 行情拉取失败（{type(exc).__name__}），稍后再试", 502) from exc
         if df is None or df.empty:
@@ -1289,6 +1321,7 @@ class WebApp:
             "max_margin_usage_pct": float(getattr(r, "max_margin_usage_pct", 1.0) or 1.0),
         }
 
+    @_serialized
     def set_risk(self, payload: dict) -> dict:
         """改杠杆/风险上限并写进 config/default.json（重启后仍生效）。"""
         from dataclasses import fields as dc_fields
@@ -1441,7 +1474,12 @@ class WebApp:
             save_config(self.cfg, config_path())
             saved = True
         except OSError:
-            saved = False          # 只读文件系统：内存里仍然生效
+            # 保存失败（只读文件系统）时回滚内存：否则页面显示新值、重启后又
+            # 变回旧值，用户无法判断到底有没有生效。
+            for _k, _v in _snap.items():
+                setattr(r, _k, _v)
+            saved = False
+            warnings.append("配置写入失败（文件系统只读？），本次修改已回滚")
         return {"risk": self.risk_config(), "saved": saved, "warnings": warnings}
 
     # ------------------------------------------------------------------
@@ -1501,6 +1539,7 @@ class WebApp:
             "history": self._settings_history()[-5:],
         }
 
+    @_serialized
     def apply_settings_profile(self, payload: dict) -> dict:
         """应用一套方案。走既有 setter，因此沿用它们的校验与「失败整体回滚」。"""
         from ..settings_profiles import PROFILES, assert_profile_safe, profile_diff
@@ -1572,6 +1611,7 @@ class WebApp:
     # ------------------------------------------------------------------
     # LLM 自主调参（提案由模型出，裁决由代码做）
     # ------------------------------------------------------------------
+    @_serialized
     def settings_evolve(self, payload: dict) -> dict:
         """让模型基于近期表现提一份参数调整建议；apply=True 时通过裁决就落盘。"""
         from ..agents.settings_evolver import (
@@ -1725,6 +1765,7 @@ class WebApp:
             "current": self.cfg.market.symbol,
         }
 
+    @_serialized
     def set_rotate(self, payload: dict) -> dict:
         """改自主选品种的开关/阈值/频率，并写进 config/default.json。"""
         from ..config import config_path, save_config
@@ -1831,6 +1872,7 @@ class WebApp:
             "offpeak": offpeak_info(c),
         }
 
+    @_serialized
     def set_llm_settings(self, payload: dict) -> dict:
         """写 LLM 配置：provider/model/base_url/api_key 进 .env，峰谷策略进 config。"""
         from ..config import config_path, save_config
@@ -1907,6 +1949,7 @@ class WebApp:
             "shadow_recent": list(self.engine.llm_shadow_log[-10:]),
         }
 
+    @_serialized
     def set_position_settings(self, payload: dict) -> dict:
         """热更新持仓管理员配置：WebApp 与 Engine 共享同一个 AppConfig，改完立即生效。
 
@@ -1972,6 +2015,7 @@ class WebApp:
             "cryptopanic_key_tail": key[-4:] if key else "",
         }
 
+    @_serialized
     def set_sentiment_settings(self, payload: dict) -> dict:
         """写情绪/新闻源配置（A1）：开关、源选择进 config/default.json，Key 进 .env。"""
         from ..config import config_path, save_config
@@ -2023,6 +2067,7 @@ class WebApp:
             "email_set": bool(os.getenv(n.email_smtp_host_env, "")),
         }
 
+    @_serialized
     def set_notify_settings(self, payload: dict) -> dict:
         """写通知/告警配置（A2）：主开关、通道进 config/default.json，外部凭据进 .env。"""
         from ..config import config_path, save_config
@@ -2098,8 +2143,6 @@ class WebApp:
         return row
 
     def exchange_status(self) -> dict:
-        import os
-
         from ..execution import read_api_keys
 
         e = self.engine
@@ -2164,7 +2207,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, body, "application/json; charset=utf-8")
 
     def _read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ApiError("Content-Length 非法", 400) from exc
+        # 本地工具也要有上限：畸形/超大 body 会把进程内存吃满
+        if length < 0 or length > 1024 * 1024:
+            raise ApiError("请求体过大（上限 1 MiB）", 413)
         if not length:
             return {}
         raw = self.rfile.read(length)
@@ -2181,19 +2230,25 @@ class Handler(BaseHTTPRequestHandler):
         """没设 token 就放行（只监听 127.0.0.1 的本地用法）。
 
         设了 token 时接受三种携带方式：Authorization: Bearer、Cookie、?token=。
+        比较用 compare_digest：普通 == 会在首个不同字节处提前返回，理论上
+        可以被响应时间差推断令牌前缀。
         """
         token = self._token()
         if not token:
             return True
+
+        def _same(value: str) -> bool:
+            return hmac.compare_digest(str(value).encode("utf-8"), token.encode("utf-8"))
+
         header = self.headers.get("Authorization", "")
-        if header.startswith("Bearer ") and header[7:].strip() == token:
+        if header.startswith("Bearer ") and _same(header[7:].strip()):
             return True
         cookie = self.headers.get("Cookie", "") or ""
         for part in cookie.split(";"):
             k, _, v = part.strip().partition("=")
-            if k == "ca_token" and v == token:
+            if k == "ca_token" and _same(v):
                 return True
-        if query and query.get("token", [""])[0] == token:
+        if query and _same(query.get("token", [""])[0]):
             return True
         return False
 
@@ -2210,13 +2265,13 @@ class Handler(BaseHTTPRequestHandler):
             "打开一次，之后浏览器会记住 30 天。</p>"
             "<h3 style='font-size:15px;margin-top:28px'>令牌在哪？</h3>"
             "<p>在<b>服务器上</b>这个文件里（安装脚本最后也会打印一次）：</p>"
-            f"<pre style='background:#121722;border:1px solid #222b3a;border-radius:8px;padding:12px;overflow:auto'>{env_path}</pre>"
+            f"<pre style='background:#121722;border:1px solid #222b3a;border-radius:8px;padding:12px;overflow:auto'>{_html.escape(str(env_path))}</pre>"
             "<p>Windows 上查看：</p>"
             "<pre style='background:#121722;border:1px solid #222b3a;border-radius:8px;padding:12px'>"
             "Get-Content C:\\crypto-agent\\.env | Select-String TOKEN</pre>"
             "<p>Linux 上查看：</p>"
             "<pre style='background:#121722;border:1px solid #222b3a;border-radius:8px;padding:12px'>"
-            "grep TOKEN /etc/crypto-agent.env</pre>"
+            "grep TOKEN /opt/crypto-agent/.env</pre>"
             "<p style='color:#7c8798'>懒得找也可以直接跑 <code>run.cmd token</code>，它会把完整地址打出来。</p>"
             "</body>"
         )
@@ -2252,12 +2307,32 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 500)
 
+    def _origin_ok(self) -> bool:
+        """拒绝跨站写请求。
+
+        浏览器对「简单请求」（text/plain、无自定义头）不做预检，同源策略只阻止
+        读响应、并不阻止请求送达 127.0.0.1——不校验 Origin 的话，任意网页都能
+        对着本机 8000 端口发 POST 触发下单/平仓/熔断。
+        """
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True                      # 非浏览器客户端（curl / 脚本）
+        if origin == "null":
+            return False
+        try:
+            netloc = urllib.parse.urlsplit(origin).netloc
+        except ValueError:
+            return False
+        return netloc == (self.headers.get("Host") or "").strip()
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         # 与 GET 保持一致：POST 也接受 ?token=（脚本/接口调用常用）
         if not self._auth_ok(urllib.parse.parse_qs(parsed.query)):
             return self._deny()
+        if not self._origin_ok():
+            return self._json({"ok": False, "error": "跨站写请求被拒绝"}, 403)
         try:
             payload = self._read_json()
             return self._api_post(path, payload)
@@ -2276,7 +2351,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             return self._json({"ok": True, "data": app.status()})
         if path == "/api/candles":
-            limit = int(query.get("limit", ["240"])[0])
+            limit = _as_int(query.get("limit", ["240"])[0], "limit", 240, 1, 1000)
             return self._json({"ok": True, "data": app.candles(limit)})
         if path == "/api/klines":
             return self._json(
@@ -2284,7 +2359,7 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "data": app.klines(
                         query.get("interval", [""])[0],
-                        int(query.get("limit", ["240"])[0]),
+                        _as_int(query.get("limit", ["240"])[0], "limit", 240, 1, 1000),
                     ),
                 }
             )
@@ -2332,10 +2407,10 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         eng = app.engine
         if path == "/api/decision":
-            data = app.decision(int(payload.get("rounds", 2)))
+            data = app.decision(_as_int(payload.get("rounds", 2), "rounds", 2, 1, 5))
             return self._json({"ok": True, "data": data})
         if path == "/api/research":
-            data = app.research(int(payload.get("iterations", 6)))
+            data = app.research(_as_int(payload.get("iterations", 6), "iterations", 6, 1, 50))
             return self._json({"ok": True, "data": data})
         if path == "/api/research/auto":
             return self._json({"ok": True, "data": app.set_research_auto(payload)})
@@ -2371,7 +2446,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/trading/auto":
             if payload.get("running"):
                 data = eng.start_auto(
-                    int(payload.get("interval_sec", 300)), bool(payload.get("execute", False))
+                    _as_int(payload.get("interval_sec", 300), "interval_sec", 300, 30, 86400),
+                    bool(payload.get("execute", False)),
                 )
             else:
                 data = eng.stop_auto()
@@ -2379,7 +2455,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/killswitch":
             return self._json({"ok": True, "data": eng.set_halt(bool(payload.get("on", False)))})
         if path == "/api/notifications":
-            return self._json({"ok": True, "data": app.notifications(int(payload.get("limit", 50)))})
+            return self._json({"ok": True, "data": app.notifications(
+                _as_int(payload.get("limit", 50), "limit", 50, 1, 500))})
         if path == "/api/notifications/clear":
             return self._json({"ok": True, "data": app.clear_notifications()})
         if path == "/api/exchange/sync":
@@ -2431,8 +2508,11 @@ class Handler(BaseHTTPRequestHandler):
             rel = path[len("/static/"):]
         else:
             rel = path.lstrip("/")
-        target = (STATIC_DIR / rel).resolve()
-        if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.is_file():
+        base = STATIC_DIR.resolve()
+        target = (base / rel).resolve()
+        # 用路径包含关系而不是字符串前缀：字符串 startswith 会被
+        # 「../static_evil/x」这类同前缀兄弟目录绕过。
+        if not target.is_relative_to(base) or not target.is_file():
             self._send(404, b"not found", "text/plain; charset=utf-8")
             return
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"

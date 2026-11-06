@@ -25,15 +25,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ..backtest import factor_to_target
 from .library import FACTOR_REQUIRES, LIBRARY
 from .sandbox import FactorError, run_factors_batch
+
+logger = logging.getLogger(__name__)
 
 
 VALIDATED_PATH = Path(__file__).with_name("validated.json")
@@ -137,6 +141,10 @@ def compute_factor_signal(
     `top_n` 仅为兼容旧调用保留：默认 None = 不截断（内置因子全参与）；
     传入正整数时对最终列表做硬截断（不建议再用，会重新引入上述偏斜）。
     """
+    # 只保留最近 600 根：因子最长回看约 336 根，再加目标窗口 200，600 根足够。
+    # 主决策传入的是 6000 根全量，不裁剪会白跑 10 倍计算量（扫描路径本来就用 600）。
+    if len(df) > 600:
+        df = df.tail(600)
     files = load_factor_files(lib_dir, max_research=max_research)
     if top_n is not None and int(top_n) > 0:
         files = files[: int(top_n)]
@@ -156,13 +164,23 @@ def compute_factor_signal(
     # 一次子进程跑完全部因子：单开进程的固定开销（解释器 + pandas ≈1.25s）远大于
     # 计算本身，逐个 spawn 会随因子数线性变慢；批量把这段开销摊薄成一次。
     values_map: dict[str, Any] = {}
+    batch_error = ""
     try:
         values_map, _errors = run_factors_batch(
             files, df, timeout=max(45, min(180, 4 * len(files)))
         )
-    except FactorError:
+        if _errors:
+            # 不要静默：某个因子写错会让整批少几个信号，必须能在日志里定位
+            logger.warning("批量因子部分失败（%d 个）：%s", len(_errors),
+                           "；".join(f"{k}: {v.splitlines()[-1][:60]}"
+                                    for k, v in list(_errors.items())[:3]))
+    except FactorError as exc:
+        batch_error = f"批量执行失败：{exc}"
+        logger.warning("%s（单因子超时会拖垮整批）", batch_error)
         values_map = {}
-    except Exception:  # noqa: BLE001 - 批量失败时退化为「全部因子无信号」，不阻塞决策
+    except Exception as exc:  # noqa: BLE001 - 批量失败时退化为「全部因子无信号」，不阻塞决策
+        batch_error = f"批量执行异常：{type(exc).__name__}"
+        logger.warning("%s", batch_error)
         values_map = {}
 
     for f, w in zip(files, base_weights):
@@ -170,7 +188,10 @@ def compute_factor_signal(
         try:
             values = values_map.get(f["name"])
             if values is None:
-                raise FactorError("因子未产出结果")
+                raise FactorError(batch_error or "因子未产出结果")
+            # inf 与 NaN 必须一起净化：只数 NaN 会让「除零产生的 inf」通过淘汰，
+            # 随后 target 全 0 却仍占权重，把复合信号稀释向 0。
+            values = values.replace([np.inf, -np.inf], np.nan)
             # 列存在但全是 NaN（Gate/OKX 补的空列）也要淘汰，否则一堆
             # target=0 会把复合信号稀释向 0。
             if int(values.notna().sum()) < max(20, window // 4):

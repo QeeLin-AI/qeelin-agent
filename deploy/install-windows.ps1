@@ -116,8 +116,17 @@ if (-not (Test-Path $envFile)) {
     if ($DryRun) { Write-Host "  [dry] 未写入 $envFile" -ForegroundColor DarkGray }
     else { Write-Host "  已写入 $envFile（忘了可以打开看）" }
 } else {
-    $token = (Select-String -Path $envFile -Pattern "CRYPTOAGENT_WEB_TOKEN=(.+)" -AllMatches).Matches.Groups[1].Value
-    Write-Host "  .env 已存在，沿用令牌：$token"
+    $token = (Select-String -Path $envFile -Pattern "^CRYPTOAGENT_WEB_TOKEN=(.+)" -AllMatches).Matches.Groups[1].Value
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        # 老 .env 可能只有注释行或根本没写令牌：空令牌会让绑定 0.0.0.0 的启动直接失败
+        $bytes = New-Object byte[] 24
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $token = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+        Add-Content -Path $envFile -Value "CRYPTOAGENT_WEB_TOKEN=$token" -Encoding utf8
+        Write-Host "  .env 缺少令牌，已生成并追加：$token"
+    } else {
+        Write-Host "  .env 已存在，沿用令牌：$token"
+    }
 }
 
 Say "5/6 注册开机自启计划任务"

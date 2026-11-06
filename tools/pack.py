@@ -43,6 +43,8 @@ SKIP_DIRS = {"__pycache__", ".git", ".venv", "dist", "runs.synthetic_backup"}
 SKIP_SUFFIX = {".pyc", ".pyo", ".zip", ".log"}
 SKIP_NAMES = {
     ".env", "engine_state.json",
+    # 运行时配置（含本机线上参数）：发布包只带 default.example.json
+    "default.json",
     # 内部交接/运维脚本，不进发布包
     "handoff.py", "enable-agent-ssh.ps1", "enable-ssh-oneliner.txt",
     "setup-ssh-windows.ps1", "ssh-config.example", "optimized.rdp",

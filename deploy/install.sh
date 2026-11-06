@@ -40,9 +40,15 @@ if [[ "$SRC_DIR" != "$APP_DIR" ]]; then
   rsync -a --delete \
     --exclude '__pycache__' --exclude '.venv' --exclude 'runs' --exclude 'dist' \
     --exclude 'data' --exclude 'docs/.edge*' --exclude '.env' \
+    --exclude 'config/default.json' \
     "$SRC_DIR"/ "$APP_DIR"/
 fi
 mkdir -p "$APP_DIR"/{runs,data,factors_library}
+# 首次部署：没有运行时配置就从模板复制一份；已有配置绝不覆盖
+# （default.json 是设置页会改写的运行时文件，不在仓库里跟踪）。
+if [[ ! -f "$APP_DIR/config/default.json" && -f "$APP_DIR/config/default.example.json" ]]; then
+  cp "$APP_DIR/config/default.example.json" "$APP_DIR/config/default.json"
+fi
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
 
 log "5/8 建 venv 装依赖"
@@ -93,7 +99,12 @@ sleep 2
 fail2ban-client status sshd 2>/dev/null | grep -E "Journal matches|Currently banned" || \
   echo "  fail2ban 未就绪，检查 journalctl -u fail2ban"
 
-TOKEN_VAL="$(grep CRYPTOAGENT_WEB_TOKEN "$ENV_FILE" | cut -d= -f2)"
+TOKEN_VAL="$(grep -E '^CRYPTOAGENT_WEB_TOKEN=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+if [[ -z "$TOKEN_VAL" ]]; then
+  echo "警告：$ENV_FILE 里没有找到 CRYPTOAGENT_WEB_TOKEN。"
+  echo "      绑定 0.0.0.0 时程序会拒绝启动，请先执行："
+  echo "      echo \"CRYPTOAGENT_WEB_TOKEN=\$(openssl rand -hex 24)\" >> $ENV_FILE"
+fi
 cat <<EOF
 
 部署完成。unit 默认监听 0.0.0.0:8000，两种访问方式任选：

@@ -102,7 +102,15 @@ def validate_candidates(
                 v_te = seg_values.get("test", {}).get(name)
                 if v_tr is None or v_va is None or v_te is None:
                     raise FactorError("某一段未产出因子值")
-                lookahead_ok = True   # 内置因子为项目自有代码，AST 白名单 + 人工审查
+                # 批量 runner 只算值、不产生 lookahead meta。为了不把「未来函数
+                # 检测」整体跳过，对每个因子补一次截断复检（单因子 ~1.25s，
+                # 验证是离线任务，这点成本换协议完整性值得）。
+                lookahead_ok = True
+                try:
+                    _, meta_l = run_factor(c["code"], train, lookahead_checks=1)
+                    lookahead_ok = not check_lookahead(meta_l)
+                except Exception as exc:  # noqa: BLE001 - 复检失败按未通过处理
+                    errs[name] = f"前视复检失败：{exc}"
             else:
                 v_tr, meta = run_factor(c["code"], train, lookahead_checks=2)
                 v_va, meta_v = run_factor(c["code"], valid, lookahead_checks=2)

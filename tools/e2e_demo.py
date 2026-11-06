@@ -3,6 +3,8 @@
     python tools/e2e_demo.py [--symbol BTCUSDT] [--qty 0.001] [--keep]
 
 只用 .env 里的 Key，全部是币安 Demo Trading 的虚拟资金，不涉及真钱。
+**只允许 demo / testnet**：这个脚本会以 armed=True 直接下单，放开 live
+就等于把「演示」变成真实资金操作事故。
 加 --keep 则不平仓（默认会平掉，做完是干净账户）。
 """
 from __future__ import annotations
@@ -24,7 +26,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="BTCUSDT")
     ap.add_argument("--qty", type=float, default=0.001)
-    ap.add_argument("--env", default="demo", choices=["demo", "testnet", "live"])
+    ap.add_argument("--env", default="demo", choices=["demo", "testnet"])
     ap.add_argument("--keep", action="store_true")
     args = ap.parse_args()
 

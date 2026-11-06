@@ -44,6 +44,27 @@ def record_accuracy(stats: dict, stances: list[float], market_dir: float) -> dic
     return stats
 
 
+def _project_weights(weights: list[float], lo: float = 0.1, hi: float = 0.7) -> list[float]:
+    """把权重投影到「每个都在 [lo, hi] 且总和为 1」的可行域。
+
+    直接 clamp 再除以总和会把上界重新推高（0.7 / 0.96 ≈ 0.729），
+    所以每次归一化后按「可调整空间」重新分配差额，迭代到收敛。
+    可行域非空（3 × 0.1 ≤ 1 ≤ 3 × 0.7），该迭代必然收敛。
+    """
+    w = [float(x) for x in weights]
+    for _ in range(12):
+        w = [min(hi, max(lo, x)) for x in w]
+        diff = 1.0 - sum(w)
+        if abs(diff) < 1e-12:
+            break
+        room = [(hi - x) if diff > 0 else (x - lo) for x in w]
+        total_room = sum(room)
+        if total_room <= 1e-12:
+            break
+        w = [x + diff * r / total_room for x, r in zip(w, room)]
+    return [min(hi, max(lo, x)) for x in w]
+
+
 def weights_from_accuracy(
     stats: dict | None, min_samples: int = 10
 ) -> tuple[list[float], bool]:
@@ -61,9 +82,7 @@ def weights_from_accuracy(
     learned = [r / s for r in rates]
     # 与先验各占一半：少数几笔交易不足以推翻先前的经验设定
     blended = [0.5 * d + 0.5 * l for d, l in zip(DEFAULT_WEIGHTS, learned)]
-    clamped = [min(0.7, max(0.1, w)) for w in blended]
-    total = sum(clamped) or 1.0
-    return [w / total for w in clamped], True
+    return _project_weights(blended), True
 
 
 def summary(stats: dict | None) -> dict:

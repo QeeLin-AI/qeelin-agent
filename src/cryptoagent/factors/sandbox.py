@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -54,7 +55,7 @@ ALLOWED_NODES = {
     ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
     ast.MatMult, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
     ast.Is, ast.IsNot, ast.In, ast.NotIn, ast.BitAnd, ast.BitOr, ast.BitXor,
-    ast.LShift, ast.RShift, ast.Expr, ast.alias,
+    ast.LShift, ast.RShift,
 }
 
 
@@ -179,7 +180,9 @@ def main():
             fn = ns.get("factor")
             if not callable(fn):
                 raise RuntimeError("没有找到 factor 函数")
-            res = fn(df)
+            # 每个因子拿独立副本：同一批里前一个因子若原地改 df（Assign/AugAssign
+            # 在白名单内），会污染后面所有因子的输入。
+            res = fn(df.copy())
             if isinstance(res, pd.DataFrame) and res.shape[1] == 1:
                 res = res.iloc[:, 0]
             if not isinstance(res, pd.Series):
@@ -207,6 +210,25 @@ if __name__ == "__main__":
         sys.stderr.write(err)
         sys.exit(1)
 '''
+
+
+def _limit_resources(cpu_seconds: int):
+    """返回 subprocess 的 preexec_fn：限制地址空间与 CPU 时间。
+
+    超时只在 `subprocess.run` 返回后生效；`np.ones(10**12)` 这类写法会在
+    超时之前就把内存吃光。POSIX 下用 rlimit 兜住，Windows 没有 resource
+    模块，退化为仅靠 timeout。
+    """
+    def _apply() -> None:
+        try:
+            import resource
+            limit = 2 * 1024 ** 3
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+            cpu = max(5, int(cpu_seconds))
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+        except Exception:  # noqa: BLE001 - 资源限制失败不影响主流程
+            pass
+    return _apply
 
 
 def _write_frame(df: pd.DataFrame, path: Path) -> None:
@@ -256,6 +278,7 @@ def run_factor(
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
                 encoding="utf-8", errors="replace",
+                preexec_fn=_limit_resources(int(timeout) + 5) if os.name == "posix" else None,
             )
         except subprocess.TimeoutExpired as exc:
             raise FactorError(f"因子执行超时（>{timeout}s），可能存在死循环或 O(n²) 写法") from exc
@@ -302,6 +325,7 @@ def run_factors_batch(
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
                 encoding="utf-8", errors="replace",
+                preexec_fn=_limit_resources(int(timeout) + 5) if os.name == "posix" else None,
             )
         except subprocess.TimeoutExpired as exc:
             raise FactorError(f"批量因子执行超时（>{timeout}s）") from exc

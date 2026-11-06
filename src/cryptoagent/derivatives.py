@@ -16,12 +16,17 @@
 """
 from __future__ import annotations
 
+import logging
 import time
 
 import pandas as pd
 
 from .data import FAPI, _get
 
+_log = logging.getLogger(__name__)
+
+# 币安 /futures/data/* 只支持 5m 及以上；1m/3m 会按 .get 的默认值 1h 近似。
+# 8h 没有对应周期，就近取 12h —— 只影响衍生品列的对齐粒度，不影响 K 线本身。
 DERIV_PERIODS = {
     "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "2h": "2h",
     "4h": "4h", "6h": "6h", "8h": "12h", "12h": "12h", "1d": "1d",
@@ -56,9 +61,9 @@ def _series(df_index: pd.DatetimeIndex, rows: list, ts_of, val_of) -> pd.Series 
     return s.reindex(combined).ffill().reindex(df_index)
 
 
-def _fetch_all(symbol: str, interval: str, limit: int, base: str = FAPI) -> dict[str, list]:
+def _fetch_all(symbol: str, interval: str, limit: int, base: str = FAPI) -> dict[str, tuple]:
     period = DERIV_PERIODS.get(interval, "1h")
-    out: dict[str, list] = {}
+    out: dict[str, tuple] = {}
     endpoints = [
         ("basis", f"{base}/fapi/v1/premiumIndexKlines",
          {"symbol": symbol, "interval": interval, "limit": limit},
@@ -78,7 +83,8 @@ def _fetch_all(symbol: str, interval: str, limit: int, base: str = FAPI) -> dict
             rows = _get(url, params, timeout=3)
             if isinstance(rows, list) and rows:
                 out[name] = (rows, ts_of, val_of)
-        except Exception:  # noqa: BLE001 - 单个维度失败不影响其它维度
+        except Exception as exc:  # noqa: BLE001 - 单个维度失败不影响其它维度
+            _log.debug("衍生品维度 %s 拉取失败：%s", name, type(exc).__name__)
             continue
     return out
 
@@ -118,9 +124,14 @@ def enrich_derivatives(
         if not raw:
             return df
         added: dict[str, pd.Series] = {}
+        # 覆盖度按「实际请求到的窗口」算，不能用整段 df 的长度：
+        # 主行情 6000 根、衍生品最多 500 根时，len(idx)//10 = 600 永远达不到，
+        # 四列会被整体丢弃（默认配置下就是这种情况）。
+        window = max(1, min(len(idx), limit))
+        min_points = max(20, window // 10)
         for col, (rows, ts_of, val_of) in raw.items():
             s = _series(idx, rows, ts_of, val_of)
-            if s is not None and int(s.notna().sum()) >= max(20, len(idx) // 10):
+            if s is not None and int(s.notna().sum()) >= min_points:
                 added[col] = pd.Series(s.to_numpy(dtype=float), index=df.index)
         if not added:
             return df

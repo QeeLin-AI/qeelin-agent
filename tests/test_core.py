@@ -388,7 +388,10 @@ class TestKlineDiskCache(unittest.TestCase):
             self.assertTrue(self.data.bars_per_year(iv) > 0)
 
     def test_disk_ttl_is_half_bar_capped_at_3min(self):
-        self.assertEqual(self.data.kl_disk_ttl("1m"), 60.0)      # 半个 bar 太短，保底 60s
+        # 下界必须小于最短周期的半个 bar：1m 的半个 bar 是 30 秒。
+        # 写成 60 秒会让新 bar 已开盘 59 秒还返回上一根。
+        self.assertEqual(self.data.kl_disk_ttl("1m"), 30.0)
+        self.assertEqual(self.data.kl_disk_ttl("3m"), 90.0)
         self.assertEqual(self.data.kl_disk_ttl("5m"), 150.0)
         self.assertEqual(self.data.kl_disk_ttl("15m"), 180.0)    # 半个 bar=450s，封顶 180s
         self.assertEqual(self.data.kl_disk_ttl("1h"), 180.0)
@@ -1486,14 +1489,22 @@ class TestPositionManager(unittest.TestCase):
         self.assertIn("趋势反转", d.reason)
 
     def test_factor_composite_can_force_exit(self):
+        import time as _t
+
         from cryptoagent.agents.position_manager import manage_position
         from cryptoagent.config import PositionConfig
 
         df = self._df(self._flat())
         d = manage_position(self._pos(bars=10), df, 100.0,
-                            PositionConfig(reversal_composite=0.7), composite=-0.9)
+                            PositionConfig(reversal_composite=0.7), composite=-0.9,
+                            composite_ts=_t.time())
         self.assertEqual(d.action, "close")
         self.assertIn("因子信号", d.reason)
+        # 没有时间戳的 composite 视为「时效未知」，不得据此平仓
+        d2 = manage_position(self._pos(bars=10), df, 100.0,
+                             PositionConfig(reversal_composite=0.7), composite=-0.9)
+        self.assertEqual(d2.action, "hold")
+        self.assertTrue(d2.details.get("composite_stale"))
 
     def test_short_side_trailing_moves_stop_down(self):
         import numpy as np

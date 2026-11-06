@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -151,6 +152,13 @@ class RiskEngine:
                 )
 
         # 6. 仓位夹紧（占权益比例）
+        # NaN / Inf 必须先拦：`NaN > cap`、`NaN <= 0` 都是 False，否则会一路
+        # 穿过所有比较，最后生成 quantity=NaN 的畸形订单。
+        if not (math.isfinite(size) and math.isfinite(lev) and math.isfinite(stop)):
+            return RiskDecision(
+                False, "flat", 0.0, 0.0,
+                reasons + ["仓位/杠杆/止损出现非有限数值（NaN 或 Inf），拒绝开仓"], checks,
+            )
         if size > cfg.max_position_pct:
             reasons.append(f"仓位 {size:.1%} 超过上限，压到 {cfg.max_position_pct:.1%}")
             size = cfg.max_position_pct

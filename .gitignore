@@ -12,6 +12,7 @@ dist/
 .mypy_cache/
 .idea/
 .vscode/
+.workbuddy/
 *.log
 .DS_Store
 
@@ -48,6 +49,10 @@ desktop/.eb-cache/
 
 # 服务器专用启动脚本（含内部绝对路径）
 deploy/service-run-exe.cmd
+deploy/service-run.cmd
+
+# 运行时配置：设置页会就地改写，仓库只保留 default.example.json
+config/default.json
 
 # 服务器凭据（本机存档，绝不提交）
 .secrets/

@@ -6,14 +6,17 @@
 - openai ：任何 OpenAI 兼容网关（DeepSeek / 通义 / Moonshot / vLLM / Ollama）。
 - 失败时 ：自动降级到 mock，并在报告里标注 degraded，绝不静默编造。
 
-设计约束：`json()` 强制走 JSON schema 校验，模型输出不合规就重试，
-重试仍失败则抛错 —— 绝不让一个畸形 JSON 变成一张真订单。
+设计约束：`json()` 强制走 JSON schema 校验，模型输出不合规就重试；
+重试仍失败时**降级到调用方传入的规则兜底答案**并标记 degraded=True
+（不是抛错，而是让流水线继续跑，同时把降级写进报告）。
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -108,6 +111,9 @@ class LLMClient:
         self.api_key = os.getenv(cfg.api_key_env, "")
         # 用量统计：给 llmtest / 账单估算用，不参与决策
         self.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "errors": 0}
+        # 3 个分析师并发跑同一客户端：dict 的 += 在 GIL 下也不是原子读改写，
+        # 不加锁会稳定丢计数。
+        self._usage_lock = threading.Lock()
         if self.provider == "openai" and not self.api_key:
             self.provider = "mock"
             self._degrade_reason = f"环境变量 {cfg.api_key_env} 为空"
@@ -115,6 +121,11 @@ class LLMClient:
             self._degrade_reason = ""
 
     # ------------------------------------------------------------------
+    def _bump_usage(self, **deltas: int) -> None:
+        with self._usage_lock:
+            for key, delta in deltas.items():
+                self.usage[key] = int(self.usage.get(key, 0)) + int(delta)
+
     def is_offpeak(self) -> bool:
         return is_offpeak(self.cfg)
 
@@ -139,6 +150,7 @@ class LLMClient:
             content = self._chat(system, user, json_mode=False)
             return LLMResponse(content.strip(), self.provider)
         except Exception as exc:  # noqa: BLE001
+            self._bump_usage(errors=1)
             return LLMResponse(
                 mock, "mock-fallback", degraded=True, reason=f"{type(exc).__name__}: {exc}"
             )
@@ -153,14 +165,18 @@ class LLMClient:
 
         prompt = f"{user}\n\n只输出 JSON，不要任何解释。字段要求：\n{schema_hint}"
         last_err = ""
-        for _ in range(max(1, self.cfg.retries)):
+        for attempt in range(max(1, self.cfg.retries)):
             try:
                 raw = self._chat(system, prompt, json_mode=True)
                 data = _extract_json(raw)
                 self._validate(data, schema_hint)
                 return data, LLMResponse(raw, self.provider)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - 重试后仍失败则降级到规则兜底
                 last_err = f"{type(exc).__name__}: {exc}"
+                self._bump_usage(errors=1)
+                # 指数退避 + 抖动：网关 5xx 时立刻重试只会把失败放大成风暴
+                if attempt + 1 < max(1, self.cfg.retries):
+                    time.sleep(min(2.0, 0.4 * (2 ** attempt)))
         return mock, LLMResponse("", "mock-fallback", degraded=True, reason=last_err)
 
     @staticmethod
@@ -192,15 +208,17 @@ class LLMClient:
             },
             method="POST",
         )
-        self.usage["calls"] += 1
+        self._bump_usage(calls=1)
         try:
             with urllib.request.urlopen(req, timeout=self.cfg.timeout, context=ssl_context()) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             usage = body.get("usage") or {}
-            self.usage["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
-            self.usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+            self._bump_usage(
+                prompt_tokens=int(usage.get("prompt_tokens") or 0),
+                completion_tokens=int(usage.get("completion_tokens") or 0),
+            )
         except urllib.error.HTTPError as exc:
-            self.usage["errors"] += 1
+            self._bump_usage(errors=1)
             detail = exc.read().decode("utf-8", "replace")[:300]
             raise LLMError(f"HTTP {exc.code}: {detail}") from exc
         return body["choices"][0]["message"]["content"]

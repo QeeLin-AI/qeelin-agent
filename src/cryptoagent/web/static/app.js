@@ -122,7 +122,21 @@ let liveWarned = false;
 async function api(path, method = 'GET', body = null) {
   const opt = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opt.body = JSON.stringify(body);
-  const res = await fetch(path, opt);
+  // 长任务（扫描/研究/决策）单独放宽；其余 30 秒超时。没有超时的话，
+  // 后端一旦卡住，按钮会永远停在「扫描中…」，用户只能刷新页面。
+  const longTask = /\/(scan|research|decision)$/.test(path);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), longTask ? 180000 : 30000);
+  opt.signal = ctrl.signal;
+  let res;
+  try {
+    res = await fetch(path, opt);
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('请求超时，请稍后重试');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   const json = await res.json().catch(() => ({ ok: false, error: '响应不是 JSON' }));
   if (!res.ok || json.ok === false) throw new Error(json.error || `HTTP ${res.status}`);
   return json.data;
@@ -592,6 +606,12 @@ const SETTING_UNITS = {
   composite_max_age_sec: '秒',
   peak_drawdown_r: 'R',
 };
+// 只有这些键是「0~1 的比例」，显示时才乘 100。
+// 组合层两个 *_pct 的语义是「倍权益」（例如 16x），不能按百分比渲染。
+const PCT_KEYS = new Set([
+  'max_loss_per_trade_pct', 'max_position_pct', 'max_margin_usage_pct',
+  'daily_loss_limit_pct', 'max_drawdown_pct',
+]);
 function _settingLabel(key) {
   return SETTING_LABELS[key] || key;
 }
@@ -610,9 +630,8 @@ function _fmtSetting(key, v) {
   if (mapped != null) return mapped;
   if (typeof v === 'boolean') return v ? '开' : '关';
   if (typeof v === 'number') {
-    // 比例类键（_pct 且值在 0~1）按百分数显示，避免 0.008 这种看不懂的写法；
-    // 倍权益类（如组合名义敞口 7.0）不是比例，保持原值。
-    if (String(key || '').endsWith('_pct') && Math.abs(v) <= 1) {
+    // 比例类键（白名单内且值在 0~1）按百分数显示；倍权益类保持原值。
+    if (PCT_KEYS.has(String(key || '')) && Math.abs(v) <= 1) {
       return `${Number((v * 100).toFixed(1))}%`;
     }
     return Math.abs(v) < 1 ? String(Number(v.toFixed(4))) : String(v);
@@ -1287,7 +1306,8 @@ function renderResearchAuto(a) {
   const chk = $('autoResearchChk');
   const el = $('autoResearchState');
   if (!chk || !el || !a) return;
-  chk.checked = !!a.enabled;
+  // 用户正在操作这个开关时不要回写：3 秒轮询会把刚点的开关弹回旧状态
+  if (document.activeElement !== chk) chk.checked = !!a.enabled;
   if (a.enabled) {
     el.textContent = a.status === 'running'
       ? '正在研究…'
@@ -1532,7 +1552,7 @@ function renderAutoResume(a) {
   const el = $('autoResumeState');
   if (!chk || !el) return;
   const on = !!(a && a.enabled);
-  chk.checked = on;
+  if (document.activeElement !== chk) chk.checked = on;
   if (!a) { el.textContent = ''; return; }
   if (!on) { el.textContent = '重启后自动恢复交易：关闭。开了之后服务重启会自动接着跑（模拟盘）。'; return; }
   if (a.resumed) {
@@ -1549,7 +1569,7 @@ function renderAutoArm(a) {
   const el = $('autoArmState');
   if (!chk || !el) return;
   const on = !!(a && a.enabled);
-  chk.checked = on;
+  if (document.activeElement !== chk) chk.checked = on;
   if (!a) { el.textContent = ''; return; }
   if (!on) {
     el.textContent = '重启后自动解锁：关闭。开了之后重启服务会自动连上，不用手点。';
@@ -2427,7 +2447,9 @@ function renderExchangePanel(scope) {
     return `<span class="${cls}">${exCn(ex)}：${label}${cur ? ' · 当前连接' : ''}</span>`;
   }).join('<span class="sep">｜</span>');
 
-  const btn = $(scope === 'live' ? 'liveSwitchBtn' : 'tnSwitchBtn');
+  // 主网面板没有「切换交易所」按钮：状态行已足够，切换靠解锁时选择。
+  if (scope === 'live') return;
+  const btn = $('tnSwitchBtn');
   if (!btn) return;
   const ex = currentExchange(scope);
   const ready = hasKeys(ex, mode);
@@ -2873,9 +2895,15 @@ function renderOpportunities(rows) {
     </div>`;
   }).join('');
 
-  if ($('rotateToggle')) $('rotateToggle').checked = !!lastStatus?.auto_rotate;
-  if ($('rotateMinScore')) $('rotateMinScore').value = lastStatus?.rotate_min_score ?? 0.2;
-  if ($('rotateEvery')) $('rotateEvery').value = lastStatus?.rotate_every_cycles ?? 1;
+  if ($('rotateToggle') && document.activeElement !== $('rotateToggle')) {
+    $('rotateToggle').checked = !!lastStatus?.auto_rotate;
+  }
+  if ($('rotateMinScore') && document.activeElement !== $('rotateMinScore')) {
+    $('rotateMinScore').value = lastStatus?.rotate_min_score ?? 0.2;
+  }
+  if ($('rotateEvery') && document.activeElement !== $('rotateEvery')) {
+    $('rotateEvery').value = lastStatus?.rotate_every_cycles ?? 1;
+  }
   scheduleSideFit();   // 榜单行数变了，三卡的高度分配跟着重算
 }
 
@@ -2973,5 +3001,7 @@ $('themeBtn').addEventListener('click', () => {
   // /api/status 不现场打交易所——实时价来自 ticker 线程，实盘权益 20 秒缓存，
   // 其余全是内存数据，所以这个频率不会把签名接口刷爆。
   setInterval(poll, 3000);
-  _uptimeRAF = requestAnimationFrame(_renderUptimeFrame); // 运行时长：逐帧检查、整秒翻滚，均匀跳动
+  // 只在循环尚未启动时启动：poll() 里的 _anchorUptime 通常已经起了一个，
+  // 这里再无条件赋值会造成两个 rAF 循环并行（且旧句柄丢失、无法停止）。
+  if (!_uptimeRAF) _uptimeRAF = requestAnimationFrame(_renderUptimeFrame);
 })();

@@ -141,7 +141,7 @@ flowchart TD
 
 ## 快速开始
 
-**要求**：Python 3.10+，核心依赖只有 `numpy` 与 `pandas`。
+**要求**：Python 3.10+，核心依赖只有 `numpy`、`pandas` 与 `certifi`（根证书，缺失时部分 HTTPS 源会 `CERTIFICATE_VERIFY_FAILED`）。
 
 ```bash
 git clone https://github.com/QeeLin-AI/qeelin-agent.git
@@ -184,7 +184,7 @@ python run.py agents --llm openai
 python run.py web --host 127.0.0.1 --port 8000
 ```
 
-控制台默认只监听回环地址，并使用访问令牌鉴权；`python run.py token` 可打印带令牌的完整地址。
+控制台默认只监听回环地址，并使用访问令牌鉴权；`python run.py token` 可打印带令牌的完整地址。注意：`deploy/qeelin-agent.service` 为了配合云服务器直连，显式传了 `--host 0.0.0.0`（见「服务器部署」一节），此时必须设置 `CRYPTOAGENT_WEB_TOKEN`，且应只通过安全组放行 8000 或改用 nginx 反代。
 
 ---
 
@@ -212,7 +212,7 @@ python run.py web --host 127.0.0.1 --port 8000
 
 ## Web 控制台
 
-纯静态资源（`index.html` + `app.js` + `style.css`），无需前端构建；默认只监听回环地址并使用访问令牌鉴权。
+纯静态资源（`index.html` + `app.js` + `style.css`），无需前端构建；`python run.py web` 默认只监听回环地址并使用访问令牌鉴权（systemd unit 例外，见「服务器部署」）。
 
 | 页签 | 内容 |
 |---|---|
@@ -230,7 +230,7 @@ python run.py web --host 127.0.0.1 --port 8000
 
 ![因子研究页](docs/tab-research.png)
 
-服务与接口全部使用 Bearer / `?token=` 鉴权，默认绑定 `127.0.0.1`。
+服务与接口全部使用 Bearer / `?token=` 鉴权。`python run.py web` 默认绑定 `127.0.0.1`；`deploy/qeelin-agent.service` 绑定 `0.0.0.0:8000`（云服务器场景），因此部署时必须设置令牌，并在安全组只放行必要端口。
 
 ---
 
@@ -273,7 +273,7 @@ python run.py web --host 127.0.0.1 --port 8000
 | `max_concurrent_positions` | 1 | 同时持仓品种数上限；`1` = 单仓，多仓需手动打开 |
 | `max_margin_usage_pct` | 0.95 | 全部持仓的保证金占用上限（占权益）。交易所拒单看的是这个，不是名义敞口 |
 
-> 上表是 `config/default.json` 的出厂值；代码内 dataclass 兜底更保守（3x / 30% / 1% / 3% / 15% / 0.55）。配置文件缺字段时以代码默认为准，因此**升级不需要改旧配置**。6 项硬顶（单笔风险 / 单笔仓位 / 同时持仓品种数 / 保证金占用 / 当日亏损 / 最大回撤）都可在控制台调整；组合层两项单位为**倍权益**，可在 **0.1–100x** 设置——设得大只是放宽允许范围，不代表实际会用满。
+> 上表是 `config/default.example.json` 的出厂值；代码内 dataclass 兜底更保守（3x / 30% / 1% / 3% / 15% / 0.55）。`config/default.json` 是**运行时文件**（设置页会就地改写，仓库不跟踪），首次部署从 example 复制；缺字段时以代码默认为准，因此**升级不需要改旧配置**。6 项硬顶（单笔风险 / 单笔仓位 / 同时持仓品种数 / 保证金占用 / 当日亏损 / 最大回撤）都可在控制台调整；组合层两项单位为**倍权益**，可在 **0.1–100x** 设置——设得大只是放宽允许范围，不代表实际会用满。
 
 > **硬约束：`max_position_pct × max_concurrent_positions ≤ max_margin_usage_pct`。** 否则「允许开 N 仓」是假承诺：按单笔上限开满时保证金必然不够，第 N 仓会被组合层拒掉。控制台在这条不成立时拒绝保存（前端先提示、`/api/risk` 再硬拦一道），校验失败整体回滚。
 
@@ -487,7 +487,7 @@ python tools/validate_factors.py --bars 8000 --symbol ETHUSDT --write
 
 两层配置：
 
-- `config/default.json`：品种列表、周期、风控阈值、研究参数等**非敏感**配置，控制台修改后回写。
+- `config/default.json`：品种列表、周期、风控阈值、研究参数等**非敏感**配置，控制台修改后回写。该文件**不入库**（`.gitignore`），仓库里只保留 `config/default.example.json` 作为出厂模板；首次部署时 `install.sh` 会自动复制一份。
 - `.env`：所有密钥与连接信息，**不会入库**（`.gitignore` 已忽略，仓库仅保留 `.env.example` 模板）。
 
 常用环境变量：
@@ -500,7 +500,8 @@ python tools/validate_factors.py --bars 8000 --symbol ETHUSDT --write
 | `CRYPTOAGENT_WEB_TOKEN` | 控制台访问令牌（URL 即密码：带 token 换取 Cookie） |
 | `CRYPTOAGENT_CONFIG` / `CRYPTOAGENT_ENV_FILE` | 自定义配置与 env 文件路径 |
 
-> `.env` 与 `config/default.json` 都属于运行时文件，部署时应保留服务器侧副本（仓库不跟踪实际值），避免升级覆盖掉线上参数。
+> `.env` 与 `config/default.json` 都属于运行时文件，**都不入库**。服务器升级用 `deploy/update.sh`：它会在 `git reset` 前备份 `config/default.json`、reset 后立即恢复，并把权限交回服务账号；`deploy/install.sh` 的 rsync 也显式排除了这个文件。<br>
+> ⚠️ 反向代理不是必需的，但如果用 `deploy/nginx.conf`，请把 unit 的 `--host` 改回 `127.0.0.1`——否则 `http://IP:8000` 可以绕过 nginx 的 IP 白名单与 Basic Auth，只剩令牌一道防线。
 
 ---
 
@@ -527,7 +528,25 @@ src/cryptoagent/
 └── cli.py             # 命令行入口
 ```
 
-`tools/validate_factors.py` 是可选的候选因子验证脚本（拉真实行情跑三段回测），`deploy/` 是 Linux 服务器部署脚本（systemd + fail2ban），`desktop/` 是可选的 Electron 桌面壳（需自备 Node.js），`desktop_entry.py` 为打包用的后端入口。
+`tools/validate_factors.py` 是可选的候选因子验证脚本（拉真实行情跑三段回测），`desktop/` 是可选的 Electron 桌面壳（需自备 Node.js），`desktop_entry.py` 为打包用的后端入口。
+
+## 服务器部署（Ubuntu 22.04 / 24.04）
+
+```bash
+# 首次部署（root）
+sudo APP_DIR=/opt/crypto-agent bash deploy/install.sh
+```
+
+`install.sh` 会：装系统依赖与 chrony（签名时间戳偏差 >1s 会被交易所拒单）→ 建 nologin 服务账号 → rsync 代码（排除 `.env` / `data` / `runs` / `config/default.json`）→ 建 venv 装依赖 → 生成 48 位访问令牌写入 `.env` → 安装 `qeelin-agent.service`（`PYTHONPATH=/opt/crypto-agent/src`）→ 配 fail2ban 的 sshd jail → 打印访问地址。
+
+```bash
+# 更新（root，在服务器上）
+sudo bash /opt/crypto-agent/deploy/update.sh
+```
+
+`update.sh` 会：清除历史 `skip-worktree` 标记 → 备份 `config/default.json` → `git fetch` + `reset --hard origin/main` → 恢复配置并交回服务账号 → 装依赖 → 同步 unit 并重启 → 检查 `systemctl status`，失败则回滚到更新前的 commit 并重启。
+
+`deploy/` 下另有 Windows 侧脚本（`install-windows.ps1` / `setup-ssh-windows.ps1` 等）与可选 nginx 反代配置；`deploy/ssh-config.example`、`optimized.rdp` 是占位模板（`1.2.3.4` / `CHANGE_ME_IP`），不含真实地址。
 
 ---
 
@@ -537,7 +556,7 @@ src/cryptoagent/
 python -m pytest -q
 ```
 
-**205 项单元测试**，覆盖风控限额与硬约束校验、因子沙箱与未来函数检测、回测指标、Web API 与鉴权、多仓位状态与报价解包、持仓核对与幽灵仓位清理、峰谷规则，以及持仓管理员的四类退出规则、LLM 解释 / 影子复核（含冷却、峰时跳过、失败降级）、执行成本闸、衍生品列对齐、分析师权重校准、平仓补记与成本闸终审顺序。测试使用合成数据与 mock 模型，不联网、不需要任何 Key。
+**271 项单元测试**，覆盖风控限额与硬约束校验、因子沙箱与未来函数检测、回测指标、Web API 与鉴权、多仓位状态与报价解包、持仓核对与幽灵仓位清理、峰谷规则，以及持仓管理员的四类退出规则、LLM 解释 / 影子复核（含冷却、峰时跳过、失败降级）、执行成本闸、衍生品列对齐、分析师权重校准、平仓补记与成本闸终审顺序。测试使用合成数据与 mock 模型，不联网、不需要任何 Key。
 
 ---
 

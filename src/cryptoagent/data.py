@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,7 @@ GATE = "https://api.gateio.ws"
 INTERVAL_HOURS = {
     # 分钟级周期必须写全：缺项会 fallback 成 1 小时，导致 Gate 翻页步长
     # 和缓存时效都算错（5m 被当成 1h，一次跳掉 11 根 K 线）。
+    "10s": 10.0 / 3600.0,
     "1m": 1.0 / 60.0,
     "3m": 3.0 / 60.0,
     "5m": 5.0 / 60.0,
@@ -261,7 +263,8 @@ def _fetch_fapi(cfg: MarketConfig, need: int, base: str = FAPI) -> pd.DataFrame:
     start = int(df.index[0].timestamp() * 1000)
     fr_rows: list[dict] = []
     cursor = start
-    while True:
+    # 上限保护：若交易所忽略 startTime 持续返回满页，没有这个上限就是死循环
+    for _page in range(200):
         batch = _get(
             f"{base}/fapi/v1/fundingRate",
             {"symbol": cfg.symbol, "limit": 1000, "startTime": cursor},
@@ -317,18 +320,23 @@ def _fetch_gate(cfg: MarketConfig, need: int) -> pd.DataFrame:
     contract = gate_contract(cfg.symbol)
     rows: list[dict] = []
     to_ts = int(time.time())
-    interval = cfg.interval if cfg.interval in {"10s", "1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d"} else "1h"
+    if cfg.interval not in GATE_INTERVALS:
+        # 静默降级成 1h 会把「2h 的缓存文件」里装满 1h K 线，下游年化/回测
+        # 全按 2h 算却拿到 1h 数据，偏差无法察觉。宁可直接失败换源。
+        raise DataError(f"Gate 不支持周期 {cfg.interval}，支持 {sorted(GATE_INTERVALS)}")
+    interval = cfg.interval
     span = int(INTERVAL_HOURS.get(interval, 1.0) * 3600)
     while len(rows) < need:
+        limit = max(1, min(2000, need - len(rows)))
         batch = _get(
             f"{GATE}/api/v4/futures/usdt/candlesticks",
-            {"contract": contract, "interval": interval, "limit": min(2000, need), "to": to_ts},
+            {"contract": contract, "interval": interval, "limit": limit, "to": to_ts},
         )
         if not batch:
             break
         rows = batch + rows
         to_ts = int(batch[0]["t"]) - span
-        if len(batch) < 2000:
+        if len(batch) < limit:
             break
     if not rows:
         raise DataError("gate 返回空数据")
@@ -539,7 +547,11 @@ LIVE_SOURCES = (
 _KL_CACHE: dict[tuple[str, str, int, str], tuple[float, pd.DataFrame, str]] = {}
 KL_TTL = 15.0
 
-KL_INTERVALS = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+# 统一周期集合：所有取数路径（币安 / OKX / Gate / 衍生品）都从这里派生，
+# 不再各自维护一份互相打架的白名单。
+KL_INTERVALS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")
+# Gate 的 candlesticks 接口支持的周期（比币安少 3m/2h 等，明确列出而不是静默降级）
+GATE_INTERVALS = {"10s", "1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d"}
 
 
 # --------------------------------------------------------------------------
@@ -565,13 +577,15 @@ def set_kl_cache_dir(cache_dir: str | Path) -> None:
 
 
 def kl_disk_ttl(interval: str) -> float:
-    """盘缓存有效期（秒）：距上一次写入的时长，半个 bar 周期、封顶 3 分钟、最少 60 秒。
+    """盘缓存有效期（秒）：距上一次写入的时长，半个 bar 周期、封顶 3 分钟、最少 15 秒。
 
     注意不能用「最后一根 bar 的开盘时刻」来判新旧——15m 周期的当前那根可能
     已经开盘 14 分钟，但它是 30 秒前才拉下来的，完全新鲜。
+    下界必须显著小于最短周期的一半：1m 的半个 bar 是 30 秒，若写成 60 秒，
+    新 bar 已经开盘 59 秒还会返回上一根。
     """
     span = INTERVAL_HOURS.get(interval, 1.0) * 3600.0
-    return max(60.0, min(span * 0.5, KL_DISK_TTL_MAX))
+    return max(15.0, min(span * 0.5, KL_DISK_TTL_MAX))
 
 
 def kl_cache_path(symbol: str, interval: str, limit: int, prefer: str = "binance") -> Path:
@@ -595,11 +609,17 @@ def _read_kl_disk(path: Path) -> pd.DataFrame | None:
 def _write_kl_disk(path: Path, df: pd.DataFrame) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        # 临时文件名必须唯一：预热线程、页面请求、决策线程可能同时写同一个 key，
+        # 固定叫 .tmp 会互相踩踏，replace 时可能把半截内容定为最终文件。
+        tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:12]}.tmp")
         df.to_csv(tmp)
         tmp.replace(path)   # 原子替换：并发读到半截文件会解析失败，宁可不换
     except Exception:  # noqa: BLE001 - 缓存写不进去不影响行情主流程
-        pass
+        try:
+            if "tmp" in locals() and tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def fetch_klines(
@@ -634,15 +654,26 @@ def fetch_klines(
     tag = "okx" if prefer == "okx" else "binance"
 
     def _ok(df: pd.DataFrame, src: str) -> tuple[pd.DataFrame, str]:
-        _KL_CACHE[key] = (now, df, src)
-        if disk_path is not None:
-            _write_kl_disk(disk_path, df)
+        # 只有「数据确实来自 prefer 指定的交易所」才写入该交易所的缓存。
+        # 否则 OKX 挂掉回退币安时，币安行情会被写进 *.okx.csv，之后 15 秒内
+        # 读到 disk-cache/okx 却是币安的价，决策与图表基准静默串台。
+        same_source = (tag == "okx") == str(src).startswith("okx")
+        # 所有来源都保证有 funding_rate 列：白名单允许它，但 short 周期取数
+        # 的三条分支都不补，因子会在沙箱里 KeyError。
+        if "funding_rate" not in df.columns:
+            df["funding_rate"] = 0.0
+        if same_source:
+            _KL_CACHE[key] = (now, df, src)
+            if disk_path is not None:
+                _write_kl_disk(disk_path, df)
         return df, src
 
     if not force:
         hit = _KL_CACHE.get(key)
         if hit and (now - hit[0]) < ttl:
-            return hit[1], hit[2]
+            # 跨所兜底的数据不能拿来充「prefer=okx」的缓存命中
+            if (tag == "okx") == str(hit[2]).startswith("okx"):
+                return hit[1], hit[2]
 
         if disk_path is not None:
             cached = _read_kl_disk(disk_path)
@@ -654,7 +685,7 @@ def fetch_klines(
                     fetched_at = disk_path.stat().st_mtime
                 except OSError:
                     fetched_at = 0.0
-                if (now - fetched_at) < kl_disk_ttl(interval):
+                if 0 <= (now - fetched_at) < kl_disk_ttl(interval):
                     _KL_CACHE[key] = (now, cached, f"disk-cache/{tag}")
                     return cached, f"disk-cache/{tag}"
 
@@ -712,7 +743,7 @@ def fetch_klines(
             df = df[["o", "h", "l", "c", "v"]].astype(float)
             df.columns = ["open", "high", "low", "close", "volume"]
             df = df.sort_index()
-            _fill_extra_fields(df)
+            df = _fill_extra_fields(df)
             return _ok(df, "gate-futures")
         errors.append("gate: 空数据")
     except Exception as exc:  # noqa: BLE001
@@ -832,10 +863,13 @@ def load_market(
     real_cache = cache_dir / f"{stem}{tag}.real.csv"
     synth_cache = cache_dir / f"{stem}_s{cfg.seed}.synthetic.csv"
 
-    def _read(path: Path) -> pd.DataFrame:
-        df = pd.read_csv(path, index_col=0, parse_dates=True)
-        df.index = pd.to_datetime(df.index, utc=True)
-        return df
+    def _read(path: Path) -> pd.DataFrame | None:
+        try:
+            df = pd.read_csv(path, index_col=0, parse_dates=True)
+            df.index = pd.to_datetime(df.index, utc=True)
+            return df
+        except Exception:  # noqa: BLE001 - 缓存损坏/写了一半，当作没有缓存
+            return None
 
     def _stale(df: pd.DataFrame) -> bool:
         if df.empty:
@@ -847,7 +881,7 @@ def load_market(
     if cfg.source == "binance":
         if real_cache.exists() and not force_download:
             df = _read(real_cache)
-            if not _stale(df):
+            if df is not None and not _stale(df):
                 kind = "okx-cache" if tag else "cache"
                 return df, f"{kind}:{cfg.symbol} {cfg.interval} 末根 {df.index[-1]:%Y-%m-%d %H:%M}Z"
         try:

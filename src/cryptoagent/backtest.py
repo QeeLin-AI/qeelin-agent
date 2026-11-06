@@ -145,6 +145,9 @@ def run_backtest(
         i = int(np.argmax(liq_mask))
         liquidated_at = df.index[i]
         equity.iloc[i:] = 0.0
+        # 账户归零后不能再产生收益：net 也要截断，否则 sharpe/sortino/win_rate
+        # 仍在统计强平之后的「幽灵收益」，指标会系统性失真。
+        net.iloc[i:] = 0.0
 
     bpy = bars_per_year(interval)
     n = len(net)
