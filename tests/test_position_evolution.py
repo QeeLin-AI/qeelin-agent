@@ -147,6 +147,18 @@ def test_l2_gate_discards_candidate_when_no_replay_cases():
     assert e.position_tuning["changes"] == []
 
 
+def test_l2_gate_not_passed_by_empty_candidate():
+    """没有候选改动时，不能凭「空跑回放」把 L2 置为通过。"""
+    e, _base = _bare_engine("replay")
+    e.cfg.position.evolution_confirm_rounds = 1
+    # 捕获率 0.8、峰值 1.5R：表现已在目标区间，L1 不会产生候选
+    e.position_tuning["stats"] = _fill(empty_stats(), "trail", 1.2, 1.5, 20)
+    e._recompute_position_tuning()
+    assert e.position_tuning["changes"] == []
+    assert e.position_tuning["gate"].get("l2_passed") is not True
+    assert e.position_tuning["replay"]["checks"]["has_candidate"] is False
+
+
 # ---------------------------------------------------------------- L3
 def test_l3_blocked_without_l2_gate():
     e, _base = _bare_engine("llm")

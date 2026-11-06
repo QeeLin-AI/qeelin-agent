@@ -1557,23 +1557,34 @@ class TradingEngine:
             changes = self._confirm_tuning(changes)
             now = time.time()
             if mode in ("replay", "llm"):
-                passed, replay = self._replay_gate(prev, eff)
-                self.position_tuning["replay"] = replay
                 gate = dict(self.position_tuning.get("gate") or {})
-                gate["l2_checks"] = replay.get("checks") or {}
-                gate["l2_cases"] = int(replay.get("cases") or 0)
-                gate["l2_median_delta"] = replay.get("median_delta")
-                gate["l2_worst_delta"] = replay.get("worst_delta")
-                # 首次未通过时也要落一个明确的 False，页面才能区分「没跑」与「没通过」
-                gate["l2_passed"] = bool(gate.get("l2_passed")) or bool(passed)
-                if passed:
-                    gate["l2_passed"] = True
-                    gate["l2_passed_at"] = gate.get("l2_passed_at") or now
-                    gate["l2_stable_since"] = gate.get("l2_stable_since") or now
+                if changes:
+                    passed, replay = self._replay_gate(prev, eff)
+                    self.position_tuning["replay"] = replay
+                    gate["l2_checks"] = replay.get("checks") or {}
+                    gate["l2_cases"] = int(replay.get("cases") or 0)
+                    gate["l2_median_delta"] = replay.get("median_delta")
+                    gate["l2_worst_delta"] = replay.get("worst_delta")
+                    # 只有「有候选且回放通过」才允许置位；无候选不改变已通过状态
+                    gate["l2_passed"] = bool(gate.get("l2_passed")) or bool(passed)
+                    if passed:
+                        gate["l2_passed_at"] = gate.get("l2_passed_at") or now
+                        gate["l2_stable_since"] = gate.get("l2_stable_since") or now
+                    else:
+                        # 门控未过：丢弃本轮改动，保持当前生效值
+                        eff = dict(prev)
+                        changes = []
                 else:
-                    # 门控未过：丢弃本轮改动，保持当前生效值
-                    eff = dict(prev)
-                    changes = []
+                    # 没有候选：回放没有可比对象，不能凭「空跑」通过门控。
+                    # 否则只要样本够、哪怕参数完全没动，也会把 L2 置为通过，
+                    # 进而错误地放行 L3。
+                    self.position_tuning["replay"] = {
+                        "passed": False, "cases": 0,
+                        "reason": "无待验证的候选改动",
+                        "checks": {"has_candidate": False},
+                    }
+                    gate["l2_checks"] = {"has_candidate": False}
+                    gate.setdefault("l2_passed", False)
                 self.position_tuning["gate"] = gate
             log = list(self.position_tuning.get("changes") or [])
             for ch in changes:
