@@ -1403,6 +1403,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   select, textarea, .sym-add-row input {
     font-size: 16px;
   }
+  /* 设置页等宽（mono）输入行原为 12px，特异性更高，这里一并提到 16px 防聚焦缩放 */
+  .set-row > input[type="text"], .set-row > input[type="password"] { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
