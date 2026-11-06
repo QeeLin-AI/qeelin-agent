@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.9-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.2.1-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -591,6 +591,7 @@ python -m pytest -q
 
 | 版本 | 要点 |
 |---|---|
+| **v1.2.1** | 账户级账本隔离：`runs/accounts/<scope>.json` 一账户一文件、跨账户查询/汇总/重置；重置记时间锚点让交易所视图同步清零；总览四卡新配色（马尔斯绿/勃艮第红/凡戴克棕/普鲁士蓝）与第三行字体强化；设置页标签间距/重复分割线/按钮间距修复；最近成交动作列（开仓/平仓）与开仓盈亏「--」、移动端两行两列；分析师注入 15m/5m 短周期指标实现多周期共振；测试 328 项 |
 | **v1.1.9** | 账户切换口径修复：作用域改为 exchange + 真假钱、切换保护与 force 确认、账户缓存清理但保留 K 线、disarm 停自动交易、流水按账户归户；手机端设置页两列压缩；方案「高频」改名与自定义显示；测试 299 项 |
 | **v1.1.8** | 精简去重：删除 12 项死代码（约 175 行）与未引用截图；`/api/candles` 合并到 `/api/klines`、删 `/api/data/refresh`；`balanced` 与 `AppConfig()` 默认值统一并加断言；删孤儿配置 `research.max_lookback`；合并交易所精度函数与 `_num`；Windows 脚本归档；测试 289 项 |
 | **v1.1.7** | 持仓管理员三阶段演进：L1 按规则归因、L2 反事实回放门控、L3 LLM 提案/动作覆盖（影子期 + 更保守方向 + 自动回退）；`evolution_mode` 与门控配置；测试 285 项 |

@@ -1803,7 +1803,7 @@ function renderStatus(s) {
   $('dataSource').textContent = `数据源 ${loading ? '加载中…' : shortSource(s.data_source)}`;
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
-  if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">v</span>${esc(s.server.version)}`;
+  if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">V</span>${esc(s.server.version)}`;
   if (s.uptime_sec != null) {
     // 以服务器返回为锚点自增；仅在漂移过大时纠正，避免每次轮询都跳秒。
     _anchorUptime(s.uptime_sec, s.started_at);

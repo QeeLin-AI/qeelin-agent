@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qeelin-agent"
-version = "1.1.9"
+version = "1.2.1"
 description = "币圈永续合约多智能体交易与研究框架（分析师→辩论→交易员→成本闸→风控→持仓管理）"
 readme = "README.md"
 requires-python = ">=3.10"
