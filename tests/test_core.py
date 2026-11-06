@@ -1911,6 +1911,45 @@ class TestAnalystCalibration(unittest.TestCase):
         self.assertIn("校准", d2.thesis)
 
 
+class TestShortFrames(unittest.TestCase):
+    """短周期多空帧：把 15m/5m 指标注入分析师视野，实现多周期共振。"""
+
+    def test_frame_metrics_computes_on_short_klines(self):
+        from cryptoagent.data import synthetic_ohlcv
+        from cryptoagent.factors.shortterm import compute_frame_metrics
+
+        m = compute_frame_metrics(synthetic_ohlcv(200, 7))
+        for key in ("price", "ret_12", "rsi_14", "trend", "breakout", "atr_pct", "high_20", "low_20"):
+            self.assertIn(key, m)
+        self.assertTrue(0 < m["rsi_14"] < 100)
+        self.assertLessEqual(m["low_20"], m["price"])
+        self.assertLessEqual(m["price"], m["high_20"])
+
+    def test_frame_metrics_returns_empty_when_too_short(self):
+        from cryptoagent.data import synthetic_ohlcv
+        from cryptoagent.factors.shortterm import compute_frame_metrics
+
+        self.assertEqual(compute_frame_metrics(synthetic_ohlcv(10, 7)), {})
+        self.assertEqual(compute_frame_metrics(None), {})
+
+    def test_to_prompt_includes_short_frames(self):
+        from cryptoagent.agents.roles import MarketSnapshot
+        from cryptoagent.data import synthetic_ohlcv
+
+        snap = MarketSnapshot.from_df(synthetic_ohlcv(400, 7), "BTCUSDT", "1h")
+        snap.short_frames = {
+            "15m": {"price": 50000.0, "ret_12": 0.01, "rsi_14": 55.0, "trend": "多头",
+                    "breakout": 0.5, "atr_pct": 0.004, "high_20": 50200.0, "low_20": 49800.0},
+            "5m": {"price": 50010.0, "ret_12": 0.005, "rsi_14": 60.0, "trend": "多头",
+                   "breakout": 0.3, "atr_pct": 0.003, "high_20": 50100.0, "low_20": 49950.0},
+        }
+        p = snap.to_prompt()
+        self.assertIn("短周期", p)
+        self.assertIn("[15m]", p)
+        self.assertIn("[5m]", p)
+        self.assertIn("突破", p)
+
+
 class TestRegressionFixes(unittest.TestCase):
     """2026-11-06 全量审查修复的回归：跨日基准、衍生品长历史。"""
 

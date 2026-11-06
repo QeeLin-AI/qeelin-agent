@@ -55,6 +55,9 @@ class MarketSnapshot:
     dd_from_high: float
     high_30d: float
     low_30d: float
+    # 短周期多空帧（15m/5m）：注入到分析师视野，实现「1h 定方向、短周期定时机」的共振。
+    # 由 pipeline 在决策时实时拉短周期 K 线填充，from_df 默认留空；离线/合成数据下为空。
+    short_frames: dict = field(default_factory=dict)
 
     @classmethod
     def from_df(cls, df: pd.DataFrame, symbol: str, interval: str) -> "MarketSnapshot":
@@ -125,7 +128,7 @@ class MarketSnapshot:
         )
 
     def to_prompt(self) -> str:
-        return (
+        base = (
             f"标的: {self.symbol} ({self.interval})   时间: {self.ts}\n"
             f"最新价: {self.price:,.1f}\n"
             f"收益: 1根 {self.ret_1:+.2%} | 24根 {self.ret_24:+.2%} | 168根 {self.ret_168:+.2%}\n"
@@ -136,6 +139,17 @@ class MarketSnapshot:
             f"z-score {self.funding_z:+.2f}\n"
             f"距 30 日高点: {self.dd_from_high:+.2%}（高点 {self.high_30d:,.1f} / 低点 {self.low_30d:,.1f}）"
         )
+        # 短周期多空帧：让分析师/研究员/交易员在同一份数据里做多周期权衡
+        if self.short_frames:
+            lines = []
+            for interval, m in self.short_frames.items():
+                lines.append(
+                    f"[{interval}] 价 {m['price']:,.1f}  近12根 {m['ret_12']:+.2%}  RSI {m['rsi_14']:.0f}  "
+                    f"{m['trend']}  突破 {m['breakout']:+.2f}  ATR {m['atr_pct']:.2%}  "
+                    f"区间 {m['low_20']:,.1f}~{m['high_20']:,.1f}"
+                )
+            base += "\n短周期（多周期共振参考，用于判断入场/离场时机）：\n" + "\n".join(lines)
+        return base
 
     def to_dict(self) -> dict:
         return {k: (round(v, 8) if isinstance(v, float) else v) for k, v in asdict(self).items()}

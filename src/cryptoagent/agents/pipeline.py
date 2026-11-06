@@ -39,7 +39,7 @@ from ..config import AppConfig
 from ..costs import evaluate_execution_cost
 from ..risk import AccountState, RiskDecision, RiskEngine
 from ..factors.signal import compute_factor_signal
-from ..factors.shortterm import compute_breakout_signal
+from ..factors.shortterm import compute_breakout_signal, compute_frame_metrics
 from ..sentiment import get_sentiment_source
 from .llm import LLMClient
 from .roles import (
@@ -156,6 +156,29 @@ class TradingPipeline:
         except Exception:  # noqa: BLE001 - 短周期拉不到/算不出时静默降级，不阻断决策
             return 0.0
 
+    def _short_frames(self, symbol: str, exchange: str = "binance") -> dict:
+        """拉 15m/5m 短周期 K 线，算多周期指标，注入分析师视野。
+
+        与 `_short_breakout_signal`（只输出一个标量给因子）不同，这里把短周期的
+        动能/RSI/趋势/突破/支撑阻力打包成结构化指标，让分析师在同一份 prompt 里
+        做「1h 定方向、15m/5m 定时机」的多周期共振判断。任何一档拉取失败都静默
+        跳过该档，绝不因为短周期取数失败阻断整条决策链。
+        """
+        if self.cfg.market.source == "synthetic":
+            return {}   # 合成/离线数据不拉短周期，避免无谓联网
+        from ..data import fetch_klines
+
+        frames: dict = {}
+        for interval in ("15m", "5m"):
+            try:
+                df_short, _ = fetch_klines(symbol, interval, 120, prefer=exchange)
+                m = compute_frame_metrics(df_short)
+                if m:
+                    frames[interval] = m
+            except Exception:  # noqa: BLE001 - 单档失败不影响其它档
+                continue
+        return frames
+
     def run(
         self,
         df: pd.DataFrame,
@@ -172,6 +195,9 @@ class TradingPipeline:
                                       peak_equity=self.cfg.backtest.initial_equity,
                                       day_start_equity=self.cfg.backtest.initial_equity)
         snap = MarketSnapshot.from_df(df, self.cfg.market.symbol, self.cfg.market.interval)
+        # 短周期多空帧：让分析师/研究员/交易员在同一份数据里看到 15m/5m 的
+        # 动能 / RSI / 趋势 / 突破 / 支撑阻力，做多周期共振判断。
+        snap.short_frames = self._short_frames(snap.symbol, exchange)
         # A1：情绪/新闻源（默认价格行为代理，配了 CryptoPanic 才用真实舆情）
         sentiment = get_sentiment_source(self.cfg.sentiment).fetch(snap.symbol, snap)
         reports: list[AnalystReport] = run_analysts(self.llm, snap, sentiment=sentiment)
