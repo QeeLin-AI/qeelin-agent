@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from cryptoagent.config import AppConfig
 from cryptoagent.engine import TradingEngine
 
@@ -218,3 +220,48 @@ def test_reset_does_not_touch_other_accounts(tmp_path):
     assert e.accounts.summarize("okx:demo")["realized"] == 0.0
     assert e.accounts.summarize("binance:demo")["realized"] == 7.0   # 另一个账户原样保留
     assert e.accounts.summarize("binance:demo")["trades"] == 1
+
+
+def test_reset_sets_anchor_for_overlay(tmp_path):
+    """重置当前账户要记下「时刻 + 当时权益」，供交易所 overlay 重新起算。"""
+    import time
+    from cryptoagent.accounts import AccountStore
+
+    e = _engine("binance:demo")
+    e.accounts = AccountStore(tmp_path / "accounts")
+    e.accounts.save_state("binance:demo", {"equity": 1000.0})
+    e.state["equity"] = 1234.0
+    e.live_client = None
+    e._accounts_cache = (0.0, {})
+
+    before = int(time.time() * 1000)
+    e.reset_account_records()
+    after = int(time.time() * 1000)
+
+    assert before <= e.state["account_reset_epoch"] <= after
+    assert e.state["account_reset_equity"] == pytest.approx(1234.0)
+
+
+def test_reset_other_scope_does_not_set_anchor(tmp_path):
+    """重置「非当前」账户只清那个账户的文件，不改变当前账户的 overlay 锚点。"""
+    from cryptoagent.accounts import AccountStore
+
+    e = _engine("okx:demo")
+    e.accounts = AccountStore(tmp_path / "accounts")
+    e.accounts.save_state("okx:demo", {"equity": 1000.0})
+    e.accounts.save_state("binance:demo", {
+        "fills": [_fill(7.0, "binance:demo")],
+        "position_history": [_close(7.0, "binance:demo")],
+        "equity": 900.0,
+    })
+    e.state["account_reset_epoch"] = 0
+    e.state["account_reset_equity"] = 0.0
+    e._accounts_cache = (0.0, {})
+
+    e.reset_account_records("binance:demo")
+
+    # 当前账户（okx:demo）的锚点不变
+    assert e.state["account_reset_epoch"] == 0
+    assert e.state["account_reset_equity"] == 0.0
+    # 目标账户文件被清空
+    assert e.accounts.summarize("binance:demo")["realized"] == 0.0

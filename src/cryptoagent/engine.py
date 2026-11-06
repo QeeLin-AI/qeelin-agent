@@ -211,6 +211,10 @@ class TradingEngine:
             "fills": [],
             "position_history": [],
             "consecutive_losses": 0,
+            # 重置账户的时间锚点：0=从未重置。交易所真实成交删不掉，重置靠
+            # 记下「重置时刻 / 当时权益」，让 overlay 只显示这一刻之后的成交与盈亏。
+            "account_reset_epoch": 0,
+            "account_reset_equity": 0.0,
             "last_decision": None,
             "auto": {"running": False, "interval_sec": 300, "execute": False, "last_run": ""},
             "halt": False,
@@ -1059,6 +1063,10 @@ class TradingEngine:
                 self.state["peak_equity"] = float(eq)
                 self.state["day_start_equity"] = float(eq)
                 self.state["day"] = _today()
+                # 记录「重置时刻 + 当时权益」：交易所真实成交 / 资金流水删不掉，
+                # 只能让 overlay 从这个锚点起重新算「最近成交」与「当日盈亏」。
+                self.state["account_reset_epoch"] = int(time.time() * 1000)
+                self.state["account_reset_equity"] = float(eq)
                 self._live_eq_cache = None
                 self._accounts_cache = None
                 self._save()

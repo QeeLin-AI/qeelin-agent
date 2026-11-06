@@ -210,3 +210,24 @@ def test_summarize_reports_drawdown_and_win_rate(tmp_path):
     assert s["win_rate"] == 50.0
     assert s["profit_factor"] == 3.0
     assert s["drawdown_pct"] == pytest.approx(-9.09, abs=0.02)   # 1000 / 1100
+
+
+def test_reset_anchor_persists_and_restores(tmp_path):
+    """重置锚点（reset_epoch / reset_equity）跟账户走：切走再切回要恢复，新账户要清零。"""
+    store = AccountStore(tmp_path / "accounts")
+    s1 = _state("binance:demo", [])
+    s1["account_reset_epoch"] = 1234567890000
+    s1["account_reset_equity"] = 5000.0
+    store.save_state("binance:demo", s1)
+
+    # 切到从未重置过的新账户：锚点必须清零，否则会用上一个账户的锚点去过滤
+    fresh = _state("okx:demo", [])
+    store.apply_to_state("okx:demo", fresh)
+    assert fresh["account_reset_epoch"] == 0
+    assert fresh["account_reset_equity"] == 0.0
+
+    # 切回重置过的账户：锚点恢复
+    back = _state("okx:demo", [])
+    store.apply_to_state("binance:demo", back)
+    assert back["account_reset_epoch"] == 1234567890000
+    assert back["account_reset_equity"] == 5000.0

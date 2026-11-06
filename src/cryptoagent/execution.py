@@ -814,15 +814,16 @@ class OKXClient:
             if ts and ts < start_ms:
                 continue
             typ = str(r.get("type", ""))
+            # 统一带毫秒时间戳：重置账户后 server 要按「重置时刻」重新起算当日盈亏
             if typ == "2":   # 交易：已实现盈亏 + 手续费
                 pnl = float(r.get("pnl", 0.0) or 0.0)
                 fee = float(r.get("fee", 0.0) or 0.0)
                 if pnl:
-                    out.append({"income": pnl, "incomeType": "REALIZED_PNL"})
+                    out.append({"income": pnl, "incomeType": "REALIZED_PNL", "time": ts})
                 if fee:
-                    out.append({"income": -fee, "incomeType": "COMMISSION"})
+                    out.append({"income": -fee, "incomeType": "COMMISSION", "time": ts})
             elif typ == "6":  # 资金费
-                out.append({"income": float(r.get("balChg", 0.0) or 0.0), "incomeType": "FUNDING_FEE"})
+                out.append({"income": float(r.get("balChg", 0.0) or 0.0), "incomeType": "FUNDING_FEE", "time": ts})
             # 其它类型（划转等）忽略，server 端也不会计入盈亏
         return out
 

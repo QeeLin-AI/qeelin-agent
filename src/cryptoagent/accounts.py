@@ -188,6 +188,10 @@ class AccountStore:
             "day": str(state.get("day") or ""),
             "consecutive_losses": int(_num(state.get("consecutive_losses"))),
             "baseline_at": str(state.get("live_baseline_at") or ""),
+            # 重置账户的时间锚点：交易所真实成交/资金流水是删不掉的，
+            # 只能记下「重置时刻」，让 overlay 只显示这一刻之后的成交与盈亏。
+            "reset_epoch": int(_num(state.get("account_reset_epoch"))),
+            "reset_equity": round(_num(state.get("account_reset_equity")), 6),
         }
         data["equity_history"] = list(state.get("history") or [])[-MAX_HISTORY:]
         data["fills"] = list(state.get("fills") or [])[-MAX_FILLS:]
@@ -211,6 +215,10 @@ class AccountStore:
         state["fills"] = list(data.get("fills") or [])[-MAX_FILLS:]
         state["position_history"] = list(data.get("position_history") or [])[-MAX_POSITIONS:]
         state["history"] = list(data.get("equity_history") or [])[-MAX_HISTORY:]
+        # 重置锚点跟着账户走：切回一个「重置过」的账户要恢复它的锚点，
+        # 切到一个从没重置过的账户要清空（否则会用上一个账户的锚点去过滤）。
+        state["account_reset_epoch"] = int(_num(acct.get("reset_epoch")))
+        state["account_reset_equity"] = _num(acct.get("reset_equity"))
         if existed and _num(acct.get("equity")) > 0:
             state["equity"] = _num(acct.get("equity"))
             state["peak_equity"] = _num(acct.get("peak_equity")) or _num(acct.get("equity"))

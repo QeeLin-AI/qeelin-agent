@@ -488,7 +488,7 @@ label.field > input, label.field > select { max-width: 420px; }
 .stat-row > .stat:nth-child(1) { background: linear-gradient(155deg, #0e8a85 0%, #0b6c68 100%); } /* 账户权益 — 深青 */
 .stat-row > .stat:nth-child(2) { background: linear-gradient(155deg, #2a57e0 0%, #1d3ca8 100%); } /* 当日盈亏 — 深蓝 */
 .stat-row > .stat:nth-child(3) { background: linear-gradient(155deg, #c2620a 0%, #954807 100%); } /* 回撤 — 深琥珀 */
-.stat-row > .stat:nth-child(4) { background: linear-gradient(155deg, #5b626a 0%, #4F555A 100%); } /* 持仓 — 深石板灰 */
+.stat-row > .stat:nth-child(4) { background: linear-gradient(155deg, #a8000b 0%, #92000A 100%); } /* 持仓 — 深红 */
 /* 持仓卡第三行：持仓管理员巡检心跳。时间戳做成高亮徽标，配合状态点与距今秒数，
    一眼能判断守护线程是否还在跑（页面每 3 秒轮询，秒数不变即为停滞）。 */
 .pm-line {

@@ -456,8 +456,12 @@ class WebApp:
                 except Exception:  # noqa: BLE001 - 成交拿不到不影响余额
                     rows = None
             if rows is not None:
+                # 重置过账户后，只显示「重置时刻」之后的成交：交易所的真实成交
+                # 是客观存在的删不掉，重置只能让视图从这个锚点起重新累计。
+                reset_epoch = int(self.engine.state.get("account_reset_epoch") or 0)
                 self._ex_trades = [
                     self._fill_with_plan({**t, "symbol": t.get("symbol") or symbol}) for t in rows
+                    if reset_epoch <= 0 or int(t.get("ts_ms") or 0) >= reset_epoch
                 ]
                 self._ex_trades_at = now
         trades = self._ex_trades or []
@@ -551,25 +555,41 @@ class WebApp:
         return snap
 
     def exchange_day_pnl(self, client, ttl: float = 300.0) -> dict:
-        """当日盈亏 = 今日资金流水里的交易类收入（排除划转）。"""
+        """当日盈亏 = 资金流水里的交易类收入（排除划转）。
+
+        重置过账户后，只汇总「重置时刻」之后的流水，基准用重置时的权益；
+        否则按 UTC 日界（今日起点）汇总。"""
         now = time.time()
         if self._ex_pnl_cache is not None and (now - self._ex_pnl_at) < ttl:
             return self._ex_pnl_cache
 
-        # 币安按 UTC 日界结算；epoch 本身就是 UTC 基准，直接按整天取整
-        start = int(time.time() // 86400) * 86400
-        rows = client.income(start * 1000, limit=1000)
+        reset_epoch = int(self.engine.state.get("account_reset_epoch") or 0)
+        if reset_epoch:
+            start_ms = reset_epoch
+        else:
+            # 币安按 UTC 日界结算；epoch 本身就是 UTC 基准，直接按整天取整
+            start_ms = int(time.time() // 86400) * 86400 * 1000
+        rows = client.income(start_ms, limit=1000)
         skip = {"TRANSFER", "INTERNAL_TRANSFER", "INSURANCE_CLEAR", "CROSS_COLLATERAL_TRANSFER"}
         total = 0.0
         for r in rows or []:
             if str(r.get("incomeType", "")).upper() in skip:
                 continue
+            # 币安 income 自带 time（毫秒），OKX 已统一补上；再按锚点过滤一次兜底
+            if reset_epoch and int(r.get("time") or 0) and int(r.get("time")) < reset_epoch:
+                continue
             try:
                 total += float(r.get("income", 0.0))
             except (TypeError, ValueError):
                 continue
-        acct = client.account()
-        base = acct["balance"] - total
+        if reset_epoch:
+            base = float(self.engine.state.get("account_reset_equity") or 0.0)
+            if base <= 0:
+                acct = client.account()
+                base = acct["balance"] - total
+        else:
+            acct = client.account()
+            base = acct["balance"] - total
         pct = (total / base * 100) if base else 0.0
         self._ex_pnl_cache = {"abs": round(total, 4), "pct": round(pct, 3)}
         self._ex_pnl_at = now
@@ -2489,7 +2509,10 @@ class Handler(BaseHTTPRequestHandler):
             scope = str(payload.get("scope") or "").strip()
             if scope and (scope.count(":") != 1 or scope.split(":")[1] not in ("demo", "live")):
                 raise ApiError("scope 格式应为 exchange:demo 或 exchange:live", 400)
-            return self._json({"ok": True, "data": eng.reset_account_records(scope or None)})
+            res = eng.reset_account_records(scope or None)
+            # 交易所视图（成交 / 当日盈亏）也要跟着锚点重算，先失效缓存
+            app.reset_exchange_view()
+            return self._json({"ok": True, "data": res})
         if path == "/api/trading/execute":
             res = eng.execute(price=app.live_price, reason="web")
             app.invalidate_exchange_cache()
