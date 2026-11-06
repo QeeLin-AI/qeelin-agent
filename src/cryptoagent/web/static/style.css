@@ -1149,7 +1149,6 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   #posHistTable td:nth-child(3):not([colspan]),                  /* 方向 */
   #posHistTable td:nth-child(7):not([colspan]),                  /* 原因 */
   #fillsTable td:nth-child(2):not([colspan]),                    /* 时间 */
-  #fillsTable td:nth-child(3):not([colspan]),                    /* 动作 */
   #fillsTable td:nth-child(4):not([colspan]),                    /* 方向 */
   #fillsTable td:nth-child(6):not([colspan]),                    /* 计划价 */
   #fillsTable td:nth-child(8):not([colspan]),                    /* 滑点 */
@@ -1200,6 +1199,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   #posHistTable td:nth-child(4)::before { content: "数量"; }
   #posHistTable td:nth-child(5)::before { content: "开平价"; }
   #posHistTable td:nth-child(6)::before { content: "盈亏"; }
+  #fillsTable td:nth-child(3)::before { content: "动作"; }
   #fillsTable td:nth-child(5)::before { content: "数量"; }
   #fillsTable td:nth-child(7)::before { content: "成交价"; }
   #fillsTable td:nth-child(10)::before { content: "盈亏"; }

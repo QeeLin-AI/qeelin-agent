@@ -1984,7 +1984,7 @@ function renderStatus(s) {
         ? `<span class="${f.slippage_bps > 0 ? 'down' : 'up'}">${f.slippage_bps >= 0 ? '+' : ''}${Number(f.slippage_bps).toFixed(2)}</span>` : '--';
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
-      // 开仓成交没有已实现盈亏：盈亏列改显示「开仓」动作标识，避免显示误导性的 0。
+      // 开仓成交没有已实现盈亏：盈亏列开仓显示「--」，平仓才显示实际盈亏。
       // 本地成交带 action=OPEN/CLOSE 可直接判；但线上(armed+live)展示的是交易所回读成交，
       // 其 action 为「买入/卖出」、pnl 为 realizedPnl（开仓=0），没有 OPEN 标记，
       // 因此统一用「是否有已实现盈亏」来识别开仓：pnl≈0 且非明确平仓动作 → 开仓。
@@ -1995,13 +1995,15 @@ function renderStatus(s) {
         f.action === 'OPEN' || actLabel === '开仓'
         || (!realized && (actLabel.includes('买入') || actLabel.includes('卖出')))
       );
+      // 动作列：统一标识「开仓 / 平仓」，不再把交易所的「买入/卖出」当成开平仓动作
+      const actText = isOpenOnly ? '开仓' : '平仓';
       const pnlCell = isOpenOnly
-        ? `<td class="muted">开仓</td>`
+        ? `<td class="muted">--</td>`
         : `<td class="${(f.pnl || 0) >= 0 ? 'up' : 'down'}">${f.pnl !== undefined ? fmt(f.pnl) : '--'}</td>`;
       return `<tr${tip}>
       <td class="mono">${esc(f.symbol || s.symbol)}<span class="dir-flag ${cls}">${esc(sideCn(f.side))}</span>${mergeTag}<span class="card-ts">${esc(shortTs(f.ts))}</span></td>
       <td class="muted">${esc(f.ts)}</td>
-      <td class="${cls}">${esc(f.__n ? f.__acts : actionCn(f.action))}</td>
+      <td class="${cls}">${esc(actText)}</td>
       <td class="${cls}">${esc(sideCn(f.side))}</td>
       <td>${fmtQty(f.qty)}</td>
       <td>${f.plan_price ? fmtPx(f.plan_price) : '--'}</td>
