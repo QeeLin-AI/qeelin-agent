@@ -1903,9 +1903,17 @@ class TradingEngine:
                         "from": round(cur, 4), "to": round(cand[key], 4),
                         "passed": bool(passed), "replay": replay,
                     })
-            improved = [c for c in candidates
-                        if c["passed"] and float((c["replay"] or {}).get("median_delta") or 0.0) > 0]
-            best = max(improved, key=lambda c: float((c["replay"] or {}).get("median_delta") or 0.0)) if improved else None
+            # 验收标准是「不劣于」而不是「必须改善」：只要候选通过回放门槛
+            # （中位 R ≥ 下限、最差单笔不恶化），就可以落地；同等条件下优先
+            # 中位 R 更高、最差单笔更好的候选。
+            ok = [c for c in candidates if c["passed"]]
+            best = max(
+                ok,
+                key=lambda c: (
+                    float((c["replay"] or {}).get("median_delta") or 0.0),
+                    float((c["replay"] or {}).get("worst_delta") or 0.0),
+                ),
+            ) if ok else None
             gate = dict(self.position_tuning.get("gate") or {})
             if best is not None:
                 eff = dict(prev)
