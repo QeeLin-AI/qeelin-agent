@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cryptoagent.agents.position_calibration import (
     BOUNDS,
+    DEFAULTS,
     MAX_STEP,
     MIN_SAMPLES,
     TUNABLE,
@@ -64,7 +65,11 @@ def test_insufficient_samples_changes_nothing():
     _fill(s, "trail", 0.2, 3.0, MIN_SAMPLES - 1)
     eff, ok, changes = learned_params(BASE, s)
     assert ok is False and changes == []
-    assert eff == pytest.approx(BASE)
+    # 返回的是全量可调参数表：原有 4 个保持 BASE，新增项取默认值
+    for k, v in BASE.items():
+        assert eff[k] == pytest.approx(v)
+    for k in set(TUNABLE) - set(BASE):
+        assert eff[k] == pytest.approx(DEFAULTS[k])
 
 
 def test_low_capture_tightens_trailing():
@@ -135,7 +140,12 @@ def test_summary_reports_progress():
     assert out["samples"] == MIN_SAMPLES
     assert out["calibrated"] is True
     assert out["capture_median"] == pytest.approx(0.5, abs=1e-6)
-    assert set(out["effective"]) == set(TUNABLE)
+    # effective 只回显调用方给的键，且一定落在可调白名单里
+    assert set(out["effective"]).issubset(set(TUNABLE))
+    assert set(BASE).issubset(set(out["effective"]))
+    # L1 按规则归因
+    assert out["by_rule"]["trail"]["n"] == MIN_SAMPLES
+    assert out["by_rule"]["trail"]["avg_r"] == pytest.approx(1.0, abs=1e-3)
 
 
 def test_summary_before_min_samples_not_calibrated():

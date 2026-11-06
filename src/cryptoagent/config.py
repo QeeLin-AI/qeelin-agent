@@ -246,6 +246,43 @@ class PositionConfig:
     peak_drawdown_exit_enabled: bool = False
     peak_drawdown_r: float = 1.0
 
+    # ---- 演进控制（三阶段门控）----
+    # off    : 关闭全部自迭代
+    # stats  : L1，按退出规则归因的统计校准（只调连续参数，不碰动作）
+    # replay : L2，L1 提议必须先通过反事实回放才落地
+    # llm    : L3，允许 LLM 提议参数/动作；须 L2 门控通过且稳定期达标
+    evolution_mode: str = "stats"
+    # L1：单个退出规则至少多少笔样本才允许调它（全局仍受 MIN_SAMPLES=20 约束）
+    evolution_rule_min_samples: int = 8
+    # L1：同一方向连续多少轮才落地（防单笔噪声）
+    evolution_confirm_rounds: int = 2
+    # L2：回放至少覆盖多少笔平仓，才允许判定门控
+    evolution_replay_min_cases: int = 20
+    # L2：最多回放最近多少笔（控制耗时）
+    evolution_replay_window: int = 100
+    # L2：候选中位 R 相对当前的最小提升（>= 该值才算通过）
+    evolution_replay_min_median_delta: float = 0.0
+    # L2：候选最差单笔 R 相对当前允许的最大恶化
+    evolution_replay_max_worst_delta: float = 0.2
+    # L2 门控通过后，需稳定运行多少天，才允许评估 L3
+    evolution_l2_stable_days: int = 14
+    # L3：总开关（默认关；即使打开也必须先过 L2 门控）
+    evolution_llm_enabled: bool = False
+    # L3：是否允许 LLM 修改退出动作（默认关；开启后仍默认只允许更保守方向）
+    evolution_llm_allow_action: bool = False
+    # L3：是否允许把 close 放宽为 hold/tighten（默认关，风险最高）
+    evolution_llm_allow_loosen: bool = False
+    # L3：LLM 提案的最低置信度
+    evolution_llm_min_confidence: float = 0.65
+    # L3：LLM 单轮参数最大相对步长
+    evolution_llm_max_param_step: float = 0.15
+    # L3：影子期至少记录多少笔提案后才允许真正应用
+    evolution_llm_shadow_cases: int = 20
+    # 回退：LLM 覆盖动作后连续亏损多少笔自动回退
+    evolution_rollback_after_losses: int = 3
+    # 回退：LLM 覆盖后累计 R 低于该值自动回退
+    evolution_rollback_drawdown_r: float = 2.0
+
 
 @dataclass
 class AppConfig:

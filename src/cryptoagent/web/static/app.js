@@ -485,6 +485,9 @@ async function loadPositionLlmSettings() {
     $('posBarsFromIndex').checked = !!d.bars_from_index;
     $('posPeakDrawdownEnabled').checked = !!d.peak_drawdown_exit_enabled;
     if ($('posAutoTune')) $('posAutoTune').checked = d.auto_tune !== false;
+    if ($('posEvolutionMode')) $('posEvolutionMode').value = d.evolution_mode || 'stats';
+    if ($('posEvolutionLlmEnabled')) $('posEvolutionLlmEnabled').checked = !!d.evolution_llm_enabled;
+    if ($('posEvolutionAllowAction')) $('posEvolutionAllowAction').checked = !!d.evolution_llm_allow_action;
     const tn = d.tuning || {};
     if ($('posTuneDesc')) {
       const n = Number(tn.samples || 0);
@@ -516,6 +519,9 @@ async function savePositionLlmSettings() {
     bars_from_index: $('posBarsFromIndex').checked,
     peak_drawdown_exit_enabled: $('posPeakDrawdownEnabled').checked,
     auto_tune: $('posAutoTune') ? $('posAutoTune').checked : true,
+    evolution_mode: $('posEvolutionMode') ? $('posEvolutionMode').value : 'stats',
+    evolution_llm_enabled: $('posEvolutionLlmEnabled') ? $('posEvolutionLlmEnabled').checked : false,
+    evolution_llm_allow_action: $('posEvolutionAllowAction') ? $('posEvolutionAllowAction').checked : false,
     llm_min_interval_sec: Number($('posLlmMinInterval').value),
     reversal_ema_bars: Number($('posReversalEmaBars').value),
     composite_max_age_sec: Number($('posCompositeMaxAge').value),
@@ -1258,6 +1264,23 @@ function renderPositionManagement(d) {
     }
     html += `</div></div>`;
   }
+
+  // 演进状态：L1/L2/L3 的当前层级、门控与按规则归因
+  const byRule = tune.by_rule || {};
+  const gate = tune.gate || {};
+  const llm = tune.llm || {};
+  const modeCn = { off: '关闭', stats: 'L1 统计', replay: 'L2 回放', llm: 'L3 LLM' }[tune.mode] || tune.mode || '--';
+  html += `<div class="pm-block">
+    <div class="pm-block-title">演进状态 <span class="muted">${esc(modeCn)}</span></div>
+    <p class="muted">${gate.l2_passed ? 'L2 回放已通过' : (gate.l2_cases ? `L2 未通过（${gate.l2_cases} 笔样本）` : 'L2 未评估')}
+      ${gate.l2_median_delta != null ? ` · 中位差 ${Number(gate.l2_median_delta) >= 0 ? '+' : ''}${Number(gate.l2_median_delta).toFixed(2)}R` : ''}
+      ${llm.enabled ? ' · L3 已启用' : ''}</p>
+    ${Object.keys(byRule).length ? `<div class="pm-rows">${Object.entries(byRule).slice(0, 5).map(([k, v]) =>
+      `<span class="pm-row"><b>${esc(v.label || k)}</b>
+       <span class="muted">${Number(v.n || 0)} 笔 · 均 ${Number(v.avg_r || 0) >= 0 ? '+' : ''}${Number(v.avg_r || 0).toFixed(2)}R</span>
+       <span class="muted">捕获 ${v.capture == null ? '--' : Number(v.capture).toFixed(2)}</span></span>`).join('')}</div>` : ''}
+    ${(llm.rollbacks || []).length ? `<p class="down">已回退：${esc((llm.rollbacks[llm.rollbacks.length - 1] || {}).reason || '')}</p>` : ''}
+  </div>`;
 
   // 自迭代：攒样本 → 自动微调参数。只展示「已经变了的」参数，避免刷屏。
   if (Number(tune.samples || 0) > 0) {

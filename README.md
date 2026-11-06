@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.6-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.7-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -16,6 +16,17 @@
 ![总览](docs/ui.png)
 
 ---
+
+## v1.1.7 更新要点
+
+本版把持仓管理员从「一套全局参数」升级为**三阶段可门控的演进链路**，每一步都必须通过上一层验收：
+
+- **L1 按规则归因**：`trail / time_stop / reversal / peak_dd` 分开统计（笔数、平均 R、捕获率、胜率）；单规则样本不足时不允许跨规则调参；同一方向连续 2 轮才落地。
+- **L2 反事实回放**：候选参数在同一段历史上逐 bar 重跑 `manage_position()`，中位 R 不劣于当前、最差单笔不恶化超过 0.2R 才允许通过门控；不通过则整轮丢弃。
+- **L3 LLM 提案**：必须先过 L2 门控并稳定 14 天；默认 20 笔影子期只记录；之后动作只能更保守，参数受规则白名单与单轮 15% 步长限制；连续 3 笔亏损或累计 −2R 自动回退。
+- **配置与门控**：`position.evolution_mode`（off/stats/replay/llm）、回放样本门槛、稳定期、影子期、回退阈值全部可配；设置页可直接切换，后一层未过门控时保存会被拒绝。
+- **可观测**：`/api/status` 的 `position_tuning` 新增 `by_rule`、`gate`、`replay`、`llm`（提案 / 影子 / 应用 / 回退），持仓管理卡片展示当前层级与门控状态。
+- **测试**：新增 12 条演进链路用例，全量 **285 项**。
 
 ## v1.1.6 更新要点
 
@@ -309,6 +320,33 @@ python run.py web --host 127.0.0.1 --port 8000
 
 设置页「模型设置 → 持仓管理员 · LLM 接入」可热更新（`GET/POST /api/settings/position`）。WebApp 与引擎共享同一个 `AppConfig`，所以**改完立即生效，无需重启**；数值越界整体回滚并返回 400。
 
+### 演进三阶段（L1 → L2 → L3）
+
+持仓管理员的参数演进分三层，**后一层必须以前一层通过为前提**；配置项在 `config/default.example.json → position`，设置页「持仓管理员 · LLM 接入」可切换。
+
+| 层级 | `evolution_mode` | 谁在决策 | 进入条件 | 验收标准 | 回退条件 |
+|---|---|---|---|---|---|
+| L1 统计 | `stats`（默认） | 纯代码：按规则归因 + 连续确认 | 全局 ≥20 笔平仓；单规则 ≥8 笔 | 参数不越 `BOUNDS`；单轮 ≤12%；同一方向连续 2 轮才落地；用户改配置即重置 | 切 `off`；或用户手动改任一可调参数（锚点失效，回到配置值） |
+| L2 回放 | `replay` | 代码：L1 提议 + 反事实回放 | 已积累 ≥20 笔可回放样本 | 候选中位 R 不劣于当前；最差单笔不恶化超过 0.2R；否则整轮丢弃 | 回放连续不通过时保持当前参数；切回 `stats` 立即停止回放门槛 |
+| L3 LLM | `llm` | LLM 提案 + 代码裁决 | L2 门控通过且稳定运行 ≥14 天；显式打开 `evolution_llm_enabled` | 影子期 20 笔只记录；之后动作只能更保守（hold→tighten/close；close→hold 需 `allow_loosen`）；参数只允许命中规则相关项、单轮 ≤15%；置信度 ≥0.65 | 连续 3 笔亏损或累计 −2R 自动退回 `stats` 并清空学习覆盖；手动切回同样立即生效 |
+
+**关键边界**：
+
+- L1 只自动调 4 个有可靠学习信号的参数（`trail_activate_r`、`trail_atr_mult`、`min_progress_r`、`max_hold_bars`）；另外 4 个（`trail_min_gap_pct`、`reversal_ema_bars`、`reversal_composite`、`peak_drawdown_r`）只登记边界，允许 L3 提案，不允许 L1 自动调。
+- L2 的回放调用的是**与实盘同一套** `manage_position()`，不是复制一份规则；每笔最多回放 240 根，数据不足直接跳过。
+- L3 默认只向「更保守」方向覆盖动作（hold→tighten/close、tighten→close）；把 close 放宽为 hold 需要显式打开 `evolution_llm_allow_loosen`，且仍受回放与回退约束。
+- 所有变化都写进 `position_tuning.changes` / `replay` / `gate` / `llm`，`/api/status` 可查；页面「持仓管理员」卡片显示当前层级、L2 门控、按规则归因与最近一次回退。
+
+```jsonc
+"position_tuning": {
+  "mode": "stats",                 // off | stats | replay | llm
+  "by_rule": {"trail": {"n": 12, "avg_r": 0.42, "capture": 0.61}},
+  "gate": {"l2_passed": false, "l2_cases": 0, "l2_median_delta": null},
+  "replay": {"passed": false, "checks": {"enough_cases": false}},
+  "llm": {"enabled": false, "shadow": [], "applied": [], "rollbacks": []}
+}
+```
+
 ### 实盘改单的安全性
 
 实盘由 `live_stop_adjust` 控制是否**撤掉旧条件单、按新止损重挂**（同方向只能有一张 `closePosition` 单）：
@@ -563,6 +601,7 @@ python -m pytest -q
 
 | 版本 | 要点 |
 |---|---|
+| **v1.1.7** | 持仓管理员三阶段演进：L1 按规则归因、L2 反事实回放门控、L3 LLM 提案/动作覆盖（影子期 + 更保守方向 + 自动回退）；`evolution_mode` 与门控配置；测试 285 项 |
 | **v1.1.6** | 全量审查修复：当日权益基准接入、展示权益与风控同源、旧存档品种补齐、成本闸缩仓复核、实盘数量回读、组合敞口按标记价；OKX 缓存隔离、衍生品四列在 6000 根下恢复、盘缓存 TTL/并发/未来时间戳修复、周期表统一；因子批量隔离、未来函数复检、全历史切片、强平指标截断、`inf` 净化、子进程资源限制；配置不再入库 + 模板、配置写锁、加载校验、部署备份回滚；Web 参数校验与前端交互修复；测试 273 项 |
 | v1.1.5 | 侧栏运行时长（`uptime_sec` / `started_at`）；全品种报价预热间隔调至 5 秒 |
 | v1.1.4 | 全品种缓存预热（报价/主周期/短周期三档节流），`load_market` 缓存原子写入 |

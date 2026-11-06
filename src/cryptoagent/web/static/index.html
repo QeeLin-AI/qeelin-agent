@@ -755,6 +755,32 @@
             </span>
             <label class="switch"><input type="checkbox" id="posAutoTune" /><span class="track"><span class="thumb"></span></span></label>
           </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">演进层级</span>
+              <span class="d">L1 统计校准 → L2 反事实回放（门控通过才落地）→ L3 LLM 提案（需 L2 稳定期达标）</span>
+            </span>
+            <select id="posEvolutionMode" class="set-select">
+              <option value="off">关闭</option>
+              <option value="stats">L1 · 统计</option>
+              <option value="replay">L2 · 回放</option>
+              <option value="llm">L3 · LLM</option>
+            </select>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">L3：总开关</span>
+              <span class="d">打开后先进入影子期（只记录提案、不改动作），攒够样本才允许应用；L2 未过时保存会被拒绝</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posEvolutionLlmEnabled" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
+          <label class="switch-row">
+            <span class="switch-label">
+              <span class="t">L3：允许 LLM 修改退出动作</span>
+              <span class="d">默认只允许更保守方向（hold→tighten/close）；把 close 放宽为 hold 需要额外的 loosen 开关</span>
+            </span>
+            <label class="switch"><input type="checkbox" id="posEvolutionAllowAction" /><span class="track"><span class="thumb"></span></span></label>
+          </label>
         </div>
         <div class="set-grid two-col">
           <label class="set-field">

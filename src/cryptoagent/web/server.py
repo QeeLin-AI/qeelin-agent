@@ -1938,6 +1938,22 @@ class WebApp:
             "llm_offpeak_only": bool(p.llm_offpeak_only),
             "llm_min_interval_sec": int(p.llm_min_interval_sec),
             "auto_tune": bool(getattr(p, "auto_tune", True)),
+            "evolution_mode": str(getattr(p, "evolution_mode", "stats")),
+            "evolution_rule_min_samples": int(getattr(p, "evolution_rule_min_samples", 8)),
+            "evolution_confirm_rounds": int(getattr(p, "evolution_confirm_rounds", 2)),
+            "evolution_replay_min_cases": int(getattr(p, "evolution_replay_min_cases", 20)),
+            "evolution_replay_window": int(getattr(p, "evolution_replay_window", 100)),
+            "evolution_replay_min_median_delta": float(getattr(p, "evolution_replay_min_median_delta", 0.0)),
+            "evolution_replay_max_worst_delta": float(getattr(p, "evolution_replay_max_worst_delta", 0.2)),
+            "evolution_l2_stable_days": int(getattr(p, "evolution_l2_stable_days", 14)),
+            "evolution_llm_enabled": bool(getattr(p, "evolution_llm_enabled", False)),
+            "evolution_llm_allow_action": bool(getattr(p, "evolution_llm_allow_action", False)),
+            "evolution_llm_allow_loosen": bool(getattr(p, "evolution_llm_allow_loosen", False)),
+            "evolution_llm_min_confidence": float(getattr(p, "evolution_llm_min_confidence", 0.65)),
+            "evolution_llm_max_param_step": float(getattr(p, "evolution_llm_max_param_step", 0.15)),
+            "evolution_llm_shadow_cases": int(getattr(p, "evolution_llm_shadow_cases", 20)),
+            "evolution_rollback_after_losses": int(getattr(p, "evolution_rollback_after_losses", 3)),
+            "evolution_rollback_drawdown_r": float(getattr(p, "evolution_rollback_drawdown_r", 2.0)),
             "tuning": self.engine.position_tuning_status(),
             "bars_from_index": bool(p.bars_from_index),
             "reversal_ema_bars": int(p.reversal_ema_bars),
@@ -1959,17 +1975,58 @@ class WebApp:
 
         p = self.cfg.position
         bool_keys = ("llm_explain", "llm_shadow", "llm_offpeak_only",
-                     "bars_from_index", "peak_drawdown_exit_enabled", "auto_tune")
+                     "bars_from_index", "peak_drawdown_exit_enabled", "auto_tune",
+                     "evolution_llm_enabled", "evolution_llm_allow_action",
+                     "evolution_llm_allow_loosen")
         int_keys = {
             "llm_min_interval_sec": (0, 86400),
             "reversal_ema_bars": (10, 200),
             "composite_max_age_sec": (0, 3600),
+            "evolution_rule_min_samples": (5, 100),
+            "evolution_confirm_rounds": (1, 10),
+            "evolution_replay_min_cases": (5, 200),
+            "evolution_replay_window": (20, 500),
+            "evolution_l2_stable_days": (0, 365),
+            "evolution_llm_shadow_cases": (0, 200),
+            "evolution_rollback_after_losses": (1, 20),
         }
-        float_keys = {"peak_drawdown_r": (0.1, 10.0)}
-        if not any(k in payload for k in (*bool_keys, *int_keys, *float_keys)):
+        float_keys = {
+            "peak_drawdown_r": (0.1, 10.0),
+            "evolution_replay_min_median_delta": (-1.0, 1.0),
+            "evolution_replay_max_worst_delta": (0.0, 5.0),
+            "evolution_llm_min_confidence": (0.0, 1.0),
+            "evolution_llm_max_param_step": (0.01, 0.5),
+            "evolution_rollback_drawdown_r": (0.1, 20.0),
+        }
+        if not any(k in payload for k in (*bool_keys, *int_keys, *float_keys, "evolution_mode")):
             raise ApiError("没有需要保存的配置", 400)
 
         staged: dict = {}
+        if "evolution_mode" in payload:
+            mode = str(payload["evolution_mode"]).strip().lower()
+            if mode not in ("off", "stats", "replay", "llm"):
+                raise ApiError("evolution_mode 只能是 off / stats / replay / llm", 400)
+            staged["evolution_mode"] = mode
+        # 门控：L3 必须先过 L2 回放 + 稳定期；不满足直接 400，不写半套配置
+        target_mode = staged.get("evolution_mode", str(getattr(p, "evolution_mode", "stats")))
+        if target_mode == "llm":
+            gate = self.engine.position_tuning.get("gate") or {}
+            if not gate.get("l2_passed"):
+                raise ApiError(
+                    "L3 需要先通过 L2 反事实回放门控：请先切到 replay、积累平仓样本并让门控通过",
+                    400,
+                )
+            enabled = bool(staged.get("evolution_llm_enabled",
+                                      getattr(p, "evolution_llm_enabled", False)))
+            if not enabled:
+                raise ApiError("L3 需要显式开启 evolution_llm_enabled", 400)
+            days = int(staged.get("evolution_l2_stable_days",
+                                  getattr(p, "evolution_l2_stable_days", 14)))
+            since = float(gate.get("l2_stable_since") or 0.0)
+            if days > 0 and since and (time.time() - since) < days * 86400:
+                raise ApiError(f"L2 需稳定运行 {days} 天后再评估 L3", 400)
+        if target_mode == "replay" and not (self.engine.position_tuning.get("replay_cases") or []):
+            raise ApiError("L2 需要至少一笔已平仓样本；先运行一段时间再切换", 400)
         for k in bool_keys:
             if k in payload:
                 staged[k] = bool(payload[k])
@@ -2186,7 +2243,7 @@ class WebApp:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "QeeLin-Agent/1.1.6"
+    server_version = "QeeLin-Agent/1.1.7"
     app: WebApp  # 由 serve() 注入
 
     # -- 基础 ---------------------------------------------------------

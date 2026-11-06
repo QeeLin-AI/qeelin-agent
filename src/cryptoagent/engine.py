@@ -20,11 +20,17 @@ import pandas as pd
 from .agents.calibration import record_accuracy, summary as calibration_summary, weights_from_accuracy
 from .agents.pipeline import Decision, TradingPipeline, render_markdown, round_price
 from .agents.position_calibration import (
+    BOUNDS as TUNE_BOUNDS,
+    DEFAULTS as TUNE_DEFAULTS,
+    L1_TUNABLE,
+    RULE_PARAMS,
     TUNABLE as TUNING_KEYS,
     record_episode,
     learned_params,
     summary as tuning_summary,
 )
+from .agents.position_replay import evaluate as replay_evaluate
+from .agents.position_evolver import propose as propose_evolution
 from .agents.position_manager import manage_position, review_management
 from .config import AppConfig
 from .data import (
@@ -137,11 +143,24 @@ class TradingEngine:
         # 持仓管理员自迭代：绩效样本 + 当前生效参数 + 配置锚点。
         # 锚点用来识别「用户手动改过配置」——一旦改了，学习结果立即作废、以配置为准。
         _tune = self.state.get("position_tuning") or {}
+        _llm_state = dict(_tune.get("llm") or {})
+        for _k, _default in {"proposals": [], "applied": [], "shadow": [],
+                             "rollbacks": [], "streak_loss": 0,
+                             "cum_r": 0.0}.items():
+            _llm_state.setdefault(_k, _default)
         self.position_tuning: dict = {
             "stats": dict(_tune.get("stats") or {}),
             "effective": dict(_tune.get("effective") or {}),
             "anchor": dict(_tune.get("anchor") or {}),
             "changes": list(_tune.get("changes") or [])[-10:],
+            # L1：连续确认的待落地改动
+            "pending": dict(_tune.get("pending") or {}),
+            # L2：反事实回放的样本与最近一次门控结果
+            "replay_cases": list(_tune.get("replay_cases") or [])[-200:],
+            "replay": dict(_tune.get("replay") or {}),
+            "gate": dict(_tune.get("gate") or {}),
+            # L3：LLM 提案 / 影子 / 应用 / 回退
+            "llm": _llm_state,
             "updated_at": float(_tune.get("updated_at") or 0.0),
         }
         # 各品种最新价（非活跃品种也要实时刷新，标记价/浮盈都读它）
@@ -1443,10 +1462,84 @@ class TradingEngine:
         except Exception:  # noqa: BLE001 - 校准是旁路，出问题就用原配置
             return cfg
 
+    @staticmethod
+    def _cfg_num(value, default: float) -> float:
+        """配置数值：None 取默认；0 是合法值，不能被 `or` 吞掉。"""
+        return float(default if value is None else value)
+
+    def _evolution_mode(self) -> str:
+        """当前演进层级；非法值退回 stats，绝不因配置写错而关闭保护。"""
+        mode = str(getattr(self.cfg.position, "evolution_mode", "stats") or "stats").lower()
+        return mode if mode in ("off", "stats", "replay", "llm") else "stats"
+
+    def _sync_tuning_state(self) -> None:
+        """把运行态完整写回 state（避免各处手写 dict 漏字段）。"""
+        self.state["position_tuning"] = {
+            "stats": dict(self.position_tuning.get("stats") or {}),
+            "effective": dict(self.position_tuning.get("effective") or {}),
+            "anchor": dict(self.position_tuning.get("anchor") or {}),
+            "changes": list(self.position_tuning.get("changes") or []),
+            "pending": dict(self.position_tuning.get("pending") or {}),
+            "replay_cases": list(self.position_tuning.get("replay_cases") or [])[-200:],
+            "replay": dict(self.position_tuning.get("replay") or {}),
+            "gate": dict(self.position_tuning.get("gate") or {}),
+            "llm": dict(self.position_tuning.get("llm") or {}),
+            "updated_at": float(self.position_tuning.get("updated_at") or 0.0),
+        }
+
+    def _confirm_tuning(self, changes: list[dict]) -> list[dict]:
+        """L1 连续确认：同一方向连续 N 轮才落地，单轮噪声只记 pending。"""
+        need = max(1, int(getattr(self.cfg.position, "evolution_confirm_rounds", 2) or 2))
+        if not changes:
+            self.position_tuning["pending"] = {}
+            return []
+        pending = self.position_tuning.get("pending") or {}
+        prev = {c.get("param"): c for c in (pending.get("changes") or [])}
+        same = bool(prev) and all(
+            c.get("param") in prev
+            and (float(c.get("to", 0)) - float(c.get("from", 0)))
+            * (float(prev[c["param"]].get("to", 0)) - float(prev[c["param"]].get("from", 0))) > 0
+            for c in changes
+        )
+        rounds = (int(pending.get("rounds") or 0) + 1) if same else 1
+        if rounds >= need:
+            # 确认一次只落地一次；下一轮重新计数，避免连续 10 轮调 10 次
+            self.position_tuning["pending"] = {}
+            return changes
+        self.position_tuning["pending"] = {"changes": changes, "rounds": rounds}
+        return []
+
+    def _replay_gate(self, base: dict, cand: dict) -> tuple[bool, dict]:
+        """L2：候选参数在最近平仓样本上的反事实回放。"""
+        cfg = self.cfg.position
+        try:
+            base_cfg = replace(cfg, **{
+                k: float(base.get(k, TUNE_DEFAULTS.get(k, 0.0))) for k in TUNING_KEYS
+            })
+            cand_cfg = replace(cfg, **{
+                k: float(cand.get(k, TUNE_DEFAULTS.get(k, 0.0))) for k in TUNING_KEYS
+            })
+        except Exception as exc:  # noqa: BLE001
+            return False, {"passed": False, "reason": f"参数不合法：{type(exc).__name__}"}
+        out = replay_evaluate(
+            self.position_tuning.get("replay_cases") or [],
+            self._frame_for,
+            base_cfg,
+            cand_cfg,
+            window=int(getattr(cfg, "evolution_replay_window", 100) or 100),
+            min_cases=int(getattr(cfg, "evolution_replay_min_cases", 20) or 20),
+            min_median_delta=float(getattr(cfg, "evolution_replay_min_median_delta", 0.0) or 0.0),
+            max_worst_delta=self._cfg_num(
+                getattr(cfg, "evolution_replay_max_worst_delta", 0.2), 0.2),
+        )
+        out["checked_at"] = time.time()
+        return bool(out.get("passed")), out
+
     def _recompute_position_tuning(self) -> None:
-        """用最新绩效样本重算生效参数；样本不足时保持原值（calibrated=False）。"""
+        """按演进层级重算生效参数：L1 归因 → L2 回放 → 落地。"""
         cfg = getattr(self.cfg, "position", None)
-        if cfg is None or not bool(getattr(cfg, "auto_tune", True)):
+        mode = self._evolution_mode()
+        if cfg is None or mode == "off" or not bool(getattr(cfg, "auto_tune", True)):
             return
         try:
             base = self._tuning_base()
@@ -1456,8 +1549,32 @@ class TradingEngine:
                 abs(float(anchor.get(k, base[k])) - base[k]) > 1e-9 for k in TUNING_KEYS
             ):
                 prev = dict(base)  # 用户改过配置：从新配置重新开始学
-            eff, _ok, changes = learned_params(prev, self.position_tuning.get("stats") or {})
+                self.position_tuning["pending"] = {}
+            eff, _ok, changes = learned_params(
+                prev, self.position_tuning.get("stats") or {},
+                rule_min_samples=int(getattr(cfg, "evolution_rule_min_samples", 8) or 8),
+            )
+            changes = self._confirm_tuning(changes)
             now = time.time()
+            if mode in ("replay", "llm"):
+                passed, replay = self._replay_gate(prev, eff)
+                self.position_tuning["replay"] = replay
+                gate = dict(self.position_tuning.get("gate") or {})
+                gate["l2_checks"] = replay.get("checks") or {}
+                gate["l2_cases"] = int(replay.get("cases") or 0)
+                gate["l2_median_delta"] = replay.get("median_delta")
+                gate["l2_worst_delta"] = replay.get("worst_delta")
+                # 首次未通过时也要落一个明确的 False，页面才能区分「没跑」与「没通过」
+                gate["l2_passed"] = bool(gate.get("l2_passed")) or bool(passed)
+                if passed:
+                    gate["l2_passed"] = True
+                    gate["l2_passed_at"] = gate.get("l2_passed_at") or now
+                    gate["l2_stable_since"] = gate.get("l2_stable_since") or now
+                else:
+                    # 门控未过：丢弃本轮改动，保持当前生效值
+                    eff = dict(prev)
+                    changes = []
+                self.position_tuning["gate"] = gate
             log = list(self.position_tuning.get("changes") or [])
             for ch in changes:
                 log.append({**ch, "ts": now})
@@ -1467,13 +1584,7 @@ class TradingEngine:
                 "changes": log[-10:],
                 "updated_at": now,
             })
-            self.state["position_tuning"] = {
-                "stats": dict(self.position_tuning.get("stats") or {}),
-                "effective": dict(eff),
-                "anchor": dict(base),
-                "changes": list(self.position_tuning["changes"]),
-                "updated_at": now,
-            }
+            self._sync_tuning_state()
             self._save()
         except Exception:  # noqa: BLE001 - 学习失败绝不影响交易
             pass
@@ -1482,12 +1593,30 @@ class TradingEngine:
         """给状态接口/设置页的自迭代摘要（不触发任何重算，纯读）。"""
         try:
             cfg = getattr(self.cfg, "position", None)
+            llm = dict(self.position_tuning.get("llm") or {})
             return {
                 **tuning_summary(self.position_tuning.get("stats") or {},
                                  self.position_tuning.get("effective") or {}),
                 "auto_tune": bool(getattr(cfg, "auto_tune", True)) if cfg else False,
+                "mode": self._evolution_mode(),
                 "base": self._tuning_base(),
                 "changes": list(self.position_tuning.get("changes") or [])[-5:],
+                "pending": dict(self.position_tuning.get("pending") or {}),
+                "replay": dict(self.position_tuning.get("replay") or {}),
+                "gate": dict(self.position_tuning.get("gate") or {}),
+                "llm": {
+                    "enabled": self._llm_evolution_allowed() if cfg else False,
+                    "allow_action": bool(getattr(cfg, "evolution_llm_allow_action", False)) if cfg else False,
+                    "allow_loosen": bool(getattr(cfg, "evolution_llm_allow_loosen", False)) if cfg else False,
+                    "shadow_cases": int(getattr(cfg, "evolution_llm_shadow_cases", 20) or 20) if cfg else 20,
+                    "applied_count": len(llm.get("applied") or []),
+                    "proposals": list(llm.get("proposals") or [])[-5:],
+                    "applied": list(llm.get("applied") or [])[-5:],
+                    "shadow": list(llm.get("shadow") or [])[-5:],
+                    "rollbacks": list(llm.get("rollbacks") or [])[-3:],
+                    "streak_loss": int(llm.get("streak_loss") or 0),
+                    "cum_r": round(float(llm.get("cum_r") or 0.0), 3),
+                },
                 "updated_at": float(self.position_tuning.get("updated_at") or 0.0),
             }
         except Exception:  # noqa: BLE001
@@ -1517,7 +1646,178 @@ class TradingEngine:
             tag = "trail" if (pos.get("trailed") and rule in ("stop_loss", "trail")) else (rule or "unknown")
             stats = self.position_tuning.setdefault("stats", {})
             record_episode(stats, tag, realized_r, pos.get("mfe_r"))
+            self._remember_replay_case(pos, realized_r)
+            self._update_llm_streak(pos, realized_r)
             self._recompute_position_tuning()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _remember_replay_case(self, pos: dict, realized_r: float) -> None:
+        """L2：保存一笔可回放的平仓元数据（不存 K 线，回放时按品种取现成行情）。"""
+        try:
+            opened = float(pos.get("opened_epoch") or 0.0)
+            entry = float(pos.get("entry") or 0.0)
+            stop = float(pos.get("stop") or 0.0)
+            if opened <= 0 or entry <= 0 or stop <= 0:
+                return
+            case = {
+                "symbol": self._pos_symbol(pos, self.cfg.market.symbol),
+                "side": self._pos_side(pos),
+                "entry": entry,
+                "stop": stop,
+                "tp": float(pos.get("tp") or 0.0),
+                "opened_epoch": opened,
+                "closed_epoch": time.time(),
+                "initial_r_pct": float(pos.get("initial_r_pct") or abs(entry - stop) / entry),
+                "realized_r": round(float(realized_r), 4),
+                "mfe_r": pos.get("mfe_r"),
+            }
+            cases = list(self.position_tuning.get("replay_cases") or [])
+            cases.append(case)
+            self.position_tuning["replay_cases"] = cases[-200:]
+        except Exception:  # noqa: BLE001 - 回放样本只是旁路
+            pass
+
+    def _llm_evolution_allowed(self) -> bool:
+        """L3 门控：L2 通过 + 稳定期达标 + 用户显式开启，三者缺一不可。"""
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None or self._evolution_mode() != "llm":
+            return False
+        if not bool(getattr(cfg, "evolution_llm_enabled", False)):
+            return False
+        gate = self.position_tuning.get("gate") or {}
+        if not bool(gate.get("l2_passed")):
+            return False
+        days = int(getattr(cfg, "evolution_l2_stable_days", 14) or 0)
+        since = float(gate.get("l2_stable_since") or 0.0)
+        if days > 0 and since and (time.time() - since) < days * 86400:
+            return False
+        return True
+
+    def _apply_llm_evolution(self, dec, ev: dict, pos: dict) -> dict:
+        """把 LLM 提案交给代码裁决：方向只许更保守、参数受规则与步长限制。"""
+        cfg = getattr(self.cfg, "position", None)
+        if cfg is None:
+            return {"applied": False, "phase": "disabled"}
+        llm = self.position_tuning.setdefault("llm", {})
+        rec = {
+            "ts": time.time(),
+            "symbol": self._pos_symbol(pos, self.cfg.market.symbol),
+            "rule": dec.rule,
+            "rule_action": dec.action,
+            "llm_action": ev.get("action"),
+            "confidence": float(ev.get("confidence") or 0.0),
+            "params": dict(ev.get("params") or {}),
+            "reason": str(ev.get("reason") or "")[:160],
+            "source": ev.get("source"),
+        }
+        llm["proposals"] = (list(llm.get("proposals") or []) + [rec])[-50:]
+        applied_n = len(llm.get("applied") or [])
+        shadow_n = max(0, int(self._cfg_num(
+            getattr(cfg, "evolution_llm_shadow_cases", 20), 20)))
+        if len(llm.get("shadow") or []) < shadow_n:
+            # 影子期：只记录，不应用；攒够 shadow_cases 条后才进入 live。
+            # 用 shadow 计数而不是 applied 计数——影子期 applied 永远是 0，
+            # 用 applied 判断会永远出不了影子期。
+            llm["shadow"] = (list(llm.get("shadow") or []) + [rec])[-50:]
+            llm["last"] = rec
+            self.position_tuning["llm"] = llm
+            self._sync_tuning_state()
+            return {"applied": False, "phase": "shadow", "shadow_count": len(llm["shadow"])}
+        order = {"hold": 0, "tighten": 1, "close": 2}
+        cur = order.get(dec.action, 0)
+        new = order.get(str(ev.get("action") or dec.action), cur)
+        allow_loosen = bool(getattr(cfg, "evolution_llm_allow_loosen", False))
+        if new < cur and not allow_loosen:
+            new = cur
+        changed = False
+        if new > cur:
+            if new == 2:
+                dec.action = "close"
+                dec.reason = f"LLM 进化提案：{rec['reason']}"
+                dec.rule = dec.rule or "llm_evolve"
+                dec.details["llm_override"] = rec
+                changed = True
+            elif new == 1 and dec.new_stop:
+                dec.action = "tighten"
+                dec.details["llm_override"] = rec
+                changed = True
+        # 参数：只允许命中规则的相关参数，且单轮相对步长受限
+        allowed = set(RULE_PARAMS.get(dec.rule, ()))
+        step = max(0.0, self._cfg_num(
+            getattr(cfg, "evolution_llm_max_param_step", 0.15), 0.15))
+        eff = dict(self.position_tuning.get("effective") or {})
+        base = self._tuning_base()
+        for key, value in (ev.get("params") or {}).items():
+            if key not in allowed or key not in TUNE_BOUNDS:
+                continue
+            try:
+                cur_v = float(eff.get(key, base.get(key, TUNE_DEFAULTS.get(key, 0.0))))
+                target = float(value)
+            except (TypeError, ValueError):
+                continue
+            lo, hi = TUNE_BOUNDS[key]
+            target = min(hi, max(lo, target))
+            if step > 0:
+                # 先把 target 夹进「当前值 ± step」区间，再夹硬边界
+                target = max(cur_v * (1 - step), min(cur_v * (1 + step), target))
+            if abs(target - cur_v) < 1e-9:
+                continue
+            eff[key] = round(float(target), 6)
+            changed = True
+        if changed:
+            self.position_tuning["effective"] = eff
+            llm["applied"] = (list(llm.get("applied") or []) + [rec])[-50:]
+            llm["streak_loss"] = 0
+            llm["cum_r"] = 0.0
+            pos["llm_evolution"] = {"ts": time.time(), "action": dec.action,
+                                    "params": rec["params"]}
+        llm["last"] = rec
+        self.position_tuning["llm"] = llm
+        self._sync_tuning_state()
+        if changed:
+            self._save()
+        return {"applied": changed, "phase": "live"}
+
+    def _update_llm_streak(self, pos: dict, realized_r: float) -> None:
+        """L3 回退：LLM 覆盖后连续亏损或累计 R 触发阈值，自动退回 stats。"""
+        if not pos.get("llm_evolution"):
+            return
+        try:
+            cfg = self.cfg.position
+            llm = self.position_tuning.setdefault("llm", {})
+            if realized_r < 0:
+                llm["streak_loss"] = int(llm.get("streak_loss") or 0) + 1
+            else:
+                llm["streak_loss"] = 0
+            llm["cum_r"] = round(float(llm.get("cum_r") or 0.0) + float(realized_r), 6)
+            self.position_tuning["llm"] = llm
+            max_losses = max(1, int(getattr(cfg, "evolution_rollback_after_losses", 3) or 3))
+            max_dd = abs(float(getattr(cfg, "evolution_rollback_drawdown_r", 2.0) or 2.0))
+            if llm["streak_loss"] >= max_losses or llm["cum_r"] <= -max_dd:
+                self._rollback_llm_evolution(
+                    f"LLM 覆盖后连续亏损 {llm['streak_loss']} 笔 / "
+                    f"累计 {llm['cum_r']:+.2f}R，自动回退"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _rollback_llm_evolution(self, reason: str) -> None:
+        """回退：关掉 L3、清掉学习覆盖、保留统计与审计记录。"""
+        try:
+            self.cfg.position.evolution_mode = "stats"
+            base = self._tuning_base()
+            self.position_tuning["effective"] = dict(base)
+            self.position_tuning["anchor"] = dict(base)
+            self.position_tuning["pending"] = {}
+            llm = self.position_tuning.setdefault("llm", {})
+            llm["rollbacks"] = (list(llm.get("rollbacks") or [])
+                                + [{"ts": time.time(), "reason": reason}])[-20:]
+            llm["streak_loss"] = 0
+            llm["cum_r"] = 0.0
+            self._sync_tuning_state()
+            self._save()
+            self._notify("warn", "持仓管理员 LLM 进化已回退", reason, {"reason": reason})
         except Exception:  # noqa: BLE001
             pass
 
@@ -1992,34 +2292,53 @@ class TradingEngine:
 
             # 解释 / 影子复核共用一次 LLM 调用，且受谷时 + 每仓冷却闸门约束。
             # 影子意见只写日志，绝不参与 action —— 规则终审的地位不变。
+            want_evolve = self._llm_evolution_allowed()
             want_llm = (
                 (bool(getattr(cfg, "llm_explain", False)) and dec.action != "hold")
                 or bool(getattr(cfg, "llm_shadow", False))
+                or want_evolve
             )
             if want_llm and self._position_llm_allowed(sym):
+                ok = False
                 try:
-                    review = review_management(self._position_llm_client(), cfg, dec, pos)
-                    self._commit_position_llm_call(sym, True)
-                    dec.explanation = review.get("explanation") or ""
-                    sh = review.get("shadow")
-                    if sh:
-                        rec = {
-                            "ts": time.time(), "symbol": sym,
-                            "rule_action": dec.action, "rule_reason": dec.reason,
-                            "llm_action": sh.get("action"),
-                            "confidence": sh.get("confidence"),
-                            "reason": sh.get("reason"),
-                            "source": sh.get("source"),
-                            "degraded": sh.get("degraded"),
-                        }
-                        self.llm_shadow_log.append(rec)
-                        self.llm_shadow_log = self.llm_shadow_log[-50:]
-                        self.state["llm_shadow_log"] = list(self.llm_shadow_log)
-                        dec.details["shadow_action"] = sh.get("action")
-                    self._save()
+                    if ((bool(getattr(cfg, "llm_explain", False)) and dec.action != "hold")
+                            or bool(getattr(cfg, "llm_shadow", False))):
+                        review = review_management(self._position_llm_client(), cfg, dec, pos)
+                        dec.explanation = review.get("explanation") or ""
+                        sh = review.get("shadow")
+                        if sh:
+                            rec = {
+                                "ts": time.time(), "symbol": sym,
+                                "rule_action": dec.action, "rule_reason": dec.reason,
+                                "llm_action": sh.get("action"),
+                                "confidence": sh.get("confidence"),
+                                "reason": sh.get("reason"),
+                                "source": sh.get("source"),
+                                "degraded": sh.get("degraded"),
+                            }
+                            self.llm_shadow_log.append(rec)
+                            self.llm_shadow_log = self.llm_shadow_log[-50:]
+                            self.state["llm_shadow_log"] = list(self.llm_shadow_log)
+                            dec.details["shadow_action"] = sh.get("action")
+                    if want_evolve:
+                        ev = propose_evolution(
+                            self._position_llm_client(), cfg, pos, dec,
+                            self.position_tuning_status(),
+                            allowed_params=RULE_PARAMS.get(dec.rule, ()),
+                        )
+                        min_conf = self._cfg_num(
+                            getattr(cfg, "evolution_llm_min_confidence", 0.65), 0.65)
+                        if (ev and not ev.get("degraded")
+                                and float(ev.get("confidence") or 0.0) >= min_conf):
+                            self._apply_llm_evolution(dec, ev, pos)
+                    ok = True
                 except Exception:  # noqa: BLE001 - LLM 是旁路，绝不阻断退出动作
-                    self._commit_position_llm_call(sym, False)
-                    self.state["position_llm_usage"] = dict(self.position_llm_usage)
+                    ok = False
+                finally:
+                    # 无论解释/影子/进化哪一步失败，都按一次真实调用记账（成功/失败）
+                    self._commit_position_llm_call(sym, ok)
+                if ok:
+                    self._save()
             return dec.to_dict()
         except Exception as exc:  # noqa: BLE001 - 持仓管理绝不阻断主流程
             return {"action": "hold", "reason": f"持仓管理异常，保守不动：{type(exc).__name__}",
