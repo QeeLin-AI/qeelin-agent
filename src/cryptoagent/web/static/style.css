@@ -541,12 +541,13 @@ label.field > input, label.field > select { max-width: 420px; }
     display: flex; flex-direction: column;
   }
   /* 顺序：通知 → 机会榜 → 持仓管理员（DOM 里持仓管理员排第一，用 order 挪到底部）。
-     高度分配：通知条数通常很少 → 按内容高，封顶 32%；持仓管理员按内容高，封顶 38%；
-     机会榜吸收剩下的全部空间（它每行最高、最能利用纵向空间）。
-     三者都有 min-height:0 + 内部滚动，所以内容再多也只在自己卡里滚，绝不会撑高。 */
-  .ov-side > .notif-card { order: 1; flex: 0 1 auto; max-height: 32%; }
-  .ov-side > .opp-panel { order: 2; flex: 1 1 auto; }
-  .ov-side > #posMgmtCard { order: 3; flex: 0 1 auto; max-height: 38%; }
+     三张卡统一用「确定份额」（flex-basis:0 + 比例），不能用 flex-basis:auto 的内容高：
+     纵向 flex 的固有高度按「单行未换行」估算，长文案换行后实际更高，卡片就会被裁掉
+     半行（实测「暂无通知」两行只剩一行）。basis:0 让高度由比例决定，内容溢出只走
+     各自的滚动区。比例按内容密度：机会榜每行最高、最吃纵向空间，给 1.2。 */
+  .ov-side > .notif-card { order: 1; flex: 0.9 1 0; }
+  .ov-side > .opp-panel { order: 2; flex: 1.2 1 0; }
+  .ov-side > #posMgmtCard { order: 3; flex: 0.9 1 0; }
   /* 卡片内的滚动区：占满卡片剩余高度，内容多了自己滚，不再回头撑高卡片 */
   .ov-side .notif-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 6px; }
   .ov-side .opp-list { flex: 1 1 auto; min-height: 0; max-height: none; padding-right: 4px; }
