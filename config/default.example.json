@@ -80,7 +80,6 @@
     "train_frac": 0.55,
     "valid_frac": 0.2,
     "min_oos_sharpe": 0.3,
-    "max_lookback": 500,
     "out_dir": "runs/research",
     "factor_library": "factors_library",
     "auto_interval_sec": 0

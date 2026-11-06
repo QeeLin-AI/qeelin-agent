@@ -51,17 +51,6 @@ def _today() -> str:
     return time.strftime("%Y-%m-%d")
 
 
-def _parse_ts_ms(value: object) -> int:
-    """把本地时间字符串（"%Y-%m-%d %H:%M:%S"）转成毫秒时间戳；解析不了返回 0。"""
-    text = str(value or "").strip()
-    if not text:
-        return 0
-    try:
-        return int(time.mktime(time.strptime(text, "%Y-%m-%d %H:%M:%S")) * 1000)
-    except (ValueError, OverflowError, OSError):
-        return 0
-
-
 class TradingEngine:
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -2070,6 +2059,7 @@ class TradingEngine:
         self._guard_thread.start()
 
     def stop_position_guard(self) -> None:
+        """停止持仓守护线程。线程是 daemon，产品路径不调用；仅供测试清理。"""
         self._guard_stop.set()
 
     def _guard_loop(self) -> None:
@@ -2118,6 +2108,7 @@ class TradingEngine:
         self._quote_thread.start()
 
     def stop_quote_guard(self) -> None:
+        """停止报价线程。线程是 daemon，产品路径不调用；仅供测试清理。"""
         self._quote_stop.set()
 
     def _quote_loop(self) -> None:
@@ -2170,9 +2161,6 @@ class TradingEngine:
             target=self._warm_loop, name="symbol-cache", daemon=True
         )
         self._warm_thread.start()
-
-    def stop_symbol_cache_guard(self) -> None:
-        self._warm_stop.set()
 
     def _warm_loop(self) -> None:
         while not self._warm_stop.wait(self._warm_interval):

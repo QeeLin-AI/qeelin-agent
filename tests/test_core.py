@@ -702,9 +702,10 @@ class TestBinancePrecision(unittest.TestCase):
         self.assertGreater(min_notional, 0)
 
     def test_quantize_respects_step(self):
-        c = self._client()
-        self.assertAlmostEqual(c._quantize(0.15234, 0.001), 0.152)
-        self.assertAlmostEqual(c._quantize(1234.5678, 0.1), 1234.5)
+        from cryptoagent.execution import _quantize
+
+        self.assertAlmostEqual(_quantize(0.15234, 0.001), 0.152)
+        self.assertAlmostEqual(_quantize(1234.5678, 0.1), 1234.5)
 
     def test_filters_cached(self):
         c = self._client()

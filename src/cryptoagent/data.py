@@ -29,12 +29,13 @@ from .netutil import ssl_context
 
 FAPI = "https://fapi.binance.com"
 DEMO = "https://demo-fapi.binance.com"   # 币安 U 本位合约「模拟盘」公开行情接口
-VISION = "https://data-api.binance.vision"   # 现货镜像（已弃用于决策数据，仅作实时价兜底）
+VISION = "https://data-api.binance.vision"   # 现货镜像，仅用于 fetch_24h 的成交额兜底
 GATE = "https://api.gateio.ws"
 
 INTERVAL_HOURS = {
     # 分钟级周期必须写全：缺项会 fallback 成 1 小时，导致 Gate 翻页步长
     # 和缓存时效都算错（5m 被当成 1h，一次跳掉 11 根 K 线）。
+    # 10s 仅 Gate 合约支持，不在 KL_INTERVALS 里：统一取数路径不接受它。
     "10s": 10.0 / 3600.0,
     "1m": 1.0 / 60.0,
     "3m": 3.0 / 60.0,
@@ -289,32 +290,6 @@ def _fetch_demo_fapi(cfg: MarketConfig, need: int) -> pd.DataFrame:
     return _fetch_fapi(cfg, need, base=DEMO)
 
 
-def _fetch_vision(cfg: MarketConfig, need: int) -> pd.DataFrame:
-    """币安官方公开行情镜像 data-api.binance.vision（现货 K 线，无资金费率）。
-
-    国内可直连，是 fapi 不通时最贴近真实盘的替代。
-    """
-    end_time = int(time.time() * 1000)
-    rows: list[list] = []
-    while len(rows) < need:
-        limit = min(1000, need - len(rows))
-        batch = _get(
-            f"{VISION}/api/v3/klines",
-            {"symbol": cfg.symbol, "interval": cfg.interval, "limit": limit, "endTime": end_time},
-        )
-        if not batch:
-            break
-        rows = batch + rows
-        end_time = int(batch[0][0]) - 1
-        if len(batch) < limit:
-            break
-    if not rows:
-        raise DataError("vision 返回空数据")
-    df = _klines_frame(rows)
-    df["funding_rate"] = 0.0
-    return df
-
-
 def _fetch_gate(cfg: MarketConfig, need: int) -> pd.DataFrame:
     """Gate.io 永续（备用源）。合约名 BTCUSDT → BTC_USDT。"""
     contract = gate_contract(cfg.symbol)
@@ -454,7 +429,7 @@ def _fetch_okx_recent(symbol: str, interval: str, limit: int) -> pd.DataFrame:
 
 
 def fetch_binance(cfg: MarketConfig, max_bars: int | None = None, prefer: str = "binance") -> pd.DataFrame:
-    """按可用性依次尝试：fapi 永续 → vision 镜像 → gate 永续。
+    """按可用性依次尝试：fapi 永续 → demo 合约 → Gate 永续。
 
     返回的 DataFrame 带 `attrs["source"]`（哪个源成功）与 `attrs["has_funding"]`。
     全部失败才抛 DataError——绝不静默返回合成数据。
@@ -507,12 +482,6 @@ def _live_demo_fapi(symbol: str, timeout: int) -> tuple[float, str]:
     # 币安合约模拟盘最新价（同样是永续价格，主网不通时兜底）
     data = _get(f"{DEMO}/fapi/v1/ticker/price", {"symbol": symbol}, timeout=timeout)
     return float(data["price"]), "binance-fapi-demo"
-
-
-def _live_vision(symbol: str, timeout: int) -> tuple[float, str]:
-    # 现货价：只作兜底，和永续有 funding 基差（BTC 通常差几十美元）
-    data = _get(f"{VISION}/api/v3/ticker/price", {"symbol": symbol}, timeout=timeout)
-    return float(data["price"]), "binance-spot"
 
 
 def _live_gate(symbol: str, timeout: int) -> tuple[float, str]:

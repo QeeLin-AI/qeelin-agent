@@ -185,7 +185,6 @@ class ResearchConfig:
     train_frac: float = 0.55
     valid_frac: float = 0.20
     min_oos_sharpe: float = 0.30
-    max_lookback: int = 500
     out_dir: str = "runs/research"
     factor_library: str = "factors_library"
     # 自动研究间隔（秒）。0 = 关闭；>0 = 服务启动后每这么多秒自动跑一轮因子研究，
@@ -303,6 +302,8 @@ class AppConfig:
 # 只登记「确实删过」的字段名，不要用它掩盖真正的拼写错误。
 _LEGACY_FIELDS: dict[type, set[str]] = {
     RiskConfig: {"risk_per_trade_pct", "max_slippage_bps"},
+    # v1.1.8 起删除：研究阶段从未读取过该字段
+    ResearchConfig: {"max_lookback"},
 }
 
 

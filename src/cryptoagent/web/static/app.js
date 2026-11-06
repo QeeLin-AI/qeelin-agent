@@ -2112,19 +2112,6 @@ function renderStatus(s) {
 }
 
 /* ---------------- K 线图 ---------------- */
-function setupCanvas(cv) {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = cv.getBoundingClientRect();
-  const w = Math.max(320, rect.width);
-  const h = parseInt(cv.getAttribute('height'), 10) || 300;
-  cv.width = w * dpr;
-  cv.height = h * dpr;
-  cv.style.height = `${h}px`;
-  const ctx = cv.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return { ctx, w, h };
-}
-
 /* 持仓 / 持仓历史：标签页，选中项记在浏览器里 */
 function showPosTab(name, persist = true) {
   const hist = name === 'hist';

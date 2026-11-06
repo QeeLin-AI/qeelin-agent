@@ -11,9 +11,8 @@
 """
 from __future__ import annotations
 
-from typing import Any
-
 from ..config import PositionConfig
+from ._util import num_or_none
 from .llm import LLMClient
 from .position_calibration import BOUNDS, DEFAULTS, RULE_LABELS
 from .position_manager import PositionDecision
@@ -30,14 +29,6 @@ EVOLVE_SCHEMA = (
     "- confidence: 0 到 1 之间的数字\n"
     "- reason: 一句话理由"
 )
-
-
-def _num(value: Any) -> float | None:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    return out if out == out else None  # 排除 NaN
 
 
 def propose(
@@ -84,12 +75,12 @@ def propose(
         for key, value in params_raw.items():
             if key not in allowed or key not in BOUNDS:
                 continue
-            v = _num(value)
+            v = num_or_none(value)
             if v is None:
                 continue
             lo, hi = BOUNDS[key]
             params[key] = round(min(hi, max(lo, v)), 6)
-    conf = _num(data.get("confidence"))
+    conf = num_or_none(data.get("confidence"))
     conf = 0.0 if conf is None else max(0.0, min(1.0, conf))
     return {
         "action": action,

@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue.svg">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.7-orange.svg">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.1.8-orange.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research%20%2F%20education-lightgrey.svg">
 </p>
 
@@ -16,6 +16,18 @@
 ![总览](docs/ui.png)
 
 ---
+
+## v1.1.8 更新要点
+
+本版是**精简与去重**，不改变任何交易行为：
+
+- **删除死代码**：`PaperBroker` 模拟撮合类、未被调用的 `build_client` 工厂、已弃用的现货镜像取数函数、`_parse_ts_ms` 等 12 项（产品路径与测试均 0 调用），约 175 行；同时删掉一张未被引用的旧截图。
+- **路由去重**：`/api/candles` 合并到功能超集 `/api/klines`；删除无调用者的 `/api/data/refresh`；`/api/live`、`/api/exchange/status` 保留并在 API 说明中标注用途。
+- **默认值统一**：`balanced` 方案此前与 `AppConfig()` 有 16 处差异（杠杆 20x vs 3x、组合敞口 8x vs 1.2x、单笔仓位 0.2 vs 0.3），现改为逐项一致并加断言测试，避免「新装默认」与「恢复默认」是两套值。
+- **配置清理**：删除从未被读取的 `research.max_lookback`（旧配置由 `_LEGACY_FIELDS` 自动忽略，升级不会启动失败）；`llm_min_interval_sec` 只允许设置页写，自动调参不再与人工设置互相覆盖。
+- **重复实现合并**：两个交易所客户端共用 `_quantize` / `_round_price`（此前两份逐字相同）；`_num` 抽为 `agents/_util.num_or_none`。
+- **部署整理**：Windows 时代脚本归档到 `deploy/legacy-windows/`（不进发布包）；nginx 配置标注为可选；`.env.example` 补齐 6 个运维变量。
+- **测试**：**289 项**（删除 1 个已合并接口的用例，新增 2 个默认值 / 白名单一致性用例）。
 
 ## v1.1.7 更新要点
 
@@ -207,7 +219,7 @@ python run.py web --host 127.0.0.1 --port 8000
 | **交易** | 解锁与模式切换、开平仓、订单计划、持仓历史、最近成交、通知列表 |
 | **决策** | 决策全过程（分析师结论 → 多空辩论 → 交易员提案 → 风控官 → 风控引擎 → 成本闸 → 仓位归因）；多品种扫描与 LLM 影子复核 |
 | **因子研究** | 迭代研究、候选因子排行榜（IS/OOS 夏普、OOS 回撤、评分、结论）、冠军因子代码 |
-| **设置** | 交易链接 / 交易参数 / 模型设置 / 情绪新闻 / 通知告警 五个子页 |
+| **设置** | 交易链接 / 交易参数 / 模型设置（含 LLM 自主调参）/ 情绪新闻 / 通知告警 五个子页 |
 
 **鉴权与网络**：接口支持 `Authorization: Bearer`、Cookie、`?token=` 三种方式；首次带 token 访问会 302 写入 30 天 Cookie。写请求额外校验 `Origin`，请求体上限 1 MiB。`python run.py web` 默认绑定 `127.0.0.1`；`deploy/qeelin-agent.service` 绑定 `0.0.0.0:8000`（云服务器场景），因此部署时必须设置令牌，并在安全组只放行必要端口。
 
@@ -218,6 +230,12 @@ python run.py web --host 127.0.0.1 --port 8000
 ![交易页](docs/tab-trading.png)
 
 ![因子研究页](docs/tab-research.png)
+
+**未在页面使用的只读接口**（供脚本与排障，均需鉴权）：
+
+- `GET /api/klines?interval=5m&limit=240`：任意周期的实时 K 线，与页面图表、中频突破共用同一条三级取数链路；原 `/api/candles` 已合并到这里。
+- `GET /api/live` / `POST /api/live {"on": false}`：启停实时报价循环。它与自动交易 `/api/trading/auto` 不是同一件事：前者只管行情轮询，后者才会按决策下单。
+- `GET /api/exchange/status`：交易所连接与账户快照，只读、无副作用。
 
 ---
 
@@ -431,6 +449,16 @@ python tools/validate_factors.py --bars 8000 --symbol ETHUSDT --write
 
 > **实测结论（BTCUSDT 1h，6000 根）**：17 个新候选因子 **0 个通过**，对照组 21 个老内置因子同样 **0 个通过**，且 IS 夏普几乎全为负。这说明单因子三段回测在加密永续上给出的绝对夏普不可靠，只能用于候选之间的相对排序。因此 `validated.json` 通过名单为空，新因子保持降权参与，既没有强行提升也没有删除。
 
+其他工具（都不属于运行时依赖）：
+
+```bash
+python tools/e2e_demo.py --symbol BTCUSDT --qty 0.001   # demo 环境下单测执行层，只用假钱
+python tools/fake_llm.py                                # 本地假 OpenAI 兼容服务，离线联调模型链路
+python tools/pack.py --no-data                          # 打发布包（默认带行情缓存、不带账本与 .env）
+```
+
+`e2e_demo.py` 只有 demo / testnet 两个环境，主网选项已移除；`fake_llm.py` 不需要任何 Key；`pack.py` 会跳过 `config/default.json`、`.env`、`runs/` 与归档的 Windows 脚本。
+
 **性能说明**：单因子沙箱的主要成本是子进程启动（约 1.25 秒 / 因子，与数据量无关），因此信号计算与候选验证都采用**批量执行**——同一子进程内依次跑完全部因子，并给每个因子传入独立的 `df.copy()`，避免前一个因子原地修改数据污染整批。任一因子超时会拖垮整批，此时信号层会记录批次错误并把原因写进 `skipped`，前端与日志可定位。
 
 ---
@@ -547,7 +575,7 @@ src/cryptoagent/
 └── cli.py               # 命令行入口
 ```
 
-顶层：`run.py`（统一入口）、`config/`（运行时配置 + 模板）、`deploy/`（systemd / fail2ban / nginx / Windows 脚本）、`tools/`（验证、演示、打包与推送脚本）、`tests/`、`docs/`、`desktop/`（可选 Electron 壳，需自备 Node.js）。
+顶层：`run.py`（统一入口）、`config/`（运行时配置 + 模板）、`deploy/`（systemd / fail2ban / 可选 nginx；Windows 时代脚本归档在 `legacy-windows/`）、`tools/`（验证、演示、打包与推送脚本）、`tests/`、`docs/`、`desktop/`（可选 Electron 壳，需自备 Node.js）。
 
 ---
 
@@ -569,7 +597,7 @@ sudo bash /opt/crypto-agent/deploy/update.sh
 
 > 仓库目录（含 `.git`）必须归服务账号所有，否则 `sudo -u cryptotrader git fetch` 会报 `insufficient permission for adding an object`。迁移或重装后执行一次 `sudo chown -R cryptotrader:cryptotrader /opt/crypto-agent` 即可。
 
-`deploy/` 下另有 Windows 侧脚本（`install-windows.ps1` / `setup-ssh-windows.ps1` 等）与可选 nginx 反代配置；`deploy/ssh-config.example`、`optimized.rdp` 是占位模板（`1.2.3.4` / `CHANGE_ME_IP`），不含真实地址。
+`deploy/` 下另有**已归档**的 Windows 侧脚本（`legacy-windows/install-windows.ps1`、`setup-ssh-windows.ps1` 等）与可选 nginx 反代配置。Windows 脚本不再随版本验证，仅作历史参考；`legacy-windows/ssh-config.example`、`optimized.rdp` 是占位模板（`1.2.3.4` / `CHANGE_ME_IP`），不含真实地址，也不进发布包。
 
 ---
 
@@ -580,7 +608,7 @@ pip install -e ".[test]"
 python -m pytest -q
 ```
 
-**288 项单元测试**，覆盖风控限额与硬约束校验、因子沙箱与未来函数检测、回测指标、Web API 与鉴权、多仓位状态与报价解包、持仓核对与幽灵仓位清理、峰谷规则，以及持仓管理员的四类退出规则、LLM 解释 / 影子复核（含冷却、峰时跳过、失败降级）、持仓管理三阶段演进（按规则归因、L2 回放门控、L3 提案/动作/回退）、执行成本闸、衍生品列对齐、分析师权重校准、平仓补记、成本闸终审顺序、跨日基准与 6000 根历史下的衍生品附加。测试使用合成数据与 mock 模型，不联网、不需要任何 Key。
+**289 项单元测试**，覆盖风控限额与硬约束校验、因子沙箱与未来函数检测、回测指标、Web API 与鉴权、多仓位状态与报价解包、持仓核对与幽灵仓位清理、峰谷规则，以及持仓管理员的四类退出规则、LLM 解释 / 影子复核（含冷却、峰时跳过、失败降级）、持仓管理三阶段演进（按规则归因、L2 回放门控、L3 提案/动作/回退）、执行成本闸、衍生品列对齐、分析师权重校准、平仓补记、成本闸终审顺序、跨日基准与 6000 根历史下的衍生品附加、配置方案与 AppConfig 默认值一致性。测试使用合成数据与 mock 模型，不联网、不需要任何 Key。
 
 ---
 
@@ -601,6 +629,7 @@ python -m pytest -q
 
 | 版本 | 要点 |
 |---|---|
+| **v1.1.8** | 精简去重：删除 12 项死代码（约 175 行）与未引用截图；`/api/candles` 合并到 `/api/klines`、删 `/api/data/refresh`；`balanced` 与 `AppConfig()` 默认值统一并加断言；删孤儿配置 `research.max_lookback`；合并交易所精度函数与 `_num`；Windows 脚本归档；测试 289 项 |
 | **v1.1.7** | 持仓管理员三阶段演进：L1 按规则归因、L2 反事实回放门控、L3 LLM 提案/动作覆盖（影子期 + 更保守方向 + 自动回退）；`evolution_mode` 与门控配置；测试 285 项 |
 | **v1.1.6** | 全量审查修复：当日权益基准接入、展示权益与风控同源、旧存档品种补齐、成本闸缩仓复核、实盘数量回读、组合敞口按标记价；OKX 缓存隔离、衍生品四列在 6000 根下恢复、盘缓存 TTL/并发/未来时间戳修复、周期表统一；因子批量隔离、未来函数复检、全历史切片、强平指标截断、`inf` 净化、子进程资源限制；配置不再入库 + 模板、配置写锁、加载校验、部署备份回滚；Web 参数校验与前端交互修复；测试 273 项 |
 | v1.1.5 | 侧栏运行时长（`uptime_sec` / `started_at`）；全品种报价预热间隔调至 5 秒 |

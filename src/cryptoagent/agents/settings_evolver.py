@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+
+from ._util import num_or_none
 
 # 可被模型调整的键 → 硬边界
 BOUNDS: dict[str, tuple[float, float]] = {
@@ -29,16 +30,12 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "max_margin_usage_pct": (0.30, 0.95),
     "auto_top_k": (1.0, 4.0),
     "rotate_min_score": (0.05, 0.50),
-    # 持仓管理员·LLM 接入：同一品种两次 LLM 调用的最小间隔（秒）。
-    # 这是「LLM 接入」里唯一适合让模型自己调的数值项——开关一律不动。
-    "llm_min_interval_sec": (300.0, 7200.0),
 }
-# 整数型键（结果取整）。llm_min_interval_sec 不在这里：它的 BOUNDS 跨度是
-# 300~7200 秒，若按「单轮最多 ±1」裁决，从 900 调到 7200 需要 6300 轮，
-# 这个可调项等于形同虚设；它按比例步长（MAX_STEP）调整。
+# 整数型键（结果取整）。
 INT_KEYS = {"max_concurrent_positions", "auto_top_k"}
-# 归 position 组的键（其余走 risk / market）
-POSITION_KEYS = {"llm_min_interval_sec"}
+# 归 position 组的键。当前为空：`llm_min_interval_sec` 只有一个写入方——
+# 设置页 `/api/settings/position`，避免自动调参与人工设置互相覆盖。
+POSITION_KEYS: set[str] = set()
 # 单轮最多改几个键：改多了无法归因，也没法判断是哪一项起作用
 MAX_KEYS = 3
 # 单键单轮最大相对变化
@@ -79,7 +76,6 @@ def build_context(cfg, perf: dict | None = None, funnel: dict | None = None) -> 
             "max_concurrent_positions", "max_margin_usage_pct")}
     cur["auto_top_k"] = float(getattr(cfg.market, "auto_top_k", 1) or 1)
     cur["rotate_min_score"] = float(getattr(cfg.market, "rotate_min_score", 0.0) or 0.0)
-    cur["llm_min_interval_sec"] = float(getattr(cfg.position, "llm_min_interval_sec", 900) or 900)
     return {
         "current": cur,
         "bounds": {k: list(v) for k, v in BOUNDS.items()},
@@ -154,13 +150,6 @@ def perf_stats(history: list[dict], limit: int = 60) -> dict:
     return out
 
 
-def _num(v: Any) -> float | None:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
 def sanitize(proposal: dict, cfg, current: dict | None = None) -> dict:
     """代码侧裁决：白名单 / 步长 / 总边界 / 交叉校验。
 
@@ -179,7 +168,7 @@ def sanitize(proposal: dict, cfg, current: dict | None = None) -> dict:
         if not isinstance(item, dict):
             continue
         key = str(item.get("key") or "").strip()
-        to = _num(item.get("to"))
+        to = num_or_none(item.get("to"))
         why = str(item.get("why") or "").strip()[:160]
         if key not in BOUNDS:
             rejected.append({"key": key or "?", "reason": "不在可调白名单"})

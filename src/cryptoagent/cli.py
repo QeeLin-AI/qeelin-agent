@@ -53,10 +53,6 @@ def _header(title: str) -> None:
     print("=" * 66)
 
 
-def _fmt_metrics(res) -> str:
-    return res.summary()
-
-
 # --------------------------------------------------------------------------
 def cmd_demo(args) -> int:
     cfg, df, src = _load(args)

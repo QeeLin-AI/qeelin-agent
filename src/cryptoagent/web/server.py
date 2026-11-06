@@ -575,17 +575,6 @@ class WebApp:
         self._ex_pnl_at = now
         return self._ex_pnl_cache
 
-    def refresh_data(self) -> dict:
-        """强制重新下载行情并刷新引擎里的 df（「刷新行情」按钮用）。"""
-        df, src = self.engine.refresh_data(force=True)
-        return {
-            "rows": int(len(df)),
-            "source": src,
-            "first": str(df.index[0]),
-            "last": str(df.index[-1]),
-            "last_close": round(float(df["close"].iloc[-1]), 2),
-        }
-
     def klines(self, interval: str = "", limit: int = 240) -> dict:
         """实时 K 线：直接问交易所，支持 5m/15m/1h 等周期（本地 CSV 只有一种周期）。"""
         from ..data import DataError, fetch_klines
@@ -614,29 +603,6 @@ class WebApp:
                 }
                 for ts, o, h, lo, c, v in zip(
                     df.index, df["open"], df["high"], df["low"], df["close"], df["volume"]
-                )
-            ],
-        }
-
-    def candles(self, limit: int = 240) -> dict:
-        df = self.engine.df
-        if df is None:
-            df, _ = self.engine.refresh_data()
-        tail = df.tail(max(20, min(limit, 1500)))
-        return {
-            "symbol": self.cfg.market.symbol,
-            "interval": self.cfg.market.interval,
-            "bars": [
-                {
-                    "t": int(ts.timestamp()),
-                    "o": round(float(o), 2),
-                    "h": round(float(h), 2),
-                    "l": round(float(lo), 2),
-                    "c": round(float(c), 2),
-                    "v": round(float(v), 2),
-                }
-                for ts, o, h, lo, c, v in zip(
-                    tail.index, tail["open"], tail["high"], tail["low"], tail["close"], tail["volume"]
                 )
             ],
         }
@@ -2248,7 +2214,7 @@ class WebApp:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "QeeLin-Agent/1.1.7"
+    server_version = "QeeLin-Agent/1.1.8"
     app: WebApp  # 由 serve() 注入
 
     # -- 基础 ---------------------------------------------------------
@@ -2412,9 +2378,6 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         if path == "/api/status":
             return self._json({"ok": True, "data": app.status()})
-        if path == "/api/candles":
-            limit = _as_int(query.get("limit", ["240"])[0], "limit", 240, 1, 1000)
-            return self._json({"ok": True, "data": app.candles(limit)})
         if path == "/api/klines":
             return self._json(
                 {
@@ -2560,8 +2523,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.opportunities(payload)})
         if path == "/api/rotate":
             return self._json({"ok": True, "data": app.set_rotate(payload)})
-        if path == "/api/data/refresh":
-            return self._json({"ok": True, "data": app.refresh_data()})
         raise ApiError(f"未知接口 {path}", 404)
 
     # -- 静态文件 -----------------------------------------------------

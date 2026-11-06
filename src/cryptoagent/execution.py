@@ -49,19 +49,16 @@ def from_okx_inst(inst: str) -> str:
     return inst
 
 
-def build_client(
-    exchange: str,
-    api_key: str,
-    api_secret: str,
-    passphrase: str = "",
-    testnet: bool = True,
-    env: str | None = None,
-    base_url: str | None = None,
-) -> "BinanceFuturesClient | OKXClient":
-    """工厂：按 exchange 选币安或 OKX 客户端（接口一致）。"""
-    if exchange == "okx":
-        return OKXClient(api_key, api_secret, passphrase, testnet=testnet, env=env, base_url=base_url)
-    return BinanceFuturesClient(api_key, api_secret, testnet=testnet, env=env, base_url=base_url)
+def _round_price(price: float, tick: float = 0.1) -> float:
+    """按最小变动价位取整价格（两个交易所共用）。"""
+    return round(round(price / tick) * tick, 8)
+
+
+def _quantize(value: float, step: float) -> float:
+    """按步长量化：保留浮点误差余量，避免 0.29999 被判成 0.29。"""
+    if step <= 0:
+        return value
+    return round(int(value / step + 1e-9) * step, 10)
 
 
 def read_api_keys(exchange: str, testnet: bool = True) -> tuple[str, str, str]:
@@ -111,70 +108,6 @@ class OrderResult:
     fee: float = 0.0
     raw: dict = field(default_factory=dict)
     error: str = ""
-
-
-# --------------------------------------------------------------------------
-# 模拟撮合
-# --------------------------------------------------------------------------
-@dataclass
-class Fill:
-    ts: str
-    side: str
-    qty: float
-    price: float
-    fee: float
-    order_id: str
-
-
-@dataclass
-class PaperBroker:
-    equity: float = 10_000.0
-    fee_bps: float = 5.0
-    slippage_bps: float = 2.0
-    cash: float = field(init=False)
-    position_qty: float = 0.0
-    avg_entry: float = 0.0
-    realized_pnl: float = 0.0
-    fills: list[Fill] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        self.cash = self.equity
-
-    def submit(self, order: dict, mark_price: float) -> Fill:
-        side = order["side"].upper()
-        qty = float(order["quantity"])
-        slip = self.slippage_bps / 10_000.0
-        price = mark_price * (1 + slip) if side == "BUY" else mark_price * (1 - slip)
-        notional = qty * price
-        fee = notional * self.fee_bps / 10_000.0
-
-        signed = qty if side == "BUY" else -qty
-        if self.position_qty == 0 or (self.position_qty > 0) == (signed > 0):
-            total = abs(self.position_qty) + abs(signed)
-            self.avg_entry = (
-                (self.avg_entry * abs(self.position_qty) + price * abs(signed)) / total
-                if total
-                else price
-            )
-            self.position_qty += signed
-        else:
-            closing = min(abs(signed), abs(self.position_qty))
-            direction = 1.0 if self.position_qty > 0 else -1.0
-            self.realized_pnl += (price - self.avg_entry) * closing * direction
-            self.position_qty += signed
-            if abs(signed) > closing:
-                self.avg_entry = price
-            elif abs(self.position_qty) < 1e-12:
-                self.position_qty = 0.0
-                self.avg_entry = 0.0
-        self.cash -= fee
-        fill = Fill(time.strftime("%Y-%m-%d %H:%M:%S"), side, qty, price, fee, f"paper-{len(self.fills)}")
-        self.fills.append(fill)
-        return fill
-
-    def mark_to_market(self, price: float) -> float:
-        unrealized = (price - self.avg_entry) * self.position_qty if self.position_qty else 0.0
-        return self.cash + self.realized_pnl + unrealized
 
 
 # --------------------------------------------------------------------------
@@ -250,7 +183,7 @@ class BinanceFuturesClient:
     def _request(self, method: str, path: str, params: dict | None = None, signed: bool = False) -> dict:
         params = dict(params or {})
         self._throttle()
-        headers = {"User-Agent": "QeeLin-Agent/1.1.7"}
+        headers = {"User-Agent": "QeeLin-Agent/1.1.8"}
         if signed:
             params["timestamp"] = int(time.time() * 1000)
             params.setdefault("recvWindow", 5000)
@@ -349,7 +282,7 @@ class BinanceFuturesClient:
     ) -> OrderResult:
         self._guard()
         tick, step, min_notional = self.filters(symbol)
-        qty = self._quantize(quantity, step)
+        qty = _quantize(quantity, step)
         if qty <= 0:
             raise ExchangeError(f"下单数量四舍五入后为 0（原始 {quantity}，step {step}）")
         params = {
@@ -393,7 +326,7 @@ class BinanceFuturesClient:
             "symbol": symbol,
             "side": side.upper(),
             "type": order_type,
-            "triggerPrice": self._quantize(trigger_price, tick),
+            "triggerPrice": _quantize(trigger_price, tick),
             "closePosition": "true" if close_position else "false",
             "workingType": "MARK_PRICE",
             "clientAlgoId": f"cas{int(time.time() * 1000)}",
@@ -467,14 +400,6 @@ class BinanceFuturesClient:
             "GET", "/fapi/v1/income", {"startTime": int(start_ms), "limit": min(limit, 1000)}, signed=True
         )
 
-    @staticmethod
-    def _round_qty(qty: float, step: float = 0.001) -> float:
-        return float(int(qty / step) * step)
-
-    @staticmethod
-    def _round_price(price: float, tick: float = 0.1) -> float:
-        return round(round(price / tick) * tick, 8)
-
     # -- 精度 ---------------------------------------------------------
     def filters(self, symbol: str) -> tuple[float, float, float]:
         """(tickSize, stepSize, minNotional)，来自 /fapi/v1/exchangeInfo 并缓存。
@@ -501,11 +426,6 @@ class BinanceFuturesClient:
             pass
         self._filters[symbol] = (tick, step, min_notional)
         return self._filters[symbol]
-
-    def _quantize(self, value: float, step: float) -> float:
-        if step <= 0:
-            return value
-        return round(int(value / step + 1e-9) * step, 10)
 
 
 # --------------------------------------------------------------------------
@@ -592,7 +512,7 @@ class OKXClient:
         params = dict(params or {})
         self._throttle()
         headers = {
-            "User-Agent": "QeeLin-Agent/1.1.7",
+            "User-Agent": "QeeLin-Agent/1.1.8",
             "Content-Type": "application/json",
             **self._sim_header(),
         }
@@ -733,7 +653,7 @@ class OKXClient:
     def place_market(self, symbol: str, side: str, quantity: float, reduce_only: bool = False) -> OrderResult:
         self._guard()
         tick, step, _ = self.filters(symbol)
-        qty = self._quantize(quantity, step)
+        qty = _quantize(quantity, step)
         if qty <= 0:
             raise ExchangeError(f"下单数量四舍五入后为 0（原始 {quantity}，step {step}）")
         body = {
@@ -778,13 +698,13 @@ class OKXClient:
         pos = self.positions(symbol)
         if not pos:
             raise ExchangeError("没有持仓，无法下平仓触发单")
-        qty = self._quantize(pos[0]["qty"], step)
+        qty = _quantize(pos[0]["qty"], step)
         body = {
             "instId": inst,
             "tdMode": "cross",
             "side": side.upper(),
             "ordType": "trigger",
-            "triggerPx": f"{self._round_price(trigger_price, tick)}",
+            "triggerPx": f"{_round_price(trigger_price, tick)}",
             "triggerPxType": "mark",
             "sz": str(qty),
             "orderPx": "-1",       # -1 = 触发后按市价
@@ -906,14 +826,6 @@ class OKXClient:
             # 其它类型（划转等）忽略，server 端也不会计入盈亏
         return out
 
-    @staticmethod
-    def _round_qty(qty: float, step: float = 0.001) -> float:
-        return float(int(qty / step) * step)
-
-    @staticmethod
-    def _round_price(price: float, tick: float = 0.1) -> float:
-        return round(round(price / tick) * tick, 8)
-
     # -- 精度 ---------------------------------------------------------
     def filters(self, symbol: str) -> tuple[float, float, float]:
         """(tickSize, stepSize, minNotional)，来自 public/instruments 并缓存。"""
@@ -936,8 +848,3 @@ class OKXClient:
             pass
         self._filters[symbol] = (tick, step, max(min_notional, 1.0))
         return self._filters[symbol]
-
-    def _quantize(self, value: float, step: float) -> float:
-        if step <= 0:
-            return value
-        return round(int(value / step + 1e-9) * step, 10)

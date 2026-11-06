@@ -37,6 +37,7 @@ DEFAULT_TTL = 300.0
 
 
 def clear_cache() -> None:
+    """清空 5 分钟缓存。产品路径不调用，仅供测试隔离用例。"""
     _CACHE.clear()
 
 

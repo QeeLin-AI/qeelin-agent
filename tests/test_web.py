@@ -126,12 +126,6 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(body["data"]["running"])
 
-    def test_candles(self):
-        status, body = self._get("/api/candles?limit=50")
-        data = json.loads(body)["data"]
-        self.assertEqual(len(data["bars"]), 50)
-        self.assertGreater(data["bars"][0]["h"], 0)
-
     def test_decision_returns_full_pipeline(self):
         status, body = self._post("/api/decision", {"rounds": 1})
         self.assertEqual(status, 200)

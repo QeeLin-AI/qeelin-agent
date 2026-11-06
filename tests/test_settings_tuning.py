@@ -103,6 +103,28 @@ def test_default_profile_is_listed():
     assert DEFAULT_PROFILE in PROFILES
 
 
+def test_balanced_profile_equals_appconfig_defaults():
+    """「默认」只能有一个语义：balanced 必须与 AppConfig() 逐项一致。
+
+    否则新装用户拿到的值与点「恢复默认」后的值会不同（历史上差 6.7 倍杠杆）。
+    """
+    cfg = AppConfig()
+    bal = PROFILES["balanced"]
+    for k, v in bal["risk"].items():
+        assert getattr(cfg.risk, k) == v, f"risk.{k}"
+    for k, v in bal["position"].items():
+        assert getattr(cfg.position, k) == v, f"position.{k}"
+    for k, v in bal["market"].items():
+        assert getattr(cfg.market, _MARKET_ATTR[k]) == v, f"market.{k}"
+
+
+def test_evolver_never_touches_position_llm_interval():
+    """llm_min_interval_sec 只允许设置页写，自动调参不得与之互相覆盖。"""
+    assert "llm_min_interval_sec" not in BOUNDS
+    ctx = build_context(AppConfig())
+    assert "llm_min_interval_sec" not in ctx["current"]
+
+
 def test_profile_diff_and_match():
     cfg = AppConfig()
     for k, v in PROFILES["frequency"]["risk"].items():

@@ -70,17 +70,6 @@ class Notification:
             "meta": self.meta,
         }
 
-    @classmethod
-    def from_dict(cls, data: dict) -> "Notification":
-        """从 dict 还原；容忍缺失字段，绝不在读取历史记录时崩溃。"""
-        return cls(
-            level=str(data.get("level", "info")),
-            title=str(data.get("title", "")),
-            message=str(data.get("message", "")),
-            ts=str(data.get("ts", "")),
-            meta=dict(data.get("meta", {}) or {}),
-        )
-
 
 class Notifier:
     """多通道通知分发器。

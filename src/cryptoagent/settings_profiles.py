@@ -19,26 +19,27 @@ from typing import Any
 PROFILES: dict[str, dict[str, Any]] = {
     "balanced": {
         "label": "稳健（默认）",
-        "summary": "单笔风险 1%、最多 2 仓、置信度门槛 0.45。频率适中，回撤可控。",
+        "summary": "出厂默认：单笔风险 1%、单次 1 仓、置信度门槛 0.55、杠杆上限 3x；"
+                   "不开自动轮动。最保守的可用起点，与 AppConfig 默认值逐项一致。",
         "risk": {
-            "sizing_mode": "risk",
+            "sizing_mode": "llm",
             "max_loss_per_trade_pct": 0.010,
-            "max_position_pct": 0.20,
-            "max_concurrent_positions": 2,
-            "max_margin_usage_pct": 0.70,
-            "min_confidence": 0.45,
-            "max_leverage": 20.0,
-            "min_leverage": 3.0,
+            "max_position_pct": 0.30,
+            "max_concurrent_positions": 1,
+            "max_margin_usage_pct": 0.95,
+            "min_confidence": 0.55,
+            "max_leverage": 3.0,
+            "min_leverage": 1.0,
             "leverage_override": 0.0,
-            "daily_loss_limit_pct": 0.08,
-            "max_drawdown_pct": 0.25,
-            "max_portfolio_notional_pct": 8.0,
-            "correlated_exposure_pct": 6.0,
+            "daily_loss_limit_pct": 0.03,
+            "max_drawdown_pct": 0.15,
+            "max_portfolio_notional_pct": 1.2,
+            "correlated_exposure_pct": 0.9,
         },
         "position": {
             "auto_tune": True,
-            "llm_explain": True,
-            "llm_shadow": True,
+            "llm_explain": False,
+            "llm_shadow": False,
             "llm_offpeak_only": True,
             "bars_from_index": True,
             "peak_drawdown_exit_enabled": False,
@@ -48,8 +49,8 @@ PROFILES: dict[str, dict[str, Any]] = {
             "llm_min_interval_sec": 900,
         },
         "market": {
-            "auto_rotate": True,
-            "min_score": 0.15,
+            "auto_rotate": False,
+            "min_score": 0.2,
             "every_cycles": 1,
             "auto_top_k": 1,
         },
@@ -57,7 +58,7 @@ PROFILES: dict[str, dict[str, Any]] = {
     "frequency": {
         "label": "高频稳健（推荐）",
         "summary": "门槛降到 0.32、单笔风险压到 0.8%、最多 4 仓、每轮评 3 个品种。"
-                   "笔数约 2~3 倍，满仓总风险 3.2%（与稳健档的 2% 同量级）。",
+                   "笔数约 2~3 倍，满仓总风险 3.2%（高于稳健档的 1%，用频率换机会）。",
         "risk": {
             "sizing_mode": "risk",
             "max_loss_per_trade_pct": 0.008,
@@ -217,10 +218,6 @@ def profile_diff(cfg, name: str) -> list[dict]:
         if hasattr(cfg.market, k):
             _add("market", k, getattr(cfg.market, k), v)
     return out
-
-
-def profile_names() -> list[str]:
-    return list(PROFILES)
 
 
 def matches_profile(cfg, name: str) -> bool:

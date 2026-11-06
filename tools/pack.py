@@ -39,7 +39,9 @@ INCLUDE = [
     ".gitignore",
 ]
 
-SKIP_DIRS = {"__pycache__", ".git", ".venv", "dist", "runs.synthetic_backup"}
+SKIP_DIRS = {"__pycache__", ".git", ".venv", "dist", "runs.synthetic_backup",
+             # 已归档的 Windows 时代脚本，发布包不需要
+             "legacy-windows"}
 SKIP_SUFFIX = {".pyc", ".pyo", ".zip", ".log"}
 SKIP_NAMES = {
     ".env", "engine_state.json",
