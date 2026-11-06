@@ -1364,7 +1364,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .trade-split { gap: 14px; }
   .trade-main > .muted { font-size: 11.5px; line-height: 1.5; }
   .auto-controls { gap: 12px; margin: 0 0 2px; }
-  .auto-controls .field input { width: 88px; }
+  .auto-controls .field { flex: 1 1 130px; min-width: 0; }
+  .auto-controls .field input { width: 100%; }
   .auto-controls .auto-exec { padding-bottom: 0; font-size: 12px; flex-basis: 100%; order: 2; }
   .auto-controls .auto-actions { margin-top: 2px; }
   .auto-meta { display: block; width: 100%; margin: 12px 0 0; font-size: 11.5px; overflow-wrap: anywhere; }
