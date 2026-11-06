@@ -767,7 +767,7 @@ label.field > input, label.field > select { max-width: 420px; }
 /* ---------------------------------------------------------------- 设置页 */
 /* 设置页：横版标签页切换 */
 .settings-tabs {
-  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px;
+  display: flex; flex-wrap: wrap; gap: 8px 8px; margin-bottom: 20px;
   border-bottom: 1px solid var(--border-soft); padding-bottom: 14px;
 }
 .set-tab {
@@ -1077,7 +1077,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .ov-side > #posMgmtCard { order: 3; grid-column: 1 / -1; }
 }
 @media (max-width: 1080px) {
-  .settings-tabs { gap: 5px; padding-bottom: 10px; }
+  .settings-tabs { gap: 8px; padding-bottom: 10px; }
   .set-tab { padding: 7px 11px; font-size: 12px; }
   .set-side .conn-panel { max-width: 420px; }
   .topbar { flex-wrap: wrap; gap: 10px 16px; }
@@ -1446,7 +1446,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
      其余卡片顺序：盈亏 → 机会榜 → 持仓管理员（持仓管理员见下方 order:3）。
      align-items 必须覆盖基础样式的 start → stretch，否则 flex column 下子项不拉伸、
      各卡宽度随内容变化而参差不齐；间距统一只由 gap 控制。 */
-  .overview-grid { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+  .overview-grid { display: flex; flex-direction: column; gap: 18px; align-items: stretch; }
   .ov-main, .ov-side { display: contents; }
   .ov-side .notif-card { order: -1; }
   /* 持仓管理员固定压在三卡最底部（手机端是纯竖向堆叠，只调整顺序） */
