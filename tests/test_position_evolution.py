@@ -266,6 +266,6 @@ def test_replay_validation_applies_improved_candidate():
     e._replay_validation_job()
     assert e.replay_validation_status()["passed"] is True
     assert e.position_tuning["gate"]["l2_passed"] is True
-    assert e.position_tuning["effective"]["reversal_composite"] != pytest.approx(
-        base["reversal_composite"]
+    assert e.position_tuning["effective"]["reversal_ema_bars"] != pytest.approx(
+        base["reversal_ema_bars"]
     )

@@ -1887,7 +1887,9 @@ class TradingEngine:
             if len(self.position_tuning.get("replay_cases") or []) < min_cases:
                 self._seed_replay_cases_from_history()
             candidates: list[dict] = []
-            for key in ("reversal_composite", "trail_atr_mult", "max_hold_bars"):
+            # reversal_ema_bars 是主要出场规则（趋势反转）的敏感度旋钮；
+            # reversal_composite 在回放里没有历史 composite，无法公平比较，故不探索。
+            for key in ("reversal_ema_bars", "trail_atr_mult", "max_hold_bars"):
                 lo, hi = TUNE_BOUNDS[key]
                 cur = float(prev.get(key, TUNE_DEFAULTS[key]))
                 for factor in (1 - 0.12, 1 + 0.12):
