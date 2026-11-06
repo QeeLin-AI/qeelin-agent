@@ -1810,14 +1810,13 @@ function renderStatus(s) {
     const totalUnreal = posAll.reduce(
       (a, x) => a + (x.unrealized == null ? 0 : Number(x.unrealized)), 0);
     if (posAll.length === 1) {
-      // 数量按量级取精度：144.4000 这种在 26px 下会把卡片撑满，
-      // 144.40 / 14440 / 0.0432 才是人真正想看的位数
-      const q = Math.abs(Number(p.qty) || 0);
-      const qtyTxt = q >= 1000 ? fmt(p.qty, 0) : q >= 1 ? fmt(p.qty, 2) : fmt(p.qty, 4);
-      $('position').textContent = `${sideCn(p.side)} ${qtyTxt}`;
-      $('position').className = p.side === 'LONG' ? 'up' : 'down';
+      // 单笔：大字放单笔浮动盈亏（下方小字再放开仓价与开仓数量）
+      const u = p.unrealized == null ? null : Number(p.unrealized);
+      $('position').textContent = u == null ? '—' : `${u >= 0 ? '+' : ''}${fmt(u)}`;
+      $('position').className = u == null ? '' : (u >= 0 ? 'up' : 'down');
       posSym.textContent = shortSym(p.symbol || s.symbol) || '—';
     } else {
+      // 多笔：大字放综合浮盈亏（下方小字放品种名称，点卡片跳交易页）
       $('position').textContent =
         `${totalUnreal >= 0 ? '+' : ''}${fmt(totalUnreal)}${known ? '' : '*'}`;
       $('position').className = totalUnreal >= 0 ? 'up' : 'down';
@@ -1857,12 +1856,17 @@ function renderStatus(s) {
         + `<i class="pm-dot"></i>巡检 <span class="pm-time">${esc(at)}</span>`
         + ` <span class="pm-age">${age}s 前</span> · ${tail}</span>`;
     }
-    // 合计已经放在大字里了，这行只报「哪几个品种」，超过 3 个折成 +N，不再拼一遍盈亏
-    const head = posAll.length === 1
-      ? `开仓 ${esc(fmtPx(p.entry))} · 浮盈亏 ${esc(fmt(p.unrealized))}`
-      : posAll.slice(0, 3).map((x) => esc(shortSym(x.symbol))).join(' / ')
-        + (posAll.length > 3 ? ` +${posAll.length - 3}` : '')
+    // 单笔：下方小字放「开仓价 + 开仓数量」；多笔：下方小字放「品种名称」
+    let head;
+    if (posAll.length === 1) {
+      const q = Math.abs(Number(p.qty) || 0);
+      const qtyTxt = q >= 1000 ? fmt(p.qty, 0) : q >= 1 ? fmt(p.qty, 2) : fmt(p.qty, 4);
+      head = `开仓价 ${esc(fmtPx(p.entry))} · 开仓量 ${esc(qtyTxt)}`;
+    } else {
+      head = posAll.slice(0, 4).map((x) => esc(shortSym(x.symbol))).join(' / ')
+        + (posAll.length > 4 ? ` +${posAll.length - 4}` : '')
         + (known ? '' : ' · 部分待报价');
+    }
     $('posSub').innerHTML = `${head}<br>${guardLine}`;
   } else {
     $('position').textContent = '空仓';
