@@ -375,8 +375,20 @@ html[data-theme="light"] .topbar {
 .seg:hover { border-color: var(--accent-line); color: var(--text); }
 .seg.sel { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 650; }
 .pos-tabs { display: flex; gap: 6px; margin: 0 0 14px; }
+/* 持仓选项卡选中态：深红 #92000A 实底 + 白字（浅色/深色主题都清晰），
+   只作用于 .pos-tabs，不影响交易所选择等其它 .seg 按钮 */
+.pos-tabs .seg.sel {
+  background: #92000A;
+  border-color: #92000A;
+  color: #fff;
+}
+.pos-tabs .seg.sel:hover {
+  background: #a8000b;
+  border-color: #a8000b;
+  color: #fff;
+}
 .pos-tabs .seg .tab-count { font-size: 10.5px; color: var(--faint); font-weight: 500; }
-.pos-tabs .seg.sel .tab-count { color: var(--accent); }
+.pos-tabs .seg.sel .tab-count { color: rgba(255, 255, 255, .78); }
 .pos-pane { min-width: 0; }
 .tf-group { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border-soft); }
 .tf { border: 0; background: transparent; color: var(--muted); font: 550 11.5px/1 var(--font); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
