@@ -249,7 +249,7 @@ class PositionConfig:
     # off    : 关闭全部自迭代
     # stats  : L1，按退出规则归因的统计校准（只调连续参数，不碰动作）
     # replay : L2，L1 提议必须先通过反事实回放才落地
-    # llm    : L3，允许 LLM 提议参数/动作；须 L2 门控通过且稳定期达标
+    # llm    : L3，允许 LLM 提议参数/动作；须 L2 门控通过（默认不再设稳定等待期）
     evolution_mode: str = "stats"
     # L1：单个退出规则至少多少笔样本才允许调它（全局仍受 MIN_SAMPLES=20 约束）
     evolution_rule_min_samples: int = 8
@@ -263,8 +263,8 @@ class PositionConfig:
     evolution_replay_min_median_delta: float = 0.0
     # L2：候选最差单笔 R 相对当前允许的最大恶化
     evolution_replay_max_worst_delta: float = 0.2
-    # L2 门控通过后，需稳定运行多少天，才允许评估 L3
-    evolution_l2_stable_days: int = 14
+    # L2 门控通过后需稳定运行多少天才评估 L3；0 = 不等待（默认），L2 通过即直接进入 L3
+    evolution_l2_stable_days: int = 0
     # L3：总开关（默认关；即使打开也必须先过 L2 门控）
     evolution_llm_enabled: bool = False
     # L3：是否允许 LLM 修改退出动作（默认关；开启后仍默认只允许更保守方向）

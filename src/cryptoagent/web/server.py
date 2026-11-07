@@ -1940,7 +1940,7 @@ class WebApp:
             "evolution_replay_window": int(getattr(p, "evolution_replay_window", 100)),
             "evolution_replay_min_median_delta": float(getattr(p, "evolution_replay_min_median_delta", 0.0)),
             "evolution_replay_max_worst_delta": float(getattr(p, "evolution_replay_max_worst_delta", 0.2)),
-            "evolution_l2_stable_days": int(getattr(p, "evolution_l2_stable_days", 14)),
+            "evolution_l2_stable_days": int(getattr(p, "evolution_l2_stable_days", 0)),
             "evolution_llm_enabled": bool(getattr(p, "evolution_llm_enabled", False)),
             "evolution_llm_allow_action": bool(getattr(p, "evolution_llm_allow_action", False)),
             "evolution_llm_allow_loosen": bool(getattr(p, "evolution_llm_allow_loosen", False)),
@@ -2003,7 +2003,7 @@ class WebApp:
             if mode not in ("off", "stats", "replay", "llm"):
                 raise ApiError("evolution_mode 只能是 off / stats / replay / llm", 400)
             staged["evolution_mode"] = mode
-        # 门控：L3 必须先过 L2 回放 + 稳定期；不满足直接 400，不写半套配置
+        # 门控：L3 必须先过 L2 回放；稳定等待期默认 0（L2 通过即放行），不满足直接 400
         target_mode = staged.get("evolution_mode", str(getattr(p, "evolution_mode", "stats")))
         if target_mode == "llm":
             gate = self.engine.position_tuning.get("gate") or {}
@@ -2020,7 +2020,7 @@ class WebApp:
                 raise ApiError("L3 需要显式开启 evolution_llm_enabled", 400)
             days = int(payload.get(
                 "evolution_l2_stable_days",
-                staged.get("evolution_l2_stable_days", getattr(p, "evolution_l2_stable_days", 14)),
+                staged.get("evolution_l2_stable_days", getattr(p, "evolution_l2_stable_days", 0)),
             ))
             since = float(gate.get("l2_stable_since") or 0.0)
             if days > 0 and since and (time.time() - since) < days * 86400:

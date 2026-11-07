@@ -164,7 +164,17 @@ def test_l3_blocked_without_l2_gate():
     e, _base = _bare_engine("llm")
     e.cfg.position.evolution_llm_enabled = True
     assert e._llm_evolution_allowed() is False
-    e.position_tuning["gate"] = {"l2_passed": True, "l2_stable_since": time.time() - 30 * 86400}
+    # L2 门控通过后立即放行：不再要求稳定运行 ≥14 天（默认等待期已取消）
+    e.position_tuning["gate"] = {"l2_passed": True, "l2_stable_since": time.time()}
+    assert e._llm_evolution_allowed() is True
+
+
+def test_l3_stable_days_zero_means_no_wait():
+    """默认稳定等待期 0：L2 通过后即使 l2_stable_since 缺失也不等待。"""
+    e, _base = _bare_engine("llm")
+    e.cfg.position.evolution_llm_enabled = True
+    assert e.cfg.position.evolution_l2_stable_days == 0
+    e.position_tuning["gate"] = {"l2_passed": True, "l2_stable_since": 0.0}
     assert e._llm_evolution_allowed() is True
 
 

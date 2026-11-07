@@ -1991,7 +1991,11 @@ class TradingEngine:
             pass
 
     def _llm_evolution_allowed(self) -> bool:
-        """L3 门控：L2 通过 + 稳定期达标 + 用户显式开启，三者缺一不可。"""
+        """L3 门控：L2 通过 + 用户显式开启，二者缺一不可。
+
+        稳定等待期（evolution_l2_stable_days）默认 0：L2 门控通过后立即允许进入 L3；
+        仅在显式配置 > 0 时才要求 L2 通过后继续稳定运行 N 天（保留可逆的观察期）。
+        """
         cfg = getattr(self.cfg, "position", None)
         if cfg is None or self._evolution_mode() != "llm":
             return False
@@ -2000,7 +2004,7 @@ class TradingEngine:
         gate = self.position_tuning.get("gate") or {}
         if not bool(gate.get("l2_passed")):
             return False
-        days = int(getattr(cfg, "evolution_l2_stable_days", 14) or 0)
+        days = int(getattr(cfg, "evolution_l2_stable_days", 0) or 0)
         since = float(gate.get("l2_stable_since") or 0.0)
         if days > 0 and since and (time.time() - since) < days * 86400:
             return False
