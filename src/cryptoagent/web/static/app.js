@@ -909,13 +909,22 @@ async function loadSymbols() {
   } catch (e) { console.error(e); }
 }
 
+// 交易对展示与拆分：BTCUSDT → { pair: 'BTC/USDT', base: 'BTC' }。
+// base 用作数量的单位（9.0115 BTC），pair 用于标题行；计价资产从长到短匹配，避免 USD 抢先命中 USDT。
+const PAIR_QUOTES = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'USD', 'BTC', 'ETH'];
+function splitPair(sym) {
+  const s = String(sym || '').toUpperCase();
+  for (const q of PAIR_QUOTES) {
+    if (s.endsWith(q) && s.length > q.length) {
+      const base = s.slice(0, -q.length);
+      return { pair: `${base}/${q}`, base };
+    }
+  }
+  return { pair: s, base: '' };
+}
 // BTCUSDT → BTC/USDT，BTCUSDC → BTC/USDC
 function prettySymbol(sym) {
-  const s = String(sym || '');
-  for (const q of ['USDT', 'USDC']) {
-    if (s.endsWith(q) && s.length > q.length) return `${s.slice(0, -q.length)}/${q}`;
-  }
-  return s;
+  return splitPair(sym).pair;
 }
 
 function syncSymbolSelect(symbol) {
@@ -2473,8 +2482,11 @@ function renderDecision(d, switchTab = true) {
   const oIsBuy = oSideRaw === 'LONG' || oSideRaw === 'BUY';
   const oSideCn = oIsSell ? '做空' : (oIsBuy ? '做多' : '');
   const oSideCls = oIsSell ? 'down' : 'up';
+  // 首行：BNB/USDT 做空 9.0115 BNB（品种 动作 数量 基础资产）
+  const oPair = splitPair(o && o.symbol);
+  const oUnit = oPair.base ? ` ${esc(oPair.base)}` : '';
   const orderHtml = o
-    ? `<div class="order-lead"><b class="${oSideCls}">${esc(o.symbol)} ${oSideCn} 数量 ${fmt(o.quantity, 4)}</b></div>
+    ? `<div class="order-lead"><b class="${oSideCls}">${esc(oPair.pair)} ${oSideCn} ${fmt(o.quantity, 4)}${oUnit}</b></div>
       <div class="df-fields three">
         <div class="df-field"><span class="df-label">名义</span><span class="df-val">${fmt(o.notional_usd)} USDT</span></div>
         <div class="df-field"><span class="df-label">杠杆</span><span class="df-val">${fmt(o.leverage, 1)}x</span></div>
