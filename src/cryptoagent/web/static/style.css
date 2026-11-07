@@ -203,18 +203,21 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
   align-self: flex-start; font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
   color: var(--faint); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
 }
-/* 进程运行时长：红色胶囊，顶栏常驻。PC 端在价格区右侧的空白带（与右侧按钮同高），
-   移动端挪到「熔断」按钮之后。用来判断「服务是不是刚重启过」——
-   很多异常（持仓失管、缓存变冷）第一件事就是确认它是不是刚起来。 */
+/* 进程运行时长：与顶栏其它状态标签同构的中性胶囊。运行时长是「服务活着」的
+   中性信息，红色留给涨跌与危险操作；前置青色状态点提供辨识度并呼应品牌。
+   PC 端在价格区右侧的空白带，移动端挪到「熔断」按钮之后。 */
 .uptime {
-  align-items: center; gap: 6px;
-  font-size: 11.5px; font-weight: 650; color: #8C1C2B;
-  border: 1px solid var(--border); border-radius: 99px; padding: 4px 11px;
-  background: rgba(140, 28, 43, .07); white-space: nowrap;
+  align-items: center; gap: 7px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-2);
+  border: 1px solid var(--border-soft); border-radius: 99px; padding: 4px 11px;
+  background: var(--surface-2); white-space: nowrap;
   font-variant-numeric: tabular-nums; letter-spacing: .01em;
 }
-/* 暗色主题下酒红偏暗，提亮一档保证对比度（仍保持酒红基调） */
-html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110, .10); }
+.uptime::before {
+  content: ""; flex: none;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .uptime.pc-only { display: inline-flex; }
 .uptime.m-only { display: none; }
 @media (max-width: 860px) {
