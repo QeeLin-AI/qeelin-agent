@@ -263,6 +263,8 @@ html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110,
 .price-block { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .price-row { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
 .price-meta { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+/* 连接状态胶囊落在价格下方这一行：收紧内边距，保持该行与上方价格行等高、左边缘对齐 */
+.price-meta .badge { padding: 2px 8px; font-size: 10.5px; line-height: 1.35; flex: none; }
 .price { font-size: 19px; font-weight: 700; letter-spacing: -.03em; }
 .price.is-loading { font-size: 13px; font-weight: 500; color: var(--muted); }
 .pct { font-size: 12.5px; font-weight: 650; white-space: nowrap; }
@@ -1110,6 +1112,26 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 }
 @media (max-width: 860px) {
   body { padding-left: 0; }
+  /* 手机端顶栏只保留关键状态与操作：数据源 / 模型两个胶囊让位；
+     熔断是安全开关，单独放大并强化危险态（PC 端保持原样）。 */
+  #dataSource, #llmTag { display: none; }
+  #haltBtn {
+    height: 38px; padding: 0 16px;
+    font-size: 13px; font-weight: 700;
+    color: var(--up); border-color: var(--up);
+    background: rgba(242, 99, 111, .12);
+  }
+  #haltBtn.selected {
+    color: var(--up); border-color: var(--up);
+    background: rgba(242, 99, 111, .24);
+  }
+  /* 保证金占用计算提示：✓ 与说明文字固定首行同行，文字只在剩余宽度内换行，
+     不再整块掉到下一行造成错位。仅作用于设置页该提示条。 */
+  #set-params .risk-link { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
+  #set-params .risk-link .rl-ico { flex: 0 0 auto; line-height: 1.6; }
+  #set-params #riskMarginRuleText {
+    flex: 1 1 auto; min-width: 0; line-height: 1.6; overflow-wrap: anywhere;
+  }
   .sidebar { position: static; width: auto; flex-direction: row; align-items: center; gap: 12px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
   .side-brand { padding: 0 12px 0 0; border-bottom: 0; border-right: 1px solid var(--border-soft); }
   .side-scroll { display: flex; gap: 10px; padding: 0; overflow-x: auto; flex: 1; min-height: 0; }
@@ -1489,8 +1511,6 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 数据源 / 模型是判断「当前跑的是什么」的关键信息，窄屏不再隐藏：
      状态组整体换到第二行、左对齐排布，用截断上限防溢出。 */
   .top-right { flex: 1 1 100%; justify-content: flex-start; gap: 6px 8px; }
-  .top-right .tag { max-width: 140px; font-size: 10.5px; padding: 3px 8px; }
-  .top-right .badge { font-size: 10.5px; padding: 3px 8px; }
   .top-right .btn.sm { min-height: 32px; }
   /* 设置页 5 个分区改横向滚动，不再折成两行占用高度 */
   .settings-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }

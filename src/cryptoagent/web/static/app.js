@@ -1854,7 +1854,7 @@ function renderStatus(s) {
   badge.className = `badge ${s.mode === 'live' ? (s.testnet ? 'paper' : 'live') : 'paper'}`;
 
   $('haltBtn').classList.toggle('selected', s.halt);
-  $('haltBtn').textContent = s.halt ? '已熔断' : '熔断';
+  $('haltBtn').textContent = s.halt ? '解除熔断' : '紧急熔断';
 
   // 数据来源：解锁后自动切到交易所账户，不再显示本地模拟账本
   const ex = s.account_view === 'exchange';
