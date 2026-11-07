@@ -624,7 +624,7 @@ const SETTING_LABELS = {
   // —— 持仓管理员 position（与「持仓管理员 · LLM 接入」表单标签一致）——
   auto_tune: '退出参数自校准',
   llm_explain: '规则动作解释',
-  llm_shadow: '影子复核',
+  llm_shadow: '独立复核',
   llm_offpeak_only: '峰时跳过 LLM',
   bars_from_index: '持有根数按 K 线计数',
   peak_drawdown_exit_enabled: '峰值回撤退出',
@@ -1265,7 +1265,7 @@ function renderPositionManagement(d) {
   const shadow = (d && d.position_llm_shadow) || [];
   const guard = (d && d.position_guard) || {};
   const tune = (d && d.position_tuning) || {};
-  // 最近一次动作 / 影子记录常驻，不再被 30 秒后的 hold 巡检冲掉
+  // 最近一次动作 / 独立复核记录常驻，不再被 30 秒后的 hold 巡检冲掉
   const has = (m.action && m.action !== 'hold') || !!last.action || shadow.length > 0
     || Number(tune.samples || 0) > 0;
   card.classList.toggle('hidden', !has);
@@ -1277,7 +1277,7 @@ function renderPositionManagement(d) {
     const s = Math.max(0, Math.round(Date.now() / 1000 - t));
     return s < 60 ? `${s}s 前` : (s < 3600 ? `${Math.floor(s / 60)}m 前` : `${Math.floor(s / 3600)}h 前`);
   };
-  const actCn = (a) => ({ hold: '持有', tighten: '收紧止损', close: '退出' }[a] || a || '--');
+  const actCn = (a) => ({ hold: '持有', tighten: '收紧止损', close: '平仓' }[a] || a || '--');
   let html = '';
 
   if (last.action) {
@@ -1305,7 +1305,7 @@ function renderPositionManagement(d) {
   }
 
   if (shadow.length) {
-    html += `<div class="pm-block"><div class="pm-block-title">LLM 影子复核 <span class="muted">只读对照</span></div><div class="pm-rows">`;
+    html += `<div class="pm-block"><div class="pm-block-title">LLM 独立复核 <span class="muted">只读对照</span></div><div class="pm-rows">`;
     for (const r of shadow.slice(-5).reverse()) {
       html += `<span class="pm-row"><b>${esc(r.symbol || '')}</b>
         <span>规则 ${esc(actCn(r.rule_action))}</span>
@@ -1362,17 +1362,19 @@ function renderPositionManagement(d) {
 function renderDecisionShadow(d) {
   const box = $('decisionShadowBox');
   if (!box) return;
-  // 与设置页原「影子对照」同源（status.position_llm_shadow = llm_shadow_log[-10:]）：
+  // 与设置页「独立复核」开关同源（status.position_llm_shadow = llm_shadow_log[-10:]）：
   // 记录规则动作与 LLM 独立意见对照，纯只读留档，不改 action。移到决策页后由状态轮询刷新。
   const rows = (d && d.position_llm_shadow) || [];
+  // 动作枚举统一显示中文（与持仓管理员卡片同一套译名）
+  const actCn = (a) => ({ hold: '持有', tighten: '收紧止损', close: '平仓' }[a] || a || '--');
   box.innerHTML = rows.length
-    ? `<b>影子对照（最近 ${rows.length} 条）</b><br>`
+    ? `<b>独立复核（最近 ${rows.length} 条）</b><br>`
       + rows.slice(-5).reverse().map((r) =>
-        `${esc(r.symbol || '')} 规则 ${esc(r.rule_action || '')} / LLM ${esc(r.llm_action || '')}`
+        `${esc(r.symbol || '')} 规则 ${esc(actCn(r.rule_action))} / LLM ${esc(actCn(r.llm_action))}`
         + ` · 置信 ${Number(r.confidence || 0).toFixed(2)}${r.degraded ? ' · 降级' : ''}`
         + `<br><span class="muted">${esc(r.reason || '')}</span>`
       ).join('<br>')
-    : '暂无影子对照记录（开启「影子复核」并产生持仓动作后显示）';
+    : '暂无独立复核记录（开启「独立复核」并产生持仓动作后显示）';
 }
 
 function renderResearchAuto(a) {

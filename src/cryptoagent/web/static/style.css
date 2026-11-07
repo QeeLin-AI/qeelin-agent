@@ -925,7 +925,7 @@ label.field > input, label.field > select { max-width: 420px; }
 #tab-decision .proposal-grid { gap: 8px; margin: 11px 0; }
 #tab-decision .proposal-grid .item { padding: 10px 12px; }
 
-/* 决策页：多品种扫描 + 影子复核 并排等高，内容溢出滚动（仅 PC；≤860 纵向堆叠） */
+/* 决策页：多品种扫描 + 独立复核 并排等高，内容溢出滚动（仅 PC；≤860 纵向堆叠） */
 .decision-duo { display: grid; grid-template-columns: 1fr; min-width: 0; }
 .decision-duo > .card { min-width: 0; }
 @media (min-width: 861px) {
@@ -1344,15 +1344,20 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
     border-radius: 0; min-height: 0; padding: 9px 0; gap: 10px;
   }
   #set-llm .set-field:last-child { border-bottom: 0; }
+  /* 标签固定列宽（clamp 随屏宽微调）：同组所有字段共用同一列宽，
+     输入框 / 下拉框因此左边缘对齐、宽度完全相等 */
   #set-llm .set-label {
-    flex: 0 1 auto; max-width: 50%; font-size: 12px; font-weight: 600;
+    flex: 0 0 clamp(78px, 23vw, 92px);
+    width: clamp(78px, 23vw, 92px);
+    max-width: clamp(78px, 23vw, 92px);
+    font-size: 12px; font-weight: 600;
     white-space: normal; line-height: 1.35;
   }
   #set-llm .set-field > select,
   #set-llm .set-field > input {
     flex: 1 1 0; width: auto; max-width: none; min-width: 0; margin: 0;
   }
-  #set-llm .set-field select { height: 38px; font-size: 13px; padding: 0 26px 0 10px; }
+  #set-llm .set-field select { height: 38px; font-size: 12.5px; padding: 0 26px 0 10px; }
   #set-llm .set-field > input[type="text"] { height: 38px; font-size: 16px; }
   #set-llm .set-field > input[type="number"] {
     height: 38px; font-size: 16px; text-align: right; font-variant-numeric: tabular-nums;
@@ -1573,7 +1578,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 }
 
 /* ---------------------------------------------------------------- 持仓管理员卡片 */
-/* 最近一次动作（含 LLM 解释）常驻、多仓巡检、影子对照。通用样式，
+/* 最近一次动作（含 LLM 解释）常驻、多仓巡检、独立复核对照。通用样式，
    双主题共用变量；窄屏靠 flex-wrap 自动折行，不引入横向滚动。 */
 .pm-block { margin: 0 0 12px; padding: 0 0 10px; border-bottom: 1px dashed var(--border-soft); }
 .pm-block:last-of-type { border-bottom: 0; }

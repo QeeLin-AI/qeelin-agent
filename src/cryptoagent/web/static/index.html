@@ -226,7 +226,7 @@
 
     <div class="card">
       <div class="card-head">
-        <h2>LLM 影子复核</h2>
+        <h2>LLM 独立复核</h2>
         <span class="muted">规则动作 vs LLM 独立意见（只读对照，不改平仓）</span>
       </div>
       <div id="decisionShadowBox" class="set-hint"></div>
@@ -741,7 +741,7 @@
             <label class="switch-row">
               <span class="switch-label">
                 <span class="t">规则动作解释</span>
-                <span class="d">开仓后的移动止损 / 时间止损 / 反转退出发生时，让 LLM 写一句权衡说明</span>
+                <span class="d">开仓后的移动止损 / 时间止损 / 趋势反转退出发生时，让 LLM 写一句权衡说明</span>
               </span>
               <label class="switch"><input type="checkbox" id="posLlmExplain" /><span class="track"><span class="thumb"></span></span></label>
             </label>
@@ -834,14 +834,14 @@
             <label class="switch-row">
               <span class="switch-label">
                 <span class="t">L3：允许 LLM 修改退出动作</span>
-                <span class="d">默认只允许更保守方向（hold→tighten/close）；把 close 放宽为 hold 需另开下方「允许放宽」</span>
+                <span class="d">默认只允许更保守的方向（持有 → 收紧止损 / 平仓）；反向放宽（平仓 → 持有 / 收紧止损）需另开下方「允许放宽」</span>
               </span>
               <label class="switch"><input type="checkbox" id="posEvolutionAllowAction" /><span class="track"><span class="thumb"></span></span></label>
             </label>
             <label class="switch-row">
               <span class="switch-label">
                 <span class="t">L3：允许放宽退出动作</span>
-                <span class="d">允许 LLM 把 close 放宽为 hold/tighten；风险最高，默认关闭</span>
+                <span class="d">允许 LLM 把「平仓」放宽为「持有 / 收紧止损」；风险最高，默认关闭</span>
               </span>
               <label class="switch"><input type="checkbox" id="posEvolutionAllowLoosen" /><span class="track"><span class="thumb"></span></span></label>
             </label>
