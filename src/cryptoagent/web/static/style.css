@@ -780,11 +780,57 @@ label.field > input, label.field > select { max-width: 420px; }
 .settings-content { min-width: 0; }
 .settings-content > .card { display: none; }
 .settings-content > .card.active { display: block; }
+/* 设置页统一内容宽度：5 个子页（交易链接/交易参数/模型设置/通知告警/情绪新闻）
+   共用同一上限，切 tab 时卡片宽度不跳变；表单型内容也不会被拉到 1300+ px。 */
+.settings-content > .card { max-width: 1040px; }
 /* 模型设置：外层 panel 仅作容器（保持标签页切换契约），内部拆成两张独立卡片 */
 #set-llm.set-split { background: transparent; border: none; box-shadow: none; padding: 0; margin-bottom: 0; }
-#set-llm.set-split > .card { margin-bottom: 18px; }
+#set-llm.set-split > .card { margin-bottom: 20px; }
 #set-llm.set-split > .card:last-child { margin-bottom: 0; }
-#set-llm.set-split > .card > .actions { margin-top: 16px; }
+#set-llm.set-split > .card > .actions { margin-top: 18px; }
+/* 模型设置（#set-llm）：PC 端排版
+   表单铺满 1100px 会把每个字段拉到 540~630px、控件只占一角，右侧大片死白；
+   这里给卡片和字段都设宽度上限，让内容集中、控件比例正常。
+   字号 / 开关 / 按钮尺寸与移动端保持同一套层级（移动端断点内会再覆盖布局）。 */
+#set-llm .set-group { margin-top: 22px; }
+#set-llm .set-group-title {
+  font-size: 11px; letter-spacing: .06em; margin-bottom: 12px; padding-top: 14px;
+}
+#set-llm .set-grid,
+#set-llm .set-grid.two-col {
+  /* auto-fill（不是 auto-fit）：保留空列，字段就不会被拉伸到半屏；
+     260px 下限保证 3 个字段在同一行（1040px 卡片 ≈ 996px 内容 → 3 列 × 325px）。 */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  justify-content: start;
+}
+#set-llm .set-field { min-height: 80px; padding: 11px 13px; gap: 7px; }
+#set-llm .set-label { font-size: 12px; }
+/* Base URL / API Key 的输入框不必铺满整卡：按「约两列字段宽」收住，
+   右边缘与上方字段区大致对齐，长 URL 依然够用。 */
+#set-llm .set-box { max-width: 620px; }
+#set-llm .set-field > select,
+#set-llm .set-field > input { width: 100%; max-width: none; }
+#set-llm .set-switch-list .switch-row { padding: 12px 0; }
+#set-llm .switch-row .switch-label .t { font-size: 13px; }
+#set-llm .switch-row .switch-label .d { font-size: 12px; line-height: 1.55; }
+#set-llm .switch { width: 44px; height: 24px; }
+#set-llm .switch .thumb { width: 18px; height: 18px; }
+#set-llm .switch input:checked + .track .thumb { transform: translateX(20px); }
+#set-llm .card > p.muted { font-size: 13px; line-height: 1.7; }
+#set-llm .actions { gap: 10px; }
+#set-llm .actions > .btn { min-width: 96px; }
+/* 设置页通用（仅大屏）：
+   1) 长文本输入块（Webhook / Token / Key）限宽 620px，与模型设置页一致，
+      不再把输入框拉到 1000+ px；
+   2) 「配置方案」这类 2 字段网格，auto-fit 会把两个字段各拉到半屏，改 auto-fill 收住。
+   小屏保持原有布局（容器本来就窄于 620px）。 */
+@media (min-width: 1281px) {
+  .settings-content .set-box { max-width: 620px; }
+  #set-params .set-grid.two-col {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 320px));
+    justify-content: start;
+  }
+}
 .set-side { min-width: 0; }
 .set-group { margin-top: 20px; }
 .card-head + .set-group, .set-group:first-child { margin-top: 0; }
