@@ -14,11 +14,12 @@
   --border: #2a303d;
   --border-soft: #1e232e;
 
-  /* 字 */
+  /* 字：四级明度递减，最弱的 --faint 也满足正文 4.5:1。
+     层级靠明度建立，而不是把辅助文字压到 10px 以下。 */
   --text: #eceef4;
-  --text-2: #a9b1c2;
-  --muted: #7f889b;
-  --faint: #5c6577;
+  --text-2: #b6bfd0;
+  --muted: #98a2b5;
+  --faint: #7e889e;
 
   /* 强调与语义：强调色 = 蒂芙尼蓝 (Tiffany Blue) */
   --accent: #0ABAB5;
@@ -27,6 +28,9 @@
   --accent-line: rgba(10, 186, 181, .42);
   --up: #f2636f;          /* 涨 / 多方 / 危险 */
   --down: #2fc08a;        /* 跌 / 空方 / 正常 */
+  /* 指标卡是深色实底，方向色换成浅色版本才能与白字区分且保持对比度 */
+  --up-on-dark: #ffd0d6;
+  --down-on-dark: #a9f0ce;
   --ok: #2fc08a;
   --amber: #e9a23b;
   --blue: #5b8cff;
@@ -63,8 +67,8 @@ html[data-theme="light"] {
   --border-soft: #e9edf3;
   --text: #171b26;
   --text-2: #3d4658;
-  --muted: #6c768a;
-  --faint: #98a2b3;
+  --muted: #4e586b;
+  --faint: #5c6678;
   --accent: #0b8f8b;
   --accent-hover: #0a7d79;
   --accent-soft: rgba(11, 143, 139, .10);
@@ -82,6 +86,22 @@ html[data-theme="light"] {
 /* ---------------------------------------------------------------- 基础 */
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+
+/* 可读性基线：flex / grid 子项允许收缩，长品种名、订单号、URL 一律换行，
+   避免把卡片撑出视口或挤压相邻元素。各断点内的专用规则仍在后面生效。 */
+main, section.panel, .card, .card-head, .card-head h2, .page-head-main,
+.stat, .set-box, .conn-panel, .opp-panel, .notif-card, .pnl-card,
+.set-field, .set-row, .trade-main, .ov-main, .ov-side { min-width: 0; }
+.page-sub, .set-hint, .conn-sub, .warn, .ex-status, .pm-explain,
+.notif-msg, .notif-title, .muted.center, .page-head h1, h2, h3 {
+  overflow-wrap: anywhere;
+}
+/* 统一空态：留白与行高足够，弱于内容但不会读成「加载失败」。
+   JS 动态渲染的空态同样落在 .muted.center 上，一套样式覆盖五页。 */
+.muted.center {
+  padding: 18px 14px; line-height: 1.7; font-size: 12.5px;
+  color: var(--muted); overflow-wrap: anywhere;
+}
 body {
   margin: 0;
   padding-left: 240px;
@@ -180,7 +200,7 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
   margin-left: .26em; transform: translateY(-.4em);
 }
 .ver {
-  align-self: flex-start; font-size: 10px; font-weight: 600; letter-spacing: .04em;
+  align-self: flex-start; font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
   color: var(--faint); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
 }
 /* 进程运行时长：红色胶囊，顶栏常驻。PC 端在价格区右侧的空白带（与右侧按钮同高），
@@ -205,7 +225,7 @@ html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110,
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 12px; }
 .nav-group + .nav-group { margin-top: 22px; }
 .nav-label {
-  font-size: 10px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: var(--faint); padding: 0 10px; margin-bottom: 9px;
 }
 .tabs { display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; }
@@ -223,7 +243,7 @@ html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110,
 .tab.active { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
 .tab.active .nav-ico { opacity: 1; }
 .side-foot { padding: 14px 14px 17px; border-top: 1px solid var(--border-soft); }
-.side-foot-note { font-size: 10.5px; color: var(--faint); margin-bottom: 10px; letter-spacing: .02em; }
+.side-foot-note { font-size: 11px; color: var(--faint); margin-bottom: 10px; letter-spacing: .02em; }
 .side-foot .btn { width: 100%; }
 .theme-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .theme-btn .theme-ico { font-size: 13px; line-height: 1; }
@@ -246,14 +266,14 @@ html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110,
 .price { font-size: 19px; font-weight: 700; letter-spacing: -.03em; }
 .price.is-loading { font-size: 13px; font-weight: 500; color: var(--muted); }
 .pct { font-size: 12.5px; font-weight: 650; white-space: nowrap; }
-.pct-span { font-size: 10.5px; color: var(--faint); margin-left: 2px; white-space: nowrap; }
+.pct-span { font-size: 11px; color: var(--faint); margin-left: 2px; white-space: nowrap; }
 /* 顶栏价格跟随本品种 24h 涨跌着色（涨红 / 跌绿，沿用 .pct 的 up/down 信号，纯 CSS，不依赖 JS） */
 .price-row:has(.pct.up) .price:not(.is-loading) { color: var(--up); }
 .price-row:has(.pct.down) .price:not(.is-loading) { color: var(--down); }
 .live-dot { font-size: 9px; color: var(--faint); transition: color .2s; }
 .live-dot.on { color: var(--ok); }
 .live-dot.err { color: var(--up); }
-.live-ts { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.live-ts { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .symbol-select {
   background: transparent; border: 1px solid transparent; color: var(--text);
   font: 650 14px/1.4 var(--font); padding: 2px 20px 2px 6px;
@@ -272,7 +292,7 @@ html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110,
   max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .badge {
-  font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
   padding: 4px 10px; border-radius: 99px;
   background: var(--surface-2); color: var(--muted); border: 1px solid var(--border-soft);
 }
@@ -291,15 +311,15 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 }
 .eyebrow {
   display: inline-flex; align-items: center; gap: 7px;
-  font-size: 10px; font-weight: 700; letter-spacing: .17em;
-  text-transform: uppercase; color: var(--accent); margin-bottom: 10px;
+  font-size: 11px; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 9px;
 }
 .eyebrow::before {
   content: ""; width: 6px; height: 6px; border-radius: 50%;
   background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .page-head h1 { margin: 0; font-size: 27px; line-height: 1.2; font-weight: 700; letter-spacing: -.04em; }
-.page-sub { margin: 8px 0 0; font-size: 13px; color: var(--muted); max-width: 640px; }
+.page-sub { margin: 8px 0 0; font-size: 13px; line-height: 1.65; color: var(--muted); max-width: 640px; }
 .page-head-main { min-width: 0; }
 
 /* ---------------------------------------------------------------- 卡片 */
@@ -312,12 +332,12 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding-bottom: 14px; margin-bottom: 16px; border-bottom: 1px solid var(--border-soft);
 }
-.card-head h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.02em; white-space: nowrap; }
-.card-kicker { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.card-head h2 { margin: 0; min-width: 0; font-size: 15px; font-weight: 650; letter-spacing: -.02em; white-space: normal; overflow-wrap: anywhere; }
+.card-kicker { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
 .actions, .card-head .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .divider {
   display: flex; align-items: center; gap: 12px; margin: 22px 0 14px;
-  font-size: 10px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; color: var(--faint);
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
 }
 .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--border-soft); }
 .divider > span + span { margin-left: -6px; }
@@ -333,7 +353,9 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 }
 .btn:hover { background: var(--surface-2); border-color: var(--accent-line); color: var(--text); }
 .btn:active { transform: translateY(1px); }
-.btn:disabled { opacity: .42; cursor: not-allowed; transform: none; }
+/* 禁用态统一：降对比且保持中性边框，hover 不再产生「可点」错觉 */
+.btn:disabled { opacity: .45; cursor: not-allowed; transform: none; border-color: var(--border); color: var(--muted); }
+.btn:disabled:hover { background: var(--surface); border-color: var(--border); color: var(--muted); }
 .btn.primary {
   background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650;
   box-shadow: 0 4px 14px rgba(10, 186, 181, .26);
@@ -343,7 +365,7 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 .btn.sm { height: 28px; padding: 0 10px; font-size: 11.5px; }
 /* 表格行内的操作按钮：多品种持仓每个品种一个「平仓」，尺寸要贴着行高 */
 .btn.xs { height: 22px; padding: 0 8px; font-size: 11px; border-radius: 6px; }
-.btn.danger { color: var(--up); border-color: var(--accent-line); background: var(--surface); }
+.btn.danger { color: var(--up); border-color: var(--up); background: var(--surface); }
 .btn.danger:hover { background: var(--surface-2); color: var(--up); border-color: var(--up); }
 .btn.ghost.danger { background: transparent; color: var(--up); border-color: var(--border); }
 .btn.ghost.danger:hover { background: var(--surface-2); border-color: var(--up); }
@@ -387,7 +409,7 @@ html[data-theme="light"] .topbar {
   border-color: #a8000b;
   color: #fff;
 }
-.pos-tabs .seg .tab-count { font-size: 10.5px; color: var(--faint); font-weight: 500; }
+.pos-tabs .seg .tab-count { font-size: 11px; color: var(--faint); font-weight: 500; }
 .pos-tabs .seg.sel .tab-count { color: rgba(255, 255, 255, .78); }
 .pos-pane { min-width: 0; }
 .tf-group { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border-soft); }
@@ -467,23 +489,25 @@ label.field > input, label.field > select { max-width: 420px; }
   padding: 18px 20px; min-height: 116px;
   display: flex; flex-direction: column; gap: 6px; box-shadow: var(--shadow-sm);
 }
-.stat label { font-size: 11.5px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
-.stat b { font-size: 24px; font-weight: 700; letter-spacing: -.035em; }
-.stat small { font-size: 11.5px; color: var(--faint); }
+.stat label { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .02em; line-height: 1.4; }
+.stat b { font-size: 24px; font-weight: 700; letter-spacing: -.035em; line-height: 1.25; overflow-wrap: anywhere; }
+.stat small { font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
 /* 总览 4 张指标卡：各一种深色彩色（纯 CSS，不依赖额外 class，不碰 index.html / app.js） */
 .stat-row > .stat {
   color: #fff; border-color: rgba(255, 255, 255, .08);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
 }
-.stat-row > .stat label { color: rgba(255, 255, 255, .82); }
-.stat-row > .stat small { color: rgba(255, 255, 255, .85); font-size: 13px; font-weight: 600; }
+.stat-row > .stat label { color: rgba(255, 255, 255, .88); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.stat-row > .stat small { color: rgba(255, 255, 255, .88); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .stat-row > .stat b {
-  color: #fff; font-size: 26px;
-  /* 兜底：数量/金额极端长时（如几万枚 DOGE）宁可显示省略号，也不让它撑破卡片 */
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #fff;
+  /* 数值不截断：金额/数量极端长时按字号自适应并换行，仍用等宽数字对齐 */
+  font-size: clamp(20px, 2vw, 26px); line-height: 1.25;
+  white-space: normal; overflow-wrap: anywhere;
 }
-.stat-row > .stat .up, .stat-row > .stat .down,
-.stat-row > .stat .long, .stat-row > .stat .short { color: #fff; }
+/* 深色实底上保留涨跌方向语义：用浅红/浅绿而不是把颜色全部刷成白 */
+.stat-row > .stat .up, .stat-row > .stat .long { color: var(--up-on-dark); }
+.stat-row > .stat .down, .stat-row > .stat .short { color: var(--down-on-dark); }
 .stat-row > .stat .src-chip { background: rgba(255, 255, 255, .18); color: #fff; border-color: rgba(255, 255, 255, .25); }
 .stat-row > .stat:nth-child(1) { background: #01847F; } /* 账户权益 — 马尔斯绿 */
 .stat-row > .stat:nth-child(2) { background: #900021; } /* 当日盈亏 — 勃艮第红 */
@@ -530,7 +554,7 @@ label.field > input, label.field > select { max-width: 420px; }
 }
 .src-chip {
   display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px;
-  font-size: 10px; font-weight: 600; letter-spacing: .02em; vertical-align: middle;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em; vertical-align: middle;
   background: var(--surface-3); color: var(--muted); border: 1px solid transparent;
 }
 .src-chip.ex { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
@@ -579,7 +603,7 @@ label.field > input, label.field > select { max-width: 420px; }
   background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px;
   padding: 12px 14px; display: flex; flex-direction: column; gap: 5px; min-width: 0;
 }
-.pnl-stat label { font-size: 10.5px; color: var(--muted); }
+.pnl-stat label { font-size: 11.5px; color: var(--muted); }
 .pnl-stat b { font-size: 16px; font-weight: 650; }
 .pnl-trades { display: flex; flex-direction: column; gap: 9px; max-height: 168px; overflow-y: auto; padding-right: 6px; }
 .pnl-row { display: grid; grid-template-columns: 92px 48px minmax(0, 1fr) 84px; align-items: center; gap: 10px; }
@@ -597,7 +621,7 @@ label.field > input, label.field > select { max-width: 420px; }
 /* minmax(0, 1fr)：纯 1fr 的最小值是 auto，格子里的 "+1,024.55" 会把所在列撑宽，
    同一行 7 个格子就变成七种宽度 —— 必须显式允许收缩到 0 */
 .cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
-.cal-weekdays { margin-bottom: 7px; font-size: 10px; font-weight: 700; color: var(--faint); text-align: center; letter-spacing: .08em; }
+.cal-weekdays { margin-bottom: 7px; font-size: 11px; font-weight: 700; color: var(--faint); text-align: center; letter-spacing: .04em; }
 .cal-cell {
   min-height: 52px; padding: 6px 8px; border-radius: 8px;
   border: 1px solid var(--border-soft); background: var(--surface-2);
@@ -605,7 +629,7 @@ label.field > input, label.field > select { max-width: 420px; }
   font-variant-numeric: tabular-nums;
   min-width: 0; overflow: hidden;
 }
-.cal-cell .d { font-size: 10.5px; color: var(--faint); }
+.cal-cell .d { font-size: 11px; color: var(--faint); }
 .cal-cell .v { font-size: 11px; font-weight: 650; white-space: nowrap; }
 .cal-cell .v-sm { display: none; }
 .cal-cell.up { background: rgba(242, 99, 111, .10); border-color: rgba(242, 99, 111, .26); }
@@ -614,8 +638,8 @@ label.field > input, label.field > select { max-width: 420px; }
 .cal-cell.down .v { color: var(--down); }
 .cal-cell.today { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .cal-cell.empty { border-color: transparent; background: transparent; box-shadow: none; }
-.cal-legend { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 10.5px; color: var(--muted); flex-wrap: wrap; }
-.cal-key { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.cal-legend { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+.cal-key { font-size: 11px; font-variant-numeric: tabular-nums; }
 .cal-key.up { color: var(--up); }
 .cal-key.down { color: var(--down); margin-left: 10px; }
 .cal-key.today { margin-left: 10px; padding: 1px 7px; border: 1px solid var(--accent-line); border-radius: 5px; color: var(--accent); }
@@ -664,7 +688,7 @@ label.field > input, label.field > select { max-width: 420px; }
 .notif-item:has(.notif-lvl.down) { border-left-color: var(--up); }
 .notif-item:has(.notif-lvl.amber) { border-left-color: var(--amber); }
 .notif-lvl {
-  font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   padding: 3px 6px; border-radius: 5px; text-align: center;
   background: var(--surface-3); color: var(--muted);
 }
@@ -674,14 +698,14 @@ label.field > input, label.field > select { max-width: 420px; }
 .notif-title { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
 .notif-msg { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.55; overflow-wrap: anywhere; }
 /* 时间戳独占一行、放正文下方：既不再和内容抢宽度，也不会被长订单号撑开 */
-.notif-ts { font-size: 10.5px; color: var(--faint); margin-top: 5px; }
+.notif-ts { font-size: 11px; color: var(--faint); margin-top: 5px; }
 .notif-body { min-width: 0; }
 
 /* ---------------------------------------------------------------- 表格 */
 .table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .table th {
-  text-align: left; color: var(--faint); font-weight: 700; font-size: 10px;
-  letter-spacing: .1em; text-transform: uppercase; white-space: nowrap;
+  text-align: left; color: var(--faint); font-weight: 700; font-size: 11px;
+  letter-spacing: .04em; text-transform: uppercase; white-space: nowrap;
   padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2);
 }
 .table th:first-child { border-top-left-radius: 8px; }
@@ -696,7 +720,7 @@ label.field > input, label.field > select { max-width: 420px; }
 /* 扫描表理由：PC 端完整显示、无折叠按钮；移动端才折叠+展开（见 860px 媒体块） */
 #scanTable .reason-toggle { display: none; }
 .col-2line { display: flex; flex-direction: column; line-height: 1.4; font-size: 11px; }
-.cell-tag { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; vertical-align: middle; }
+.cell-tag { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: 10.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; vertical-align: middle; }
 /* 品种名后的多空标志：仅手机端卡片显示，PC 表格保持独立「方向」列（默认隐藏） */
 .dir-flag { display: none; }
 /* 卡片右上角时间戳：仅手机端卡片显示，PC 表格已有独立时间列（默认隐藏） */
@@ -704,7 +728,7 @@ label.field > input, label.field > select { max-width: 420px; }
 /* 成交合并记录的笔数标记：PC 与手机端均显示，用于完整体现汇总信息 */
 .merge-tag {
   display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px;
-  font-size: 10px; font-weight: 700; line-height: 1.7;
+  font-size: 10.5px; font-weight: 700; line-height: 1.7;
   color: var(--accent); background: var(--accent-soft);
   border: 1px solid var(--accent-line); border-radius: 5px; vertical-align: middle;
 }
@@ -737,7 +761,7 @@ label.field > input, label.field > select { max-width: 420px; }
 .conn-dot.on { background: var(--ok); box-shadow: 0 0 0 4px rgba(47, 192, 138, .16); }
 .conn-state { font-weight: 650; color: var(--muted); }
 .conn-panel.on .conn-state { color: var(--ok); }
-.conn-tag { margin-left: auto; font-size: 10px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); }
+.conn-tag { margin-left: auto; font-size: 10.5px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); }
 .conn-panel.on .conn-tag { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 .conn-main { margin: 14px 0 5px; font-size: 21px; font-weight: 700; letter-spacing: -.03em; }
 .conn-sub { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
@@ -868,7 +892,8 @@ label.field > input, label.field > select { max-width: 420px; }
 
 /* ---------------------------------------------------------------- 决策页 */
 .decision-body.empty {
-  color: var(--muted); padding: 48px 20px; text-align: center;
+  color: var(--muted); font-size: 13px; line-height: 1.7;
+  padding: 32px 20px; text-align: center; overflow-wrap: anywhere;
   border: 1px dashed var(--border); border-radius: 12px; background: var(--surface);
 }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 16px; margin-bottom: 16px; }
@@ -898,7 +923,7 @@ label.field > input, label.field > select { max-width: 420px; }
   transform: rotate(45deg) translateY(-2px); transition: transform .22s ease;
 }
 .analyst.open .analyst-toggle::after { transform: rotate(-135deg) translateY(2px); }
-.analyst .flag { margin-top: 10px; font-size: 10.5px; color: var(--amber); }
+.analyst .flag { margin-top: 10px; font-size: 11.5px; color: var(--amber); }
 .stance { font-variant-numeric: tabular-nums; font-weight: 700; }
 .debate { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .debate .bull, .debate .bear { background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px; padding: 16px; }
@@ -908,7 +933,7 @@ label.field > input, label.field > select { max-width: 420px; }
 .thesis { margin-top: 14px; padding: 14px 16px; background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 8px; font-size: 12.5px; line-height: 1.7; }
 .proposal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 14px 0; }
 .proposal-grid .item { background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; }
-.proposal-grid .item span { display: block; color: var(--muted); font-size: 10.5px; }
+.proposal-grid .item span { display: block; color: var(--muted); font-size: 11.5px; }
 .proposal-grid .item b { font-size: 16px; }
 .order-box { background: var(--surface-2); border: 1px solid var(--border-soft); border-left: 3px solid var(--down); border-radius: 10px; padding: 14px 16px; }
 .order-box.rejected { border-left-color: var(--amber); }
@@ -1167,14 +1192,14 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 卡片右上角时间戳：脱离文档流，不占字段网格、不撑高卡片 */
   .card-ts {
     display: block; position: absolute; top: 13px; right: 13px;
-    font-size: 10px; font-weight: 500; color: var(--faint);
+    font-size: 10.5px; font-weight: 500; color: var(--faint);
     font-variant-numeric: tabular-nums; letter-spacing: .01em;
     white-space: nowrap; line-height: 1.4; pointer-events: none;
   }
   /* 品种名后的多空小标志：沿用 .up 红(多) / .down 绿(空) */
   .dir-flag {
     display: inline-block; margin-left: 2px; padding: 1px 6px;
-    font-size: 10px; font-weight: 700; letter-spacing: .02em;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
     border: 1px solid currentColor; border-radius: 5px;
     vertical-align: baseline; line-height: 1.5;
   }
@@ -1224,7 +1249,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
     white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
   }
   #scanTable tbody td::before {
-    content: ""; flex: none; order: -1; color: var(--faint); font-size: 10px;
+    content: ""; flex: none; order: -1; color: var(--faint); font-size: 10.5px;
     font-weight: 700; letter-spacing: .03em; text-align: left; white-space: nowrap;
   }
   #scanTable td:nth-child(1):not([colspan]) {
@@ -1247,7 +1272,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   }
   #scanTable td:nth-child(7)::before {
     content: "理由"; grid-column: 1; grid-row: 1;
-    color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .03em;
+    color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
     white-space: nowrap; padding-top: 3px;
   }
   #scanTable td:nth-child(7) .reason-text {
@@ -1283,8 +1308,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   #set-params .set-grid.four,
   #set-params .set-grid.risk-eight { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #set-params .set-field { min-height: 72px; padding: 9px 10px; gap: 5px; }
-  #set-params .set-label { font-size: 10.5px; line-height: 1.3; white-space: normal; }
-  #set-params .set-sub { font-size: 9.5px; line-height: 1.3; margin-top: 2px; }
+  #set-params .set-label { font-size: 11px; line-height: 1.4; white-space: normal; }
+  #set-params .set-sub { font-size: 10.5px; line-height: 1.4; margin-top: 2px; }
   #set-params .set-field .input-suffix { gap: 4px; padding-bottom: 4px; }
   #set-params .set-field .input-suffix input[type="number"] { font-size: 16px; }
   /* 两列下 select 仍用 16px 会放不下「自动（跟随决策）」这类长选项，
@@ -1300,7 +1325,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   #set-exchange .mode-row .btn { height: auto; min-height: 34px; padding: 7px 4px; font-size: 12px; }
   #set-exchange .set-box { padding: 0 10px; }
   #set-exchange .set-row { flex-wrap: nowrap; gap: 8px; padding: 8px 0; }
-  #set-exchange .set-row > .row-label { flex: 0 0 80px; font-size: 10.5px; }
+  #set-exchange .set-row > .row-label { flex: 0 0 80px; font-size: 11px; }
   #set-exchange .set-row > input { font-size: 16px; }
   #set-exchange .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
   #set-exchange .actions > .btn {
@@ -1412,8 +1437,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   }
   .eyebrow { margin-bottom: 5px; }
   .page-head h1 { font-size: 19px; }
-  .page-sub { margin-top: 5px; font-size: 11.5px; }
-  .stat-row { grid-template-columns: 1fr 1fr; }
+  .page-sub { margin-top: 5px; font-size: 12px; }
+  /* 指标卡列数统一由 860px 主断点定义，此处不再重复覆盖 */
   .stat b { font-size: 21px; }
   .stat-row > .stat b { font-size: 22px; }
   .card { padding: 16px; }
@@ -1426,10 +1451,10 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .cal-head { row-gap: 8px; }
   .cal-head #calSummary { flex-basis: 100%; margin-left: 0; }
   .cal-weekdays, .cal-grid { gap: 4px; }
-  .cal-weekdays { font-size: 9.5px; letter-spacing: .04em; }
+  .cal-weekdays { font-size: 10.5px; letter-spacing: .04em; }
   .cal-cell { min-height: 44px; padding: 5px 4px; border-radius: 6px; }
-  .cal-cell .d { font-size: 9.5px; }
-  .cal-cell .v { font-size: 9.5px; letter-spacing: -.01em; }
+  .cal-cell .d { font-size: 10px; }
+  .cal-cell .v { font-size: 10px; letter-spacing: -.01em; }
   .cal-cell .v-full { display: none; }
   .cal-cell .v-sm { display: block; }
 
@@ -1458,10 +1483,19 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .research-table tbody tr:hover td { background: transparent; }
 }
 @media (max-width: 520px) {
-  .stat-row { grid-template-columns: 1fr; }
+  /* 指标卡列数统一由 860px 主断点定义，此处不再重复声明 */
   .tb-context, .tb-sep { display: none; }
   .price { font-size: 17px; }
-  .top-right .tag { display: none; }
+  /* 数据源 / 模型是判断「当前跑的是什么」的关键信息，窄屏不再隐藏：
+     状态组整体换到第二行、左对齐排布，用截断上限防溢出。 */
+  .top-right { flex: 1 1 100%; justify-content: flex-start; gap: 6px 8px; }
+  .top-right .tag { max-width: 140px; font-size: 10.5px; padding: 3px 8px; }
+  .top-right .badge { font-size: 10.5px; padding: 3px 8px; }
+  .top-right .btn.sm { min-height: 32px; }
+  /* 设置页 5 个分区改横向滚动，不再折成两行占用高度 */
+  .settings-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
+  .settings-tabs::-webkit-scrollbar { display: none; }
+  .set-tab { flex: none; min-height: 36px; }
   /* 手机竖屏：品牌保留「LOGO + 名称」（版本号让位给导航），图标叠到文字上方，
      宽度由文字决定，5 个带图标的入口仍能一屏放完 */
   .side-brand { gap: 6px; padding-right: 6px; }
@@ -1515,18 +1549,18 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .stat-row > .stat:not(#posCard) {
     padding: 10px 9px; min-height: 0; gap: 4px; border-radius: 10px;
   }
-  .stat-row > .stat:not(#posCard) label { font-size: 10px; line-height: 1.3; }
+  .stat-row > .stat:not(#posCard) label { font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
   /* 具体交易所标注：独占一行但宽度贴合内容，不再横贯整卡；
      内边距/行高/字距微调成精致小徽章，长文案用省略号兜底防溢出 */
   .stat-row > .stat:not(#posCard) label .src-chip {
     display: block; width: fit-content; max-width: 100%;
-    margin: 3px 0 0; padding: 1px 6px; font-size: 9px; line-height: 1.4;
+    margin: 3px 0 0; padding: 1px 6px; font-size: 10px; line-height: 1.4;
     letter-spacing: .01em; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
   }
-  .stat-row > .stat:not(#posCard) b { font-size: clamp(14px, 4.3vw, 18px); }
+  .stat-row > .stat:not(#posCard) b { font-size: clamp(15px, 4.6vw, 19px); }
   .stat-row > .stat:not(#posCard) small {
-    font-size: 10.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
   }
   /* 三列窄卡放不下「可用 / 钱包余额」，且省略号后信息价值低，手机端直接隐藏。
      精确定位 equitySub，不影响当日盈亏卡的 dayPnlSub；PC 端保持原样。 */
@@ -1582,7 +1616,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
    双主题共用变量；窄屏靠 flex-wrap 自动折行，不引入横向滚动。 */
 .pm-block { margin: 0 0 12px; padding: 0 0 10px; border-bottom: 1px dashed var(--border-soft); }
 .pm-block:last-of-type { border-bottom: 0; }
-.pm-block-title { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--faint); margin-bottom: 6px; }
+.pm-block-title { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; color: var(--faint); margin-bottom: 6px; }
 .pm-block p { margin: 4px 0; font-size: 12px; line-height: 1.55; }
 .pm-explain { padding: 7px 9px; border-left: 2px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; color: var(--text-2); }
 .pm-rows { display: flex; flex-direction: column; gap: 4px; }
@@ -1600,6 +1634,20 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   }
   /* 设置页等宽（mono）输入行原为 12px，特异性更高，这里一并提到 16px 防聚焦缩放 */
   .set-row > input[type="text"], .set-row > input[type="password"] { font-size: 16px; }
+  /* 触屏上的小型控件放大到可靠点击区域，桌面端尺寸不变 */
+  .btn.sm { min-height: 34px; }
+  .btn.xs { min-height: 32px; }
+  .tf { min-height: 34px; padding: 7px 12px; }
+  .seg { min-height: 36px; }
+  .set-tab { min-height: 36px; }
+}
+
+/* 极窄屏兜底：320–370px 下三列每列不足 100px，回退两列；持仓卡仍独占整行。
+   放在所有 860px 补丁之后，确保列数规则生效。 */
+@media (max-width: 370px) {
+  .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-row > .stat:not(#posCard) b { font-size: clamp(16px, 5vw, 19px); }
+  .top-right .tag { max-width: 110px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

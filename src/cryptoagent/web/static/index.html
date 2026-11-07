@@ -98,9 +98,9 @@
   </div>
 </header>
 
-<div id="dataWarn" class="data-warn hidden"></div>
-<div id="accountWarn" class="data-warn hidden"></div>
-<div id="loadingBar" class="loading-bar hidden">
+<div id="dataWarn" class="data-warn hidden" role="status" aria-live="polite"></div>
+<div id="accountWarn" class="data-warn hidden" role="status" aria-live="polite"></div>
+<div id="loadingBar" class="loading-bar hidden" role="status" aria-live="polite">
   <span class="spin"></span> K 线行情加载中（首次需从交易所拉取约 6000 根，约 30~40 秒）…
 </div>
 
@@ -177,7 +177,7 @@
             <label class="inline">每 <input id="rotateEvery" type="number" min="1" max="100" style="width:48px" /> 轮扫</label>
             <label class="inline"><input id="rotateToggle" type="checkbox" /> 自动选品种</label>
           </div>
-          <div class="opp-list" id="oppList"><div class="muted center">扫描中…（自动循环会周期性扫描）</div></div>
+          <div class="opp-list" id="oppList"><div class="muted center">正在扫描全品种…</div></div>
         </div>
       </aside>
     </div>
@@ -233,7 +233,7 @@
     </div>
     </div>
 
-    <div id="decisionBody" class="decision-body empty">还没有运行决策。点击右上角「运行决策」。</div>
+    <div id="decisionBody" class="decision-body empty">还没有运行决策。运行一次决策后，这里会显示完整推理过程与仓位归因。</div>
   </section>
 
   <!-- ============ 研究 ============ -->
@@ -1006,7 +1006,7 @@
   </div>
 </div>
 
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
 /* 设置页横版标签页切换（纯 UI，不改 app.js / 业务 / 接口） */
 (function () {

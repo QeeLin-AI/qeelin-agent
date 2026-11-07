@@ -2994,7 +2994,7 @@ function renderOpportunities(rows) {
     if (scan.scanning) {
       listEl.innerHTML = '<div class="muted center">正在扫描全品种…（约 10 秒，完成后自动刷新）</div>';
     } else {
-      listEl.innerHTML = '<div class="muted center">暂无扫描结果，点右上角「重扫」</div>';
+      listEl.innerHTML = '<div class="muted center">暂无扫描结果，点「重扫」查看机会信号</div>';
       // 首次进页面自动触发一次后台扫描，避免排行榜一直空着
       if (!window.__oppAsked) {
         window.__oppAsked = true;
