@@ -940,29 +940,19 @@ label.field > input, label.field > select { max-width: 420px; }
 .order-box { background: var(--surface-2); border: 1px solid var(--border-soft); border-left: 3px solid var(--down); border-radius: 10px; padding: 14px 16px; }
 .order-box.rejected { border-left-color: var(--amber); }
 
-/* 决策页 · 订单计划底部固定条
-   独立于主内容流，宽度与 main 内容区一致；高度由 JS 写入 --order-dock-h，
-   #tab-decision 用同等 padding-bottom 让位，滚动到底也不会压住最后一张卡。 */
-#tab-decision { padding-bottom: calc(var(--order-dock-h, 0px) + 16px); }
-.order-dock {
-  position: fixed; left: 240px; right: 0; bottom: 0; z-index: 15;
-  display: flex; justify-content: center;
-  padding: 0 32px; pointer-events: none;
-}
+/* 决策页 · 订单计划：回到主内容末尾的普通文档流卡片。
+   卡片内部模板、字段结构与样式沿用原样，不再做视口固定与高度补偿。 */
+.order-dock { display: block; margin-top: 12px; }
 .order-dock.hidden { display: none; }
 .order-dock > .card {
-  width: 100%; max-width: 1316px; margin: 0 0 14px;
-  pointer-events: auto;
+  width: 100%; margin: 0 0 12px;
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, .30), var(--shadow-lg);
-}
-html[data-theme="light"] .order-dock > .card {
-  box-shadow: 0 -8px 30px rgba(16, 24, 40, .14), var(--shadow-lg);
+  border-radius: 12px; box-shadow: var(--shadow-sm);
 }
 .order-dock .card-head { margin-bottom: 9px; padding-bottom: 9px; }
-.dock-hint { font-size: 11px; color: var(--faint); white-space: nowrap; }
-/* 内容较多时条内滚动，锁定滚动穿透，固定条本身高度受控 */
+/* 随固定展示而来的提示，回到文档流后不再适用；DOM 保留以维持内容模板不变 */
+.dock-hint { display: none; }
+/* 内容较多时卡片内滚动，锁定滚动穿透 */
 .order-dock-body {
   max-height: min(32vh, 240px); overflow-y: auto;
   overscroll-behavior: contain; padding-right: 4px;
@@ -975,6 +965,9 @@ html[data-theme="light"] .order-dock > .card {
 .order-reject { display: flex; flex-direction: column; gap: 6px; }
 .order-reject b { font-size: 14px; color: var(--amber); }
 .order-reject span { font-size: 12px; line-height: 1.7; color: var(--text-2); overflow-wrap: anywhere; }
+/* 移动端折叠按钮：桌面端保持原展示，不出现 */
+.df-more { display: none; }
+.df-more.df-more-hidden { display: none !important; }
 
 /* 决策页紧凑化：只收紧本页卡片间距/内边距与说明文案，不影响其它页面 */
 #tab-decision .card { padding: 15px 18px; margin-bottom: 12px; }
@@ -1182,13 +1175,25 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 手机端顶栏只保留关键状态与操作：数据源 / 模型两个胶囊让位；
      熔断按钮回到与「强制刷新」相同的 .btn.ghost.sm 样式，不再单独放大。 */
   #dataSource, #llmTag { display: none; }
-  /* 底部固定条：窄屏无侧栏，内边距跟随 main；滚动区再收一点高度给内容让位 */
-  .order-dock { left: 0; padding: 0 18px; }
-  .order-dock > .card { max-width: none; margin-bottom: 10px; }
   .order-dock-body { max-height: min(34vh, 210px); }
   /* 窄屏 3 列放不下「1,820.16 USDT」，订单字段回退 2 列 3 行 */
   .order-dock-body .df-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dock-hint { display: none; }
+  /* 移动端两处默认折叠：桌面端不生效，按钮也不出现 */
+  .df-more {
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 9px; padding: 6px 12px;
+    font-size: 11.5px; font-weight: 650; color: var(--accent);
+    background: var(--accent-soft); border: 1px solid var(--accent-line);
+    border-radius: 8px; cursor: pointer;
+  }
+  .df-more:hover { background: var(--surface-3); border-color: var(--accent); }
+  /* 独立复核：最近 2 条常驻，其余默认收起 */
+  .shadow-list.collapsed > .df-item:nth-child(n+3) { display: none; }
+  /* 因子信号 · 有效因子：默认只显示 3 行 */
+  .df-block .df-val.text.clamped {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   /* 保证金占用计算提示：✓ 与说明文字固定首行同行，文字只在剩余宽度内换行，
      不再整块掉到下一行造成错位。仅作用于设置页该提示条。 */
   #set-params .risk-link { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }

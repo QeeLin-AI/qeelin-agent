@@ -190,7 +190,7 @@ function showTab(name, push = true) {
   $(`tab-${name}`).classList.add('active');
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name === 'overview') { renderPnl(); }
-  if (name === 'decision') { requestAnimationFrame(fitScanReasons); }
+  if (name === 'decision') { requestAnimationFrame(fitScanReasons); requestAnimationFrame(syncFactorMoreVisibility); }
   if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); loadProfiles(); loadEvolveState(); }
 }
 
@@ -1190,12 +1190,18 @@ function factorSigHtml(p) {
       }).join('')
       + `</div>`;
   }
+  const hasMore = active.length > 3;
+  const clampCls = hasMore && !_decisionMore.factors ? ' clamped' : '';
+  const more = hasMore
+    ? `<button class="df-more" type="button" data-more="factors" aria-expanded="${_decisionMore.factors}">${_decisionMore.factors ? '收起' : '展开更多'}</button>`
+    : '';
   return `<div class="df-block">
     <div class="df-head"><span class="df-title">因子信号</span><span class="df-count">${active.length} 个有效因子</span></div>
     <div class="df-conclusion"><b class="df-key ${cls}">${c >= 0 ? '+' : ''}${Number(c).toFixed(2)}</b><span class="df-dir">${dir}</span></div>
     <div class="df-fields">
-      <div class="df-field wide"><span class="df-label">有效因子</span><span class="df-val text">${esc(names)}</span></div>
+      <div class="df-field wide"><span class="df-label">有效因子</span><span class="df-val text${clampCls}">${esc(names)}</span></div>
     </div>
+    ${more}
     ${detail}
     <p class="df-note">留出集为负的因子已自动淘汰，不参与决策。</p>
   </div>`;
@@ -1386,9 +1392,14 @@ function renderDecisionShadow(d) {
   const rows = (d && d.position_llm_shadow) || [];
   // 动作枚举统一显示中文（与持仓管理员卡片同一套译名）
   const actCn = (a) => ({ hold: '持有', tighten: '收紧止损', close: '平仓' }[a] || a || '--');
+  const hasMore = rows.length > 2;
+  const collapsed = hasMore && !_decisionMore.shadow;
+  const more = hasMore
+    ? `<button class="df-more" type="button" data-more="shadow" aria-expanded="${_decisionMore.shadow}">${_decisionMore.shadow ? '收起' : '展开更多'}</button>`
+    : '';
   box.innerHTML = rows.length
     ? `<div class="df-head"><span class="df-title">独立复核</span><span class="df-count">最近 ${rows.length} 条</span></div>
-       <div class="shadow-list">`
+       <div class="shadow-list${collapsed ? ' collapsed' : ''}">`
       + rows.slice().reverse().map((r) => {
         const same = r.rule_action === r.llm_action;
         return `<div class="df-item">
@@ -1407,7 +1418,7 @@ function renderDecisionShadow(d) {
           ${r.reason ? `<p class="df-note">${esc(r.reason)}</p>` : ''}
         </div>`;
       }).join('')
-      + `</div>`
+      + `</div>${more}`
     : `<div class="muted center">暂无独立复核记录（开启「独立复核」并产生持仓动作后显示）</div>`;
 }
 
@@ -2373,16 +2384,35 @@ function renderPnl() {
 }
 
 /* ---------------- 决策 ---------------- */
-// 底部固定条脱离主内容流，把实测高度同步给 #tab-decision 的 padding-bottom，
-// 这样滚动到页面末尾时最后一张卡片仍完整可见，不会被固定条压住。
-function syncOrderDockHeight() {
-  const dock = $('orderDock');
-  if (!dock) return;
-  const card = dock.classList.contains('hidden') ? null : dock.firstElementChild;
-  document.documentElement.style.setProperty('--order-dock-h',
-    card ? Math.ceil(card.getBoundingClientRect().height + 14) + 'px' : '0px');
+// 移动端两处默认折叠的状态放在模块级：独立复核由 3 秒轮询反复渲染，
+// 状态外置才能让用户点开的「展开更多」不被下一次轮询收回。
+const _decisionMore = { shadow: false, factors: false };
+// 较宽的手机屏上有效因子可能本身不足 3 行，此时没有「其余行」，
+// 展开按钮就没有可展开的内容——仅在 clamp 真的截断了内容时才出现。
+function syncFactorMoreVisibility() {
+  const val = document.querySelector('.df-block .df-val.text');
+  const btn = document.querySelector('.df-more[data-more="factors"]');
+  if (!val || !btn || !val.offsetParent) return;
+  const overflowing = val.classList.contains('clamped') && val.scrollHeight > val.clientHeight + 2;
+  btn.classList.toggle('df-more-hidden', !overflowing && !_decisionMore.factors);
 }
-window.addEventListener('resize', syncOrderDockHeight);
+window.addEventListener('resize', syncFactorMoreVisibility);
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('.df-more');
+  if (!btn) return;
+  const key = btn.dataset.more;
+  if (key !== 'shadow' && key !== 'factors') return;
+  _decisionMore[key] = !_decisionMore[key];
+  btn.textContent = _decisionMore[key] ? '收起' : '展开更多';
+  btn.setAttribute('aria-expanded', String(_decisionMore[key]));
+  if (key === 'shadow') {
+    const list = document.querySelector('#decisionShadowBox .shadow-list');
+    if (list) list.classList.toggle('collapsed', !_decisionMore.shadow);
+  } else {
+    const val = document.querySelector('.df-block .df-val.text');
+    if (val) val.classList.toggle('clamped', !_decisionMore.factors);
+  }
+});
 
 function renderDecision(d, switchTab = true) {
   if (!d || !d.analysts) return;
@@ -2399,8 +2429,22 @@ function renderDecision(d, switchTab = true) {
   }).join('');
 
   const p = d.proposal, r = d.risk_decision, o = d.order;
+  // 订单方向中文：后端 order.side 是 BUY/SELL、position_side 是 LONG/SHORT。
+  // 原来用 sideCn(o.side)，它只认 LONG/SHORT，会把 "SELL" 原样吐出来（第一行显示英文）；
+  // 且 o.side === 'short' 永远不成立，颜色也恒为红。这里两者都按 BUY/SELL + LONG/SHORT 判。
+  const oSideRaw = String((o && (o.position_side || o.side)) || '').toUpperCase();
+  const oIsSell = oSideRaw === 'SHORT' || oSideRaw === 'SELL';
+  const oIsBuy = oSideRaw === 'LONG' || oSideRaw === 'BUY';
+  const oSideCn = oIsSell ? '卖出' : (oIsBuy ? '买入' : '');
+  const oSideCls = oIsSell ? 'down' : 'up';
+  // 订单状态中文（后端目前只有 PLANNED；其余为兜底，避免以后新增状态又露出英文）
+  const ORDER_STATUS_CN = {
+    PLANNED: '待执行', SENT: '已发送', FILLED: '已成交',
+    REJECTED: '已拒绝', CANCELED: '已撤销', CANCELLED: '已撤销',
+  };
+  const oStatusCn = o ? (ORDER_STATUS_CN[String(o.status || '').toUpperCase()] || o.status || '') : '';
   const orderHtml = o
-    ? `<div class="order-lead"><b class="${o.side === 'short' ? 'down' : 'up'}">${esc(sideCn(o.side))} ${fmt(o.quantity, 4)} ${esc(o.symbol)}</b></div>
+    ? `<div class="order-lead"><b class="${oSideCls}">${esc(o.symbol)} ${oSideCn} ${fmt(o.quantity, 4)} 数量</b></div>
       <div class="df-fields three">
         <div class="df-field"><span class="df-label">名义</span><span class="df-val">${fmt(o.notional_usd)} USDT</span></div>
         <div class="df-field"><span class="df-label">杠杆</span><span class="df-val">${fmt(o.leverage, 1)}x</span></div>
@@ -2409,7 +2453,7 @@ function renderDecision(d, switchTab = true) {
         <div class="df-field"><span class="df-label">最大亏损</span><span class="df-val">${fmt(o.risk_usd)} USDT</span></div>
         <div class="df-field"><span class="df-label">权益占比</span><span class="df-val">${(o.max_loss_pct_of_equity * 100).toFixed(2)}%</span></div>
       </div>
-      <p class="df-note">状态 ${esc(o.status)}，需要在「交易」页手动执行</p>`
+      <p class="df-note">状态 ${esc(oStatusCn)}，需要在「交易」页手动执行</p>`
     : `<div class="order-reject"><b>本次没有订单</b><span>${esc(r.reasons.join('；'))}</span></div>`;
 
   $('decisionBody').className = 'decision-body';
@@ -2452,15 +2496,15 @@ function renderDecision(d, switchTab = true) {
       </div>
     </div>
     `;
-  // 订单计划固定在决策页底部：页面滚动时保持可见，主内容由 padding-bottom 让位。
+  // 订单计划回到决策页主内容末尾，随页面正常滚动。
   const dock = $('orderDock');
   dock.classList.remove('hidden');
   dock.innerHTML = `<div class="card order-dock-card">
       <div class="card-head"><h2>⑤ 订单计划</h2><span class="muted dock-hint">滚动时保持可见</span></div>
       <div class="order-dock-body" role="region" aria-label="订单计划详情" tabindex="0">${orderHtml}</div>
     </div>`;
-  syncOrderDockHeight();
   if (switchTab) showTab('decision');
+  requestAnimationFrame(syncFactorMoreVisibility);
 }
 
 $('runDecision').addEventListener('click', async () => {
