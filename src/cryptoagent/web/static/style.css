@@ -260,11 +260,22 @@ html[data-theme="dark"] .uptime { color: #D9606E; background: rgba(217, 96, 110,
 .tb-context { display: flex; align-items: center; gap: 9px; padding-right: 20px; border-right: 1px solid var(--border); }
 .tb-mark { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
 .tb-title { font-size: 12.5px; font-weight: 650; color: var(--text-2); }
-.price-block { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.price-row { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
-.price-meta { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-/* 连接状态胶囊落在价格下方这一行：收紧内边距，保持该行与上方价格行等高、左边缘对齐 */
-.price-meta .badge { padding: 2px 8px; font-size: 10.5px; line-height: 1.35; flex: none; }
+/* 顶栏两行共用同一套列宽：左列 = 品种选择 / 连接状态胶囊，
+   右列 = 价格数字 / 行情时间戳。时间戳因此与上方价格数字精确左对齐，
+   品种名变长时两列一起变宽，不需要写死像素。 */
+.price-block {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 10px; row-gap: 2px; align-items: center; min-width: 0;
+}
+.price-row, .price-meta { display: contents; }
+.price-row > .symbol-group { grid-row: 1; grid-column: 1; }
+.price-row > .price-values { grid-row: 1; grid-column: 2; }
+.price-meta > .badge { grid-row: 2; grid-column: 1; }
+.price-meta > .price-meta-info { grid-row: 2; grid-column: 2; }
+.symbol-group, .price-values { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; min-width: 0; }
+.price-meta-info { display: flex; align-items: center; gap: 8px; white-space: nowrap; min-width: 0; }
+/* 胶囊是 grid item，默认会被拉伸到整列宽；justify-self:start 让它保持内容宽度 */
+.price-meta .badge { padding: 2px 8px; font-size: 10.5px; line-height: 1.35; justify-self: start; }
 .price { font-size: 19px; font-weight: 700; letter-spacing: -.03em; }
 .price.is-loading { font-size: 13px; font-weight: 500; color: var(--muted); }
 .pct { font-size: 12.5px; font-weight: 650; white-space: nowrap; }

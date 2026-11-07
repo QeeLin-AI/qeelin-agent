@@ -70,16 +70,22 @@
   </div>
   <div class="price-block">
     <div class="price-row">
-      <select id="symbolSelect" class="symbol-select" title="切换品种（配置里 market.symbols）"></select>
-      <button id="symbolAddBtn" class="sym-add-btn" title="添加 / 管理交易品种">＋</button>
-      <span id="price" class="price">--</span>
-      <span id="pct" class="pct">--</span>
+      <span class="symbol-group">
+        <select id="symbolSelect" class="symbol-select" title="切换品种（配置里 market.symbols）"></select>
+        <button id="symbolAddBtn" class="sym-add-btn" title="添加 / 管理交易品种">＋</button>
+      </span>
+      <span class="price-values">
+        <span id="price" class="price">--</span>
+        <span id="pct" class="pct">--</span>
+      </span>
     </div>
     <div class="price-meta">
       <span id="modeBadge" class="badge paper">PAPER</span>
-      <span id="liveDot" class="live-dot" title="实时报价">●</span>
-      <span id="liveTs" class="live-ts">连接中…</span>
-      <span id="pctSpan" class="pct-span">--</span>
+      <span class="price-meta-info">
+        <span id="liveDot" class="live-dot" title="实时报价">●</span>
+        <span id="liveTs" class="live-ts">连接中…</span>
+        <span id="pctSpan" class="pct-span">--</span>
+      </span>
     </div>
   </div>
   <div class="top-right">
