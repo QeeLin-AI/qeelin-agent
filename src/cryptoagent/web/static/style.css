@@ -1317,6 +1317,88 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
     white-space: normal; align-items: flex-start; line-height: 1.5;
   }
   #set-exchange .set-switch-list label.inline input { margin-top: 2px; flex: none; }
+
+  /* ---- 模型设置（#set-llm）：手机端排版优化 ----
+     只作用于模型设置页；PC 端与其它设置页不受影响。
+     1) 字段压成「标签左 / 控件右」单行（原来 88px 高、标签独占一行，纵向浪费大）
+     2) 开关 40×22 → 46×26、行内边距加大，整行成为可靠触控区域
+     3) 按钮组两列均分、高度 42px，不再贴左边缩成窄条
+     4) 分组标题 10px/1.4px → 11px/0.06em，字号与字距同时回到易读区间 */
+  #set-llm.set-split > .card { margin-bottom: 14px; }
+  #set-llm.set-split > .card > .actions { margin-top: 14px; }
+  #set-llm .card-head { padding-bottom: 12px; margin-bottom: 14px; }
+  #set-llm .set-group { margin-top: 16px; }
+  #set-llm .set-group-title {
+    font-size: 11px; letter-spacing: .06em;
+    margin-bottom: 10px; padding-top: 12px;
+  }
+
+  /* 字段：改为「设置行列表」（透明底 + 细分割线），比一块块字段卡片更清爽；
+     标签按内容宽度自适应（长选项才不会被裁），控件占满剩余宽度 */
+  #set-llm .set-grid,
+  #set-llm .set-grid.two-col,
+  #set-llm .set-grid.narrow { grid-template-columns: 1fr; gap: 0; }
+  #set-llm .set-field {
+    flex-direction: row; align-items: center; justify-content: flex-start;
+    background: transparent; border: 0; border-bottom: 1px solid var(--border-soft);
+    border-radius: 0; min-height: 0; padding: 9px 0; gap: 10px;
+  }
+  #set-llm .set-field:last-child { border-bottom: 0; }
+  #set-llm .set-label {
+    flex: 0 1 auto; max-width: 50%; font-size: 12px; font-weight: 600;
+    white-space: normal; line-height: 1.35;
+  }
+  #set-llm .set-field > select,
+  #set-llm .set-field > input {
+    flex: 1 1 0; width: auto; max-width: none; min-width: 0; margin: 0;
+  }
+  #set-llm .set-field select { height: 38px; font-size: 13px; padding: 0 26px 0 10px; }
+  #set-llm .set-field > input[type="text"] { height: 38px; font-size: 16px; }
+  #set-llm .set-field > input[type="number"] {
+    height: 38px; font-size: 16px; text-align: right; font-variant-numeric: tabular-nums;
+  }
+
+  /* Base URL / API Key：标签一行、输入占满下一行；40px 高更好点 */
+  #set-llm .set-box { padding: 0 12px; margin-top: 10px; }
+  #set-llm .set-row { flex-wrap: wrap; gap: 6px; padding: 11px 0; }
+  #set-llm .set-row > .row-label { flex-basis: 100%; font-size: 12px; font-weight: 600; }
+  #set-llm .set-row > input { height: 40px; font-size: 16px; }
+
+  /* 开关行：整行可点、开关放大、标题/说明拉开字号层级 */
+  #set-llm .set-switch-list .switch-row { padding: 13px 0; gap: 12px; }
+  #set-llm .set-switch-list .switch-row:first-child { border-top: 0; padding-top: 4px; }
+  #set-llm .switch-row .switch-label { gap: 5px; }
+  #set-llm .switch-row .switch-label .t { font-size: 13px; line-height: 1.4; }
+  #set-llm .switch-row .switch-label .d { font-size: 12px; line-height: 1.5; }
+  #set-llm .switch { width: 46px; height: 26px; }
+  #set-llm .switch .thumb { width: 20px; height: 20px; top: 3px; left: 3px; }
+  #set-llm .switch input:checked + .track .thumb { transform: translateX(19px); }
+  /* 「演进层级」这类带下拉的开关行：说明文字占满整行，下拉换到下一行右对齐，
+     避免 144px 的 select 把说明文字挤成 4 行 */
+  #set-llm .switch-row:has(> select) { flex-wrap: wrap; gap: 6px; }
+  #set-llm .switch-row:has(> select) .switch-label { flex: 1 0 100%; }
+  #set-llm .switch-row:has(> select) > select {
+    flex: 0 0 150px; width: 150px; margin: 2px 0 0 auto; height: 38px; font-size: 13px;
+  }
+
+  /* 状态行与说明：紧凑，不与标题抢视觉 */
+  #set-llm .set-status-line { gap: 8px; margin: 0 0 10px; }
+  #set-llm .set-hint { font-size: 11.5px; line-height: 1.6; margin-top: 9px; }
+  /* 卡片开头的长说明段（如「LLM 自主调参」）：13.5px 在手机上偏大，收到 12px */
+  #set-llm .card > p.muted { font-size: 12px; line-height: 1.65; margin: 0 0 12px; }
+
+  /* 按钮组：两列均分、42px 高；只有一个按钮时占满整行 */
+  #set-llm .actions {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px; margin-left: 0;
+  }
+  #set-llm .actions > .btn {
+    width: 100%; height: auto; min-height: 42px; padding: 9px 10px;
+    font-size: 13px; white-space: normal; line-height: 1.3;
+  }
+  #set-llm .actions > .btn:only-child { grid-column: 1 / -1; }
+  #set-llm .actions > span { grid-column: 1 / -1; }
+
   .debate, .kv { grid-template-columns: 1fr; }
   .ov-side { grid-template-columns: 1fr; }
   .ov-side .opp-panel { grid-column: auto; }
