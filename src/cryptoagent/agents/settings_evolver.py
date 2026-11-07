@@ -33,9 +33,56 @@ BOUNDS: dict[str, tuple[float, float]] = {
 }
 # 整数型键（结果取整）。
 INT_KEYS = {"max_concurrent_positions", "auto_top_k"}
-# 归 position 组的键。当前为空：`llm_min_interval_sec` 只有一个写入方——
-# 设置页 `/api/settings/position`，避免自动调参与人工设置互相覆盖。
-POSITION_KEYS: set[str] = set()
+
+# 参数键 → 页面显示用的中文名。
+# 与前端 `app.js` 的 `SETTING_LABELS` 保持一致：后端写进 last_result 的历史摘要
+# 会直接展示给用户，必须是中文，不能把内部键名漏出去。
+LABELS_CN: dict[str, str] = {
+    "min_confidence": "置信度门槛",
+    "max_loss_per_trade_pct": "单笔风险上限",
+    "max_position_pct": "单笔仓位上限",
+    "max_concurrent_positions": "同时持仓品种数",
+    "max_margin_usage_pct": "保证金占用上限",
+    "auto_top_k": "每轮评估品种数",
+    "rotate_min_score": "选品分数门槛",
+}
+
+
+def label_cn(key: str) -> str:
+    """参数键 → 中文名；未知键原样返回（宁可露出键名，也不吞掉信息）。"""
+    return LABELS_CN.get(str(key), str(key))
+
+
+# 参数键 → 写入路径 `(分组, setter 短键, 配置属性名)`。
+# 这是「可调键」与「配置字段」之间**唯一**的对应表，避免在各处散落 if/elif：
+# - risk  组走 `set_risk`，短键与属性名相同（都等于键名）；
+# - market 组走 `set_rotate`，短键与属性名**不同**（`min_score` → `rotate_min_score`，
+#   `auto_top_k` 恰好同名）——这类差异最容易导致「写进去却没生效」。
+FIELD_ROUTE: dict[str, tuple[str, str, str]] = {
+    "min_confidence": ("risk", "min_confidence", "min_confidence"),
+    "max_loss_per_trade_pct": ("risk", "max_loss_per_trade_pct", "max_loss_per_trade_pct"),
+    "max_position_pct": ("risk", "max_position_pct", "max_position_pct"),
+    "max_concurrent_positions": ("risk", "max_concurrent_positions", "max_concurrent_positions"),
+    "max_margin_usage_pct": ("risk", "max_margin_usage_pct", "max_margin_usage_pct"),
+    "auto_top_k": ("market", "auto_top_k", "auto_top_k"),
+    "rotate_min_score": ("market", "min_score", "rotate_min_score"),
+}
+
+# 导入即校验：可调键必须同时有「写入路由」和「中文名」。
+# 缺任一者都会让提案通过裁决后写入错误字段（或被 setter 静默忽略），必须在启动前暴露。
+_missing_route = set(BOUNDS) - set(FIELD_ROUTE)
+if _missing_route:
+    raise ValueError(f"BOUNDS 中这些键缺少 FIELD_ROUTE 映射：{sorted(_missing_route)}")
+_missing_label = set(BOUNDS) - set(LABELS_CN)
+if _missing_label:
+    raise ValueError(f"BOUNDS 中这些键缺少中文名 LABELS_CN：{sorted(_missing_label)}")
+_extra_route = set(FIELD_ROUTE) - set(BOUNDS)
+if _extra_route:
+    raise ValueError(f"FIELD_ROUTE 中存在不在 BOUNDS 里的键：{sorted(_extra_route)}")
+
+# 归 position 组的键由 FIELD_ROUTE 的 group 字段表达（当前没有 position 项：
+# `llm_min_interval_sec` 只有一个写入方——设置页 `/api/settings/position`，
+# 刻意不让自动调参碰它，避免与人工设置互相覆盖）。
 # 单轮最多改几个键：改多了无法归因，也没法判断是哪一项起作用
 MAX_KEYS = 3
 # 单键单轮最大相对变化

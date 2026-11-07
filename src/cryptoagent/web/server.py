@@ -1610,7 +1610,7 @@ class WebApp:
     def settings_evolve(self, payload: dict) -> dict:
         """让模型基于近期表现提一份参数调整建议；apply=True 时通过裁决就落盘。"""
         from ..agents.settings_evolver import (
-            POSITION_KEYS, build_context, funnel_stats, perf_stats, propose, sanitize,
+            FIELD_ROUTE, INT_KEYS, build_context, funnel_stats, perf_stats, propose, sanitize,
         )
         apply_now = bool(payload.get("apply"))
         # 只拿当前账户的平仓样本：切到 OKX 模拟盘后，不能再用币安模拟盘的
@@ -1637,19 +1637,19 @@ class WebApp:
         position_payload: dict = {}
         prev: dict = {}
         for c in verdict["changes"]:
-            if c["key"] == "auto_top_k":
-                rotate_payload["auto_top_k"] = int(c["to"])
-                prev[f"market.{c['key']}"] = c["from"]
-            elif c["key"] == "rotate_min_score":
-                rotate_payload["min_score"] = float(c["to"])
-                prev[f"market.rotate_min_score"] = c["from"]
-            elif c["key"] in POSITION_KEYS:
-                # 持仓管理员·LLM 接入里的数值项（冷却间隔），走它自己的 setter
-                position_payload[c["key"]] = int(c["to"])
-                prev[f"position.{c['key']}"] = c["from"]
+            key = c["key"]
+            # 统一走 FIELD_ROUTE：分组 / setter 短键 / 配置属性名三者的对应关系只在
+            # settings_evolver 里维护一份，避免这里手写 if/elif 与真实字段名漂移
+            # （例如 market 组的短键是 min_score，属性名却是 rotate_min_score）。
+            group, short, attr = FIELD_ROUTE[key]
+            val = int(c["to"]) if key in INT_KEYS else float(c["to"])
+            if group == "market":
+                rotate_payload[short] = val
+            elif group == "position":
+                position_payload[short] = val
             else:
-                risk_payload[c["key"]] = c["to"]
-                prev[f"risk.{c['key']}"] = c["from"]
+                risk_payload[short] = val
+            prev[f"{group}.{attr}"] = c["from"]
         try:
             if risk_payload:
                 self.set_risk(risk_payload)
@@ -1721,12 +1721,18 @@ class WebApp:
                 stt["last_result"] = "运行中"
                 self.engine.state["settings_evolve"] = stt
                 res = self.settings_evolve({"apply": True})
-                stt["last_result"] = (
-                    "已应用：" + "、".join(c["key"] for c in res.get("changes") or [])
-                    if res.get("applied") else
-                    ("无调整" if not (res.get("changes") or []) else "提案被拒：" +
-                     "；".join(r.get("reason") or "" for r in res.get("rejected") or [])[:100])
-                )
+                # 摘要直接展示在卡片头部，参数名必须是中文（不能漏出内部键名）
+                from ..agents.settings_evolver import label_cn
+                if res.get("applied"):
+                    stt["last_result"] = "已应用：" + "、".join(
+                        label_cn(c["key"]) for c in res.get("changes") or [])
+                elif not (res.get("changes") or res.get("rejected")):
+                    stt["last_result"] = "无调整"
+                else:
+                    stt["last_result"] = "提案被拒：" + "；".join(
+                        f"{label_cn(r.get('key') or '')}（{r.get('reason') or ''}）"
+                        for r in res.get("rejected") or []
+                    )[:120]
                 self.engine.state["settings_evolve"] = stt
                 self.engine._save()
             except Exception as exc:  # noqa: BLE001 - 自动调参失败不影响交易

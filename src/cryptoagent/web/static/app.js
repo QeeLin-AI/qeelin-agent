@@ -669,6 +669,18 @@ const PCT_KEYS = new Set([
 function _settingLabel(key) {
   return SETTING_LABELS[key] || key;
 }
+// 把文本里的英文参数键换成中文。按长度降序替换，避免 rotate_min_score 被
+// 更短的 min_score 先截断成 rotate_选品分数门槛。
+// 用途：兼容旧版本写进 state 的 last_result（那时后端直接拼了内部键名）。
+const _LABEL_KEYS_BY_LEN = Object.keys(SETTING_LABELS).sort((a, b) => b.length - a.length);
+function _localizeKeys(text) {
+  if (!text) return text;
+  let out = String(text);
+  for (const k of _LABEL_KEYS_BY_LEN) {
+    if (out.includes(k)) out = out.split(k).join(SETTING_LABELS[k]);
+  }
+  return out;
+}
 function _settingUnit(key) {
   return SETTING_UNITS[key] || '';
 }
@@ -748,7 +760,7 @@ async function loadEvolveState() {
     if ($('evolveInterval')) $('evolveInterval').value = d.interval_hours || 24;
     if ($('evolveState')) {
       $('evolveState').textContent = d.enabled
-        ? `已开启 · 每 ${d.interval_hours} 小时 · ${d.last_result || '尚未运行'}`
+        ? `已开启 · 每 ${d.interval_hours} 小时 · ${_localizeKeys(d.last_result) || '尚未运行'}`
         : '已关闭（仅手动）';
     }
   } catch (e) { console.error(e); }

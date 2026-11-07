@@ -228,6 +228,40 @@ def test_bounds_cover_int_keys():
         assert k in BOUNDS
 
 
+# ---------------- 可调键 ↔ 配置字段：命名必须逐一对应 ----------------
+
+def test_evolver_field_route_matches_config_fields():
+    """自主调参的每个可调键，都必须能落到真实配置字段（组 + setter 短键 + 属性名）。
+
+    这三者对不上就是「取值错误」的典型来源：market 组的短键是 min_score，
+    而配置属性叫 rotate_min_score，写错就静默不生效。
+    """
+    from cryptoagent.agents.settings_evolver import FIELD_ROUTE
+    from cryptoagent.config import AppConfig
+
+    cfg = AppConfig()
+    assert set(BOUNDS) == set(FIELD_ROUTE), "可调键与写入路由必须一一对应"
+    for key, (group, short, attr) in FIELD_ROUTE.items():
+        obj = getattr(cfg, group, None)
+        assert obj is not None, f"{key}: 配置分组 {group} 不存在"
+        assert hasattr(obj, attr), f"{key}: {group}.{attr} 字段不存在"
+        if group == "market":
+            # 与「配置方案」共用同一张短键 → 属性名映射表，避免两处各写一份
+            assert _MARKET_ATTR.get(short) == attr, f"{key}: 短键 {short} 与属性 {attr} 不对应"
+        else:
+            assert short == attr, f"{key}: {group} 组的短键应等于属性名"
+
+
+def test_evolver_labels_cover_all_bounds():
+    """每个可调键都要有中文名，且不能是纯英文（否则会漏到界面上）。"""
+    from cryptoagent.agents.settings_evolver import LABELS_CN, label_cn
+
+    for key in BOUNDS:
+        assert key in LABELS_CN, f"{key} 缺少中文名"
+        assert LABELS_CN[key] and not LABELS_CN[key].isascii(), f"{key} 的中文名不应是英文"
+    assert label_cn("__unknown__") == "__unknown__"
+
+
 # ---------------- 统计上下文 ----------------
 
 def test_perf_stats_uses_realized_r():
