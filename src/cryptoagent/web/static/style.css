@@ -1113,18 +1113,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 @media (max-width: 860px) {
   body { padding-left: 0; }
   /* 手机端顶栏只保留关键状态与操作：数据源 / 模型两个胶囊让位；
-     熔断是安全开关，单独放大并强化危险态（PC 端保持原样）。 */
+     熔断按钮回到与「强制刷新」相同的 .btn.ghost.sm 样式，不再单独放大。 */
   #dataSource, #llmTag { display: none; }
-  #haltBtn {
-    height: 38px; padding: 0 16px;
-    font-size: 13px; font-weight: 700;
-    color: var(--up); border-color: var(--up);
-    background: rgba(242, 99, 111, .12);
-  }
-  #haltBtn.selected {
-    color: var(--up); border-color: var(--up);
-    background: rgba(242, 99, 111, .24);
-  }
   /* 保证金占用计算提示：✓ 与说明文字固定首行同行，文字只在剩余宽度内换行，
      不再整块掉到下一行造成错位。仅作用于设置页该提示条。 */
   #set-params .risk-link { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
