@@ -1927,7 +1927,19 @@ class WebApp:
     def position_settings(self) -> dict:
         """读持仓管理员配置：LLM 接入开关 + 退出规则 + 用量/影子对照（只读诊断）。"""
         p = self.cfg.position
+        # 实际生效值：L1/L3 学习会覆盖 config（只写 effective、不回写 config），
+        # 设置页必须能展示两者差异，否则用户改的值与实际生效值脱节。
+        try:
+            eff = self.engine.effective_position_config()
+            effective = {
+                "reversal_ema_bars": int(eff.reversal_ema_bars),
+                "peak_drawdown_r": float(eff.peak_drawdown_r),
+            }
+        except Exception:  # noqa: BLE001 - 轻量测试实例没有该方法
+            effective = {}
         return {
+            "enabled": bool(getattr(p, "enabled", True)),
+            "effective": effective,
             "llm_explain": bool(p.llm_explain),
             "llm_shadow": bool(p.llm_shadow),
             "llm_offpeak_only": bool(p.llm_offpeak_only),
@@ -1970,13 +1982,13 @@ class WebApp:
         from ..config import config_path, save_config
 
         p = self.cfg.position
-        bool_keys = ("llm_explain", "llm_shadow", "llm_offpeak_only",
+        bool_keys = ("enabled", "llm_explain", "llm_shadow", "llm_offpeak_only",
                      "bars_from_index", "peak_drawdown_exit_enabled", "auto_tune",
                      "evolution_llm_enabled", "evolution_llm_allow_action",
                      "evolution_llm_allow_loosen")
         int_keys = {
             "llm_min_interval_sec": (0, 86400),
-            "reversal_ema_bars": (10, 200),
+            "reversal_ema_bars": (16, 96),
             "composite_max_age_sec": (0, 3600),
             "evolution_rule_min_samples": (5, 100),
             "evolution_confirm_rounds": (1, 10),
@@ -1987,7 +1999,7 @@ class WebApp:
             "evolution_rollback_after_losses": (1, 20),
         }
         float_keys = {
-            "peak_drawdown_r": (0.1, 10.0),
+            "peak_drawdown_r": (0.5, 2.0),
             "evolution_replay_min_median_delta": (-1.0, 1.0),
             "evolution_replay_max_worst_delta": (0.0, 5.0),
             "evolution_llm_min_confidence": (0.0, 1.0),

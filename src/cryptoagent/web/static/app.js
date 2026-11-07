@@ -501,6 +501,8 @@ async function loadPositionLlmSettings() {
     if ($('posEvolutionMode')) $('posEvolutionMode').value = d.evolution_mode || 'stats';
     if ($('posEvolutionLlmEnabled')) $('posEvolutionLlmEnabled').checked = !!d.evolution_llm_enabled;
     if ($('posEvolutionAllowAction')) $('posEvolutionAllowAction').checked = !!d.evolution_llm_allow_action;
+    if ($('posEvolutionAllowLoosen')) $('posEvolutionAllowLoosen').checked = !!d.evolution_llm_allow_loosen;
+    if ($('posEnabled')) $('posEnabled').checked = d.enabled !== false;
     const tn = d.tuning || {};
     if ($('posTuneDesc')) {
       const n = Number(tn.samples || 0);
@@ -515,6 +517,16 @@ async function loadPositionLlmSettings() {
     $('posReversalEmaBars').value = d.reversal_ema_bars;
     $('posCompositeMaxAge').value = d.composite_max_age_sec;
     $('posPeakDrawdownR').value = d.peak_drawdown_r;
+    if ($('posEvolutionShadowCases')) $('posEvolutionShadowCases').value = d.evolution_llm_shadow_cases ?? 20;
+    if ($('posEvolutionMinConfidence')) $('posEvolutionMinConfidence').value = d.evolution_llm_min_confidence ?? 0.65;
+    // 实际生效值提示：L1/L3 学习会覆盖 config 里的值，两者不一致时明确提示
+    const eff = d.effective || {};
+    if (eff.reversal_ema_bars != null && Number($('posReversalEmaBars').value) !== eff.reversal_ema_bars) {
+      $('posReversalEmaBars').title = `实际生效 ${eff.reversal_ema_bars}（已被 L1/L3 学习调整；改配置即重置学习）`;
+    }
+    if (eff.peak_drawdown_r != null && Number($('posPeakDrawdownR').value) !== eff.peak_drawdown_r) {
+      $('posPeakDrawdownR').title = `实际生效 ${eff.peak_drawdown_r}（已被 L1/L3 学习调整；改配置即重置学习）`;
+    }
     const off = d.offpeak || {};
     $('posLlmOffpeak').textContent = off.label || '--';
     const rj = d.replay_job || {};
@@ -533,6 +545,7 @@ async function loadPositionLlmSettings() {
 
 async function savePositionLlmSettings() {
   const payload = {
+    enabled: $('posEnabled') ? $('posEnabled').checked : true,
     llm_explain: $('posLlmExplain').checked,
     llm_shadow: $('posLlmShadow').checked,
     llm_offpeak_only: $('posLlmOffpeakOnly').checked,
@@ -542,10 +555,13 @@ async function savePositionLlmSettings() {
     evolution_mode: $('posEvolutionMode') ? $('posEvolutionMode').value : 'stats',
     evolution_llm_enabled: $('posEvolutionLlmEnabled') ? $('posEvolutionLlmEnabled').checked : false,
     evolution_llm_allow_action: $('posEvolutionAllowAction') ? $('posEvolutionAllowAction').checked : false,
+    evolution_llm_allow_loosen: $('posEvolutionAllowLoosen') ? $('posEvolutionAllowLoosen').checked : false,
     llm_min_interval_sec: Number($('posLlmMinInterval').value),
     reversal_ema_bars: Number($('posReversalEmaBars').value),
     composite_max_age_sec: Number($('posCompositeMaxAge').value),
     peak_drawdown_r: Number($('posPeakDrawdownR').value),
+    evolution_llm_shadow_cases: Number($('posEvolutionShadowCases') ? $('posEvolutionShadowCases').value : 20),
+    evolution_llm_min_confidence: Number($('posEvolutionMinConfidence') ? $('posEvolutionMinConfidence').value : 0.65),
   };
   try {
     await api('/api/settings/position', 'POST', payload);

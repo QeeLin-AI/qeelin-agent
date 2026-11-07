@@ -715,100 +715,149 @@
       </div>
 
       <div class="card" id="set-llm-position">
-        <div class="card-head"><h2>持仓管理员 · LLM 接入（独立保存）</h2></div>
+        <div class="card-head"><h2>持仓管理员</h2></div>
 
         <div class="set-status-line">
           <span id="posLlmOffpeak" class="tag">--</span>
           <span class="muted" id="posLlmUsage" style="font-size:11.5px">--</span>
         </div>
-        <div class="set-switch-list">
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">规则动作解释</span>
-              <span class="d">开仓后的移动止损 / 时间止损 / 反转退出发生时，让 LLM 写一句权衡说明</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posLlmExplain" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">影子复核（只记录，不改动作）</span>
-              <span class="d">LLM 独立给退出意见，与规则结果对照留档；绝不触发平仓或放宽止损</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posLlmShadow" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">峰时跳过 LLM（谷时半价再跑）</span>
-              <span class="d">与因子研究的峰谷策略分开控制，避免持仓期间在原价时段反复调用</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posLlmOffpeakOnly" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">持有根数按 K 线计数</span>
-              <span class="d">行情停更时不再用墙钟虚增持有根数，避免误触发时间止损</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posBarsFromIndex" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">峰值回撤退出（实验性）</span>
-              <span class="d">浮盈曾到过 1R 又回吐 N×R 时提前平仓；默认关闭，需模拟盘验证后再开</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posPeakDrawdownEnabled" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">退出参数自校准</span>
-              <span class="d" id="posTuneDesc">按每笔平仓的最终 R 与持仓期峰值自动微调移动止损/时间止损参数；单轮最多 12%，有硬边界，改配置即重置</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posAutoTune" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">演进层级</span>
-              <span class="d">L1 统计校准 → L2 反事实回放（门控通过才落地）→ L3 LLM 提案（需 L2 门控通过）</span>
-            </span>
-            <select id="posEvolutionMode" class="set-select">
-              <option value="off">关闭</option>
-              <option value="stats">L1 · 统计</option>
-              <option value="replay">L2 · 回放</option>
-              <option value="llm">L3 · LLM</option>
-            </select>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">L3：总开关</span>
-              <span class="d">打开后先进入影子期（只记录提案、不改动作），攒够样本才允许应用；L2 未过时保存会被拒绝</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posEvolutionLlmEnabled" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
-          <label class="switch-row">
-            <span class="switch-label">
-              <span class="t">L3：允许 LLM 修改退出动作</span>
-              <span class="d">默认只允许更保守方向（hold→tighten/close）；把 close 放宽为 hold 需要额外的 loosen 开关</span>
-            </span>
-            <label class="switch"><input type="checkbox" id="posEvolutionAllowAction" /><span class="track"><span class="thumb"></span></span></label>
-          </label>
+
+        <div class="set-group">
+          <div class="set-group-title">总开关</div>
+          <div class="set-switch-list">
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">启用持仓管理员</span>
+                <span class="d">关闭后移动止损 / 时间止损 / 趋势反转退出全部停用，仓位将失去自动保护</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posEnabled" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+          </div>
         </div>
-        <div class="set-grid two-col">
-          <label class="set-field">
-            <span class="set-label">LLM 冷却（秒 / 每品种）</span>
-            <input id="posLlmMinInterval" type="number" min="0" max="86400" step="60" />
-          </label>
-          <label class="set-field">
-            <span class="set-label">反转 EMA 跨度（根）</span>
-            <input id="posReversalEmaBars" type="number" min="10" max="200" step="1" />
-          </label>
-          <label class="set-field">
-            <span class="set-label">因子信号有效期（秒）</span>
-            <input id="posCompositeMaxAge" type="number" min="0" max="3600" step="30" />
-          </label>
-          <label class="set-field">
-            <span class="set-label">峰值回撤阈值（R）</span>
-            <input id="posPeakDrawdownR" type="number" min="0.1" max="10" step="0.1" />
-          </label>
+
+        <div class="set-group">
+          <div class="set-group-title">LLM 接入（解释 / 独立复核）</div>
+          <div class="set-switch-list">
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">规则动作解释</span>
+                <span class="d">开仓后的移动止损 / 时间止损 / 反转退出发生时，让 LLM 写一句权衡说明</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posLlmExplain" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">独立复核（只记录，不改动作）</span>
+                <span class="d">LLM 独立给退出意见，与规则结果对照留档；绝不触发平仓或放宽止损（区别于下方 L3 的可应用提案）</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posLlmShadow" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">峰时跳过 LLM（谷时半价再跑）</span>
+                <span class="d">只作用于「解释 / 独立复核」这些成本敏感的旁路调用；L3 进化提案不受此约束</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posLlmOffpeakOnly" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+          </div>
+          <div class="set-grid two-col">
+            <label class="set-field">
+              <span class="set-label">LLM 冷却（秒 / 每品种）</span>
+              <input id="posLlmMinInterval" type="number" min="0" max="86400" step="60" />
+            </label>
+          </div>
         </div>
+
+        <div class="set-group">
+          <div class="set-group-title">退出规则</div>
+          <div class="set-switch-list">
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">持有根数按 K 线计数</span>
+                <span class="d">行情停更时不再用墙钟虚增持有根数，避免误触发时间止损</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posBarsFromIndex" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">峰值回撤退出（实验性）</span>
+                <span class="d">浮盈曾到过 1R 又回吐 N×R 时提前平仓；默认关闭，需模拟盘验证后再开</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posPeakDrawdownEnabled" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+          </div>
+          <div class="set-grid two-col">
+            <label class="set-field">
+              <span class="set-label">反转 EMA 跨度（根）</span>
+              <input id="posReversalEmaBars" type="number" min="16" max="96" step="1" />
+            </label>
+            <label class="set-field">
+              <span class="set-label">因子信号有效期（秒）</span>
+              <input id="posCompositeMaxAge" type="number" min="0" max="3600" step="30" />
+            </label>
+            <label class="set-field">
+              <span class="set-label">峰值回撤阈值（R）</span>
+              <input id="posPeakDrawdownR" type="number" min="0.5" max="2.0" step="0.1" />
+            </label>
+          </div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">参数自迭代（L1 → L2 → L3）</div>
+          <div class="set-switch-list">
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">退出参数自校准</span>
+                <span class="d" id="posTuneDesc">总开关：关闭后 L1/L2/L3 的参数修改全部停用（但 L3 的动作覆盖仍会生效）。用哪种方式微调见下方「演进层级」</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posAutoTune" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">演进层级</span>
+                <span class="d">L1 统计校准 → L2 反事实回放（门控通过才落地）→ L3 LLM 提案（需 L2 门控通过）</span>
+              </span>
+              <select id="posEvolutionMode" class="set-select">
+                <option value="off">关闭</option>
+                <option value="stats">L1 · 统计</option>
+                <option value="replay">L2 · 回放</option>
+                <option value="llm">L3 · LLM</option>
+              </select>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">L3：总开关</span>
+                <span class="d">打开后先进入影子期（只记录提案、不改动作），攒够样本才允许应用；L2 未过时保存会被拒绝</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posEvolutionLlmEnabled" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">L3：允许 LLM 修改退出动作</span>
+                <span class="d">默认只允许更保守方向（hold→tighten/close）；把 close 放宽为 hold 需另开下方「允许放宽」</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posEvolutionAllowAction" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+            <label class="switch-row">
+              <span class="switch-label">
+                <span class="t">L3：允许放宽退出动作</span>
+                <span class="d">允许 LLM 把 close 放宽为 hold/tighten；风险最高，默认关闭</span>
+              </span>
+              <label class="switch"><input type="checkbox" id="posEvolutionAllowLoosen" /><span class="track"><span class="thumb"></span></span></label>
+            </label>
+          </div>
+          <div class="set-grid two-col">
+            <label class="set-field">
+              <span class="set-label">L3 影子期样本数（笔）</span>
+              <input id="posEvolutionShadowCases" type="number" min="0" max="200" step="1" />
+            </label>
+            <label class="set-field">
+              <span class="set-label">L3 最低置信度</span>
+              <input id="posEvolutionMinConfidence" type="number" min="0" max="1" step="0.05" />
+            </label>
+          </div>
+        </div>
+
         <p class="set-hint">保存立即生效，无需重启。</p>
         <div class="actions">
           <button id="posReplayBtn" class="btn">运行 L2 回放验收</button>
@@ -816,6 +865,7 @@
           <span id="posReplayState" class="muted"></span>
         </div>
       </div>
+
 
       <div class="card" id="set-evolve">
         <div class="card-head"><h2>LLM 自主调参</h2><span id="evolveState" class="muted">--</span></div>

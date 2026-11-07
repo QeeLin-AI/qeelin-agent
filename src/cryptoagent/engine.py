@@ -2568,13 +2568,17 @@ class TradingEngine:
         """LLM provider/model/Key 改变后调用，避免旧客户端继续用老配置。"""
         self._position_llm = None
 
-    def _position_llm_allowed(self, sym: str) -> bool:
-        """谷时优先 + 每仓冷却。任一不满足就跳过本次调用，绝不因 LLM 拖慢退出。"""
+    def _position_llm_allowed(self, sym: str, offpeak_gate: bool = True) -> bool:
+        """谷时优先 + 每仓冷却。任一不满足就跳过本次调用，绝不因 LLM 拖慢退出。
+
+        `offpeak_gate=False` 表示本次调用不受峰谷约束（仅保留冷却频率上限）：
+        L3 进化提案是持仓管理的重要决策，不该被「峰时省一半钱」的成本优化静默关掉。
+        """
         cfg = getattr(self.cfg, "position", None)
         if cfg is None:
             return False
         now = time.time()
-        if bool(getattr(cfg, "llm_offpeak_only", True)):
+        if offpeak_gate and bool(getattr(cfg, "llm_offpeak_only", True)):
             from .agents.llm import is_offpeak
             if not is_offpeak(self.cfg.llm):
                 self.position_llm_usage["skipped_offpeak"] += 1
@@ -2591,20 +2595,25 @@ class TradingEngine:
         self.state["position_llm_at"] = dict(self._position_llm_at)
         return True
 
-    def _commit_position_llm_call(self, sym: str, ok: bool) -> None:
-        """LLM 调用结束后才落冷却与用量：失败不该白锁一整段冷却，也不该计成功。"""
+    def _commit_position_llm_call(self, sym: str, ok: bool, n: int = 1) -> None:
+        """LLM 调用结束后才落冷却与用量：失败不该白锁一整段冷却，也不该计成功。
+
+        `n` 表示本轮实际发生的 LLM 调用次数（解释/影子与 L3 进化各算一次），
+        避免「同一轮调了两次却只计一次」导致用量与频率被低估。
+        """
         now = time.time()
         # 用基础配置而不是 effective_position_config()：后者依赖实例状态，
         # 测试里用 object.__new__ 构造的轻量实例没有该方法。
         gap = max(0, int(getattr(getattr(self.cfg, "position", None),
                                  "llm_min_interval_sec", 900) or 0))
+        n = max(1, int(n or 1))
         if ok:
             self._position_llm_at[sym] = now
-            self.position_llm_usage["calls"] += 1
+            self.position_llm_usage["calls"] += n
         else:
             # 失败只冷却 60 秒，避免网关抖动时立刻重试，也不把 15 分钟全浪费掉
             self._position_llm_at[sym] = now - max(0, gap - 60)
-            self.position_llm_usage["errors"] += 1
+            self.position_llm_usage["errors"] += n
         self.state["position_llm_at"] = dict(self._position_llm_at)
         self.state["position_llm_usage"] = dict(self.position_llm_usage)
 
@@ -2726,20 +2735,23 @@ class TradingEngine:
                 self._notify("info", f"{sym} 移动止损已更新", dec.reason,
                              {"symbol": sym, "new_stop": dec.new_stop})
 
-            # 解释 / 影子复核共用一次 LLM 调用，且受谷时 + 每仓冷却闸门约束。
-            # 影子意见只写日志，绝不参与 action —— 规则终审的地位不变。
-            want_evolve = self._llm_evolution_allowed()
-            want_llm = (
+            # 解释 / 影子复核：共用一次 LLM 调用，受谷时 + 每仓冷却闸门约束
+            # （旁路，成本敏感）。影子意见只写日志，绝不参与 action。
+            want_review = (
                 (bool(getattr(cfg, "llm_explain", False)) and dec.action != "hold")
                 or bool(getattr(cfg, "llm_shadow", False))
-                or want_evolve
             )
-            if want_llm and self._position_llm_allowed(sym):
+            # L3 进化提案：独立于解释旁路。峰谷（llm_offpeak_only）只是成本优化，
+            # 不该让 L3 静默失效，因此 L3 开启时跳过峰谷检查、只保留冷却频率上限。
+            want_evolve = self._llm_evolution_allowed()
+            if (want_review or want_evolve) and self._position_llm_allowed(
+                    sym, offpeak_gate=not want_evolve):
                 ok = False
+                n_calls = 0
                 try:
-                    if ((bool(getattr(cfg, "llm_explain", False)) and dec.action != "hold")
-                            or bool(getattr(cfg, "llm_shadow", False))):
+                    if want_review:
                         review = review_management(self._position_llm_client(), cfg, dec, pos)
+                        n_calls += 1
                         dec.explanation = review.get("explanation") or ""
                         sh = review.get("shadow")
                         if sh:
@@ -2762,6 +2774,7 @@ class TradingEngine:
                             self.position_tuning_status(),
                             allowed_params=RULE_PARAMS.get(dec.rule, ()),
                         )
+                        n_calls += 1
                         min_conf = self._cfg_num(
                             getattr(cfg, "evolution_llm_min_confidence", 0.65), 0.65)
                         if (ev and not ev.get("degraded")
@@ -2771,8 +2784,8 @@ class TradingEngine:
                 except Exception:  # noqa: BLE001 - LLM 是旁路，绝不阻断退出动作
                     ok = False
                 finally:
-                    # 无论解释/影子/进化哪一步失败，都按一次真实调用记账（成功/失败）
-                    self._commit_position_llm_call(sym, ok)
+                    # 按实际调用次数记账：解释/影子与 L3 进化各算一次，不再只计一次
+                    self._commit_position_llm_call(sym, ok, n=n_calls)
                 if ok:
                     self._save()
             return dec.to_dict()
@@ -3108,9 +3121,12 @@ class TradingEngine:
                     self._drop_position(sym)
                     self._save()
                     self._log_live("CLOSE", self._pos_side(pos), pos["qty"], exit_px, res.order_id)
-                    # A2：平仓后报告已实现盈亏
+                    # A2：平仓后报告已实现盈亏。环境标注必须按 testnet 区分：
+                    # mode==live 只表示「走交易所接口」，demo（testnet=True）也是 live，
+                    # 不能据此标「实盘」——否则币安模拟盘的平仓通知会误标成主网实盘。
+                    env_label = "模拟盘" if self.state.get("testnet", True) else "主网实盘"
                     self._notify("info" if pnl >= 0 else "critical",
-                                 f"{pos['side']} 平仓（实盘）",
+                                 f"{pos['side']} 平仓（{env_label}）",
                                  f"已实现盈亏 {pnl:+,.2f} U（{reason}）",
                                  {"symbol": sym, "pnl": round(pnl, 2), "reason": reason})
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
@@ -3120,9 +3136,9 @@ class TradingEngine:
             if rec is None:
                 return {"ok": False, "error": f"{sym} 平仓失败：仓位记录已不存在"}
             self._save()
-            # A2：平仓后报告已实现盈亏
+            # A2：平仓后报告已实现盈亏（paper = 本地模拟撮合，不进交易所）
             self._notify("info" if rec["pnl"] >= 0 else "critical",
-                         f"{pos['side']} 平仓（模拟）",
+                         f"{pos['side']} 平仓（本地模拟）",
                          f"已实现盈亏 {rec['pnl']:+,.2f} U（{reason}）",
                          {"symbol": sym, "pnl": rec["pnl"], "reason": reason})
             return {"ok": True, "mode": "paper", "fill": rec}
