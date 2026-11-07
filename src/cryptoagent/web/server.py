@@ -1478,7 +1478,7 @@ class WebApp:
     # ------------------------------------------------------------------
     # 配置方案：预设 / 一键恢复默认 / 回滚
     # ------------------------------------------------------------------
-    _SETTINGS_GROUPS = ("risk", "position", "market")
+    _SETTINGS_GROUPS = ("risk", "position", "market", "llm")
 
     def _settings_snapshot(self) -> dict:
         from dataclasses import asdict
@@ -1551,6 +1551,8 @@ class WebApp:
                 self.set_position_settings(dict(prof["position"]))
             if prof.get("market"):
                 self.set_rotate(dict(prof["market"]))
+            if prof.get("llm"):
+                self.set_llm_settings(dict(prof["llm"]))
         except Exception:
             self._settings_restore(snap)
             raise

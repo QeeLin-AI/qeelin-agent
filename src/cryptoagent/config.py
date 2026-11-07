@@ -58,7 +58,8 @@ class MarketConfig:
     # 预热后切 15m 图、查 /api/klines?interval=15m 都直接读盘，不再等网络。
     klines_prewarm_intervals: list[str] = field(default_factory=lambda: ["15m"])
     # 自主选品种：自动循环里按因子信号扫描全部品种，切到最有「机会」的品种（有持仓时不切）
-    auto_rotate: bool = False
+    # 默认开启，与「稳健」方案一致：让系统主动在品种间找机会。
+    auto_rotate: bool = True
     # 选品种信号阈值：|因子复合信号| 超过它才算「有机会」，否则留在当前品种
     rotate_min_score: float = 0.2
     # 扫描频率：每 N 个自动循环扫一次（1 = 每轮都扫）
@@ -66,7 +67,8 @@ class MarketConfig:
     # 每轮最多评估几个品种（1 = 保持旧行为：一轮只切一个、只开一个仓）。
     # 调大后同一轮会依次评估前 K 个「未持仓且达标」的品种，机会数随 K 增加——
     # 代价是每多评一个就多一次完整 LLM 决策链，别设太大（2~3 是合理区间）。
-    auto_top_k: int = 1
+    # 默认 2，与「稳健」方案一致（单仓也可在一轮里评估 2 个候选再择优开仓）。
+    auto_top_k: int = 2
     # —— 全品种缓存预热 ——
     # 一轮会切多个品种后，切换时若目标品种的盘缓存已过期，load_market 会当场重下
     # 6000 根 K 线，把一轮决策拖到十几秒。这里用后台线程把「全部品种」的报价与
@@ -108,7 +110,7 @@ class BacktestConfig:
 
 @dataclass
 class RiskConfig:
-    max_leverage: float = 3.0
+    max_leverage: float = 5.0
     # 0 = 跟随决策（AI/规则给多少用多少，再受 max_leverage 封顶）；
     # >0 = 强制使用这个杠杆。注意：提高杠杆不放大风险，因为单笔最大亏损按
     # 仓位×杠杆×止损 计算并受 max_loss_per_trade_pct 限制，杠杆越高仓位会被压得越小。
@@ -116,7 +118,7 @@ class RiskConfig:
     max_position_pct: float = 0.30       # 单策略最大保证金占用（占权益）
     max_loss_per_trade_pct: float = 0.01
     # —— 多品种并发持仓 ——
-    # 同时持仓的品种数上限。**默认 1 = 单仓，升级后行为不变**；
+    # 同时持仓的品种数上限。**默认 1 = 单仓**（稳健根基，升级后行为不变）；
     # 想开多仓必须在设置页手动调大，并同步收紧 max_loss_per_trade_pct
     # （N 笔同时打满止损 = N 倍单笔风险）。
     max_concurrent_positions: int = 1
@@ -131,19 +133,19 @@ class RiskConfig:
     sizing_mode: str = "llm"
     # 杠杆下限：模型长期只给 2x 时可托底（1.0 = 不干预）
     min_leverage: float = 1.0
-    daily_loss_limit_pct: float = 0.03
-    max_drawdown_pct: float = 0.15
-    min_confidence: float = 0.55
+    daily_loss_limit_pct: float = 0.04
+    max_drawdown_pct: float = 0.18
+    min_confidence: float = 0.50
     kill_switch_file: str = "runs/TRADING_HALT"
     # —— 组合层风控（A3）——
     # 关键不变量：max_portfolio_notional_pct 与 correlated_exposure_pct 都必须 ≥
     # 单笔最大名义敞口 = max_position_pct × max_leverage（占权益）。
-    # 本 dataclass 默认 0.30 × 3 = 0.90，故默认上限 1.20 / 0.90 满足要求。
+    # 本 dataclass 默认 0.30 × 5 = 1.50，故默认上限 2.0 / 1.5 满足要求。
     # ⚠️ 若通过 config/default.json 抬高 max_leverage 或 max_position_pct，
     #    必须同步抬高这两个上限，否则风控会在 risk.py step 11 把每一笔正常交易都拒掉。
     #    它们真正的作用是约束「多品种/多笔同时持仓」的叠加敞口，而非限制单笔。
-    max_portfolio_notional_pct: float = 1.20   # 全部持仓名义敞口上限（占权益）
-    correlated_exposure_pct: float = 0.90      # 同一相关性组内同向敞口上限（占权益）
+    max_portfolio_notional_pct: float = 2.0    # 全部持仓名义敞口上限（占权益）
+    correlated_exposure_pct: float = 1.5       # 同一相关性组内同向敞口上限（占权益）
     # 相关性分组：同组品种视为高度相关，同向叠加敞口受 correlated_exposure_pct 约束。
     # 默认把大盘币放一组、山寨币放一组；接了真实相关性矩阵后可覆盖。
     correlation_groups: list[list[str]] = field(

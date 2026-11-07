@@ -24,7 +24,7 @@ from cryptoagent.agents.settings_evolver import (  # noqa: E402
     perf_stats,
     sanitize,
 )
-from cryptoagent.config import AppConfig, MarketConfig, PositionConfig, RiskConfig  # noqa: E402
+from cryptoagent.config import AppConfig, LLMConfig, MarketConfig, PositionConfig, RiskConfig  # noqa: E402
 from cryptoagent.settings_profiles import (  # noqa: E402
     ALLOWED_GROUPS,
     DEFAULT_PROFILE,
@@ -43,14 +43,19 @@ def test_all_profiles_pass_safety_check():
         assert_profile_safe(name)
 
 
-def test_profiles_never_contain_llm_or_secrets():
+def test_profiles_never_contain_llm_credentials():
+    """方案可含「llm」组的峰谷计价策略，但绝不能出现 API Key / provider / model 等凭据。"""
     for name, prof in PROFILES.items():
         assert set(prof) <= {"label", "summary", *ALLOWED_GROUPS}, name
-        assert "llm" not in prof, f"{name} 不应包含 llm 分组"
+        # llm 组只允许非敏感的峰谷策略字段，禁止 provider / model / api_key 等
+        for k in (prof.get("llm") or {}):
+            assert k in ("offpeak_research_only", "peak_mode", "peak_holidays"), \
+                f"{name} 的 llm 组出现不允许的字段 {k}"
         flat = " ".join(
             f"{g}.{k}" for g in ALLOWED_GROUPS for k in (prof.get(g) or {})
         ).lower()
-        for tok in ("api_key", "apikey", "token", "secret", "provider", "model"):
+        for tok in ("api_key", "apikey", "token", "secret", "password",
+                    "provider", "model", "base_url", "baseurl"):
             assert tok not in flat, f"{name} 的键名出现了 {tok}"
 
 
@@ -61,16 +66,17 @@ def test_safety_check_rejects_injected_secret(monkeypatch):
         assert_profile_safe("__bad__")
 
 
-def test_safety_check_rejects_llm_group(monkeypatch):
+def test_safety_check_rejects_llm_credentials(monkeypatch):
+    """llm 组本身合法，但组内出现 provider 等凭据字段仍要被拒。"""
     bad = {"label": "坏方案", "summary": "", "llm": {"provider": "openai"}}
     monkeypatch.setitem(PROFILES, "__bad2__", bad)
-    with pytest.raises(ValueError, match="非法分组"):
+    with pytest.raises(ValueError, match="敏感字段"):
         assert_profile_safe("__bad2__")
 
 
-def test_webapp_only_snapshots_three_groups():
+def test_webapp_snapshots_four_groups():
     from cryptoagent.web.server import WebApp
-    assert WebApp._SETTINGS_GROUPS == ("risk", "position", "market")
+    assert WebApp._SETTINGS_GROUPS == ("risk", "position", "market", "llm")
 
 
 # ---------------- 方案自洽 ----------------
@@ -97,6 +103,8 @@ def test_profile_keys_exist_on_config(name):
     for k in prof.get("market") or {}:
         assert k in _MARKET_ATTR, f"{name}: market.{k} 没有映射"
         assert hasattr(MarketConfig(), _MARKET_ATTR[k]), f"{name}: market.{_MARKET_ATTR[k]} 不存在"
+    for k in prof.get("llm") or {}:
+        assert hasattr(LLMConfig(), k), f"{name}: llm.{k} 不存在"
 
 
 def test_default_profile_is_listed():
@@ -181,6 +189,9 @@ def test_max_keys_rejected():
 
 def test_int_key_step_is_one():
     cfg = AppConfig()
+    # auto_top_k 默认已提升为 2（BOUNDS 上限 4），+3 会先越界；这里显式压低到 1，
+    # 让 +3 落在界内、专测「整数 key 每轮只能 ±1」的步长护栏。
+    cfg.market.auto_top_k = 1
     cur = _ctx(cfg)["current"]
     out = sanitize({"changes": [{"key": "auto_top_k", "to": float(cur["auto_top_k"]) + 3}]}, cfg, cur)
     assert out["changes"] == []

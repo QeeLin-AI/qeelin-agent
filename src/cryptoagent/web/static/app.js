@@ -637,6 +637,9 @@ const SETTING_LABELS = {
   auto_top_k: '每轮评估品种数',
   min_score: '选品分数门槛',
   rotate_min_score: '选品分数门槛',
+  // —— 模型设置 llm（仅峰谷计价策略进方案）——
+  offpeak_research_only: '因子研究仅谷时调用',
+  peak_mode: '峰时决策',
 };
 // 单位：与表单输入框后缀一致。比例类 _pct 已在 _fmtSetting 里显示成「X%」，
 // 所以这里只补「权益」二字，避免叠成「X% % 权益」。
@@ -673,6 +676,7 @@ function _settingUnit(key) {
 function _settingValue(key, v) {
   if (key === 'sizing_mode') return v === 'risk' ? '按风险上限反推' : (v === 'llm' ? '听交易员' : String(v));
   if (key === 'leverage_override') return (Number(v) || 0) === 0 ? '自动（跟随决策）' : `${Number(v)}x`;
+  if (key === 'peak_mode') return v === 'thrift' ? '省钱模式（峰时规则兜底）' : (v === 'full' ? '照常使用 LLM' : String(v));
   return null;
 }
 
