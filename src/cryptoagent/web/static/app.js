@@ -1172,26 +1172,33 @@ function factorSigHtml(p) {
   const names = active.map((s) => `${s.name}(${s.target >= 0 ? '+' : ''}${s.target.toFixed(2)})`).join('、') || '无（全部被留出集淘汰）';
   const cls = c > 0.05 ? 'up' : c < -0.05 ? 'down' : 'muted';
   const dir = c > 0.05 ? '偏多' : c < -0.05 ? '偏空' : '中性';
-  // B4：因子贡献度条形——哪些因子真正在「贡献信号」
-  let bars = '';
+  // 因子贡献度条形——哪些因子真正在「贡献信号」
   const contribs = (p.factor_contributions || []).filter((x) => x.weight > 0)
     .sort((a, b) => Math.abs(b.share) - Math.abs(a.share)).slice(0, 8);
+  let detail = '';
   if (contribs.length) {
     const maxAbs = Math.max(...contribs.map((x) => Math.abs(x.share)), 0.0001);
-    bars = `<div class="factor-bars">`
+    detail = `<div class="df-detail">`
       + contribs.map((x) => {
         const w = (Math.abs(x.share) / maxAbs) * 100;
         const d = x.share >= 0 ? 'up' : 'down';
-        return `<div class="fb-row">
-          <span class="fb-name">${esc(x.name)}</span>
-          <span class="fb-track"><span class="fb-fill ${d}" style="width:${w.toFixed(1)}%"></span></span>
-          <span class="fb-val ${d}">${x.share >= 0 ? '+' : ''}${(x.share * 100).toFixed(1)}%</span>
+        return `<div class="df-row">
+          <span class="df-name">${esc(x.name)}</span>
+          <span class="df-track"><span class="df-fill ${d}" style="width:${w.toFixed(1)}%"></span></span>
+          <span class="df-num ${d}">${x.share >= 0 ? '+' : ''}${(x.share * 100).toFixed(1)}%</span>
         </div>`;
       }).join('')
       + `</div>`;
   }
-  return `<div class="thesis">因子信号 <b class="${cls}">${c >= 0 ? '+' : ''}${Number(c).toFixed(2)}</b>（${dir}）
-    · ${esc(names)}。留出集为负的因子已自动淘汰，不参与决策。</div>${bars}`;
+  return `<div class="df-block">
+    <div class="df-head"><span class="df-title">因子信号</span><span class="df-count">${active.length} 个有效因子</span></div>
+    <div class="df-conclusion"><b class="df-key ${cls}">${c >= 0 ? '+' : ''}${Number(c).toFixed(2)}</b><span class="df-dir">${dir}</span></div>
+    <div class="df-fields">
+      <div class="df-field wide"><span class="df-label">有效因子</span><span class="df-val text">${esc(names)}</span></div>
+    </div>
+    ${detail}
+    <p class="df-note">留出集为负的因子已自动淘汰，不参与决策。</p>
+  </div>`;
 }
 
 function sizingTraceHtml(p) {
@@ -1380,13 +1387,28 @@ function renderDecisionShadow(d) {
   // 动作枚举统一显示中文（与持仓管理员卡片同一套译名）
   const actCn = (a) => ({ hold: '持有', tighten: '收紧止损', close: '平仓' }[a] || a || '--');
   box.innerHTML = rows.length
-    ? `<b>独立复核（最近 ${rows.length} 条）</b><br>`
-      + rows.slice(-5).reverse().map((r) =>
-        `${esc(r.symbol || '')} 规则 ${esc(actCn(r.rule_action))} / LLM ${esc(actCn(r.llm_action))}`
-        + ` · 置信 ${Number(r.confidence || 0).toFixed(2)}${r.degraded ? ' · 降级' : ''}`
-        + `<br><span class="muted">${esc(r.reason || '')}</span>`
-      ).join('<br>')
-    : '暂无独立复核记录（开启「独立复核」并产生持仓动作后显示）';
+    ? `<div class="df-head"><span class="df-title">独立复核</span><span class="df-count">最近 ${rows.length} 条</span></div>
+       <div class="shadow-list">`
+      + rows.slice().reverse().map((r) => {
+        const same = r.rule_action === r.llm_action;
+        return `<div class="df-item">
+          <div class="df-head">
+            <span class="df-sym">${esc(r.symbol || '')}</span>
+            <span class="df-flags">
+              ${r.degraded ? '<span class="df-flag warn">降级</span>' : ''}
+              <span class="df-flag ${same ? 'same' : 'diff'}">${same ? '一致' : '不同'}</span>
+            </span>
+          </div>
+          <div class="df-fields three">
+            <div class="df-field"><span class="df-label">规则</span><span class="df-val">${esc(actCn(r.rule_action))}</span></div>
+            <div class="df-field"><span class="df-label">LLM</span><span class="df-val${same ? '' : ' df-em'}">${esc(actCn(r.llm_action))}</span></div>
+            <div class="df-field"><span class="df-label">置信</span><span class="df-val">${Number(r.confidence || 0).toFixed(2)}</span></div>
+          </div>
+          ${r.reason ? `<p class="df-note">${esc(r.reason)}</p>` : ''}
+        </div>`;
+      }).join('')
+      + `</div>`
+    : `<div class="muted center">暂无独立复核记录（开启「独立复核」并产生持仓动作后显示）</div>`;
 }
 
 function renderResearchAuto(a) {
@@ -2351,28 +2373,44 @@ function renderPnl() {
 }
 
 /* ---------------- 决策 ---------------- */
+// 底部固定条脱离主内容流，把实测高度同步给 #tab-decision 的 padding-bottom，
+// 这样滚动到页面末尾时最后一张卡片仍完整可见，不会被固定条压住。
+function syncOrderDockHeight() {
+  const dock = $('orderDock');
+  if (!dock) return;
+  const card = dock.classList.contains('hidden') ? null : dock.firstElementChild;
+  document.documentElement.style.setProperty('--order-dock-h',
+    card ? Math.ceil(card.getBoundingClientRect().height + 14) + 'px' : '0px');
+}
+window.addEventListener('resize', syncOrderDockHeight);
+
 function renderDecision(d, switchTab = true) {
   if (!d || !d.analysts) return;
   latestDecision = d;
   const a = d.analysts || [];
   const analysts = a.map((x) => {
     const cls = x.stance > 0.1 ? 'up' : x.stance < -0.1 ? 'down' : 'muted';
-    return `<div class="analyst">
+    const flags = x.data_flags || [];
+    return `<div class="analyst ${cls}">
       <h3>${esc(x.role)} <span class="stance ${cls}">${x.stance >= 0 ? '+' : ''}${Number(x.stance).toFixed(2)}</span></h3>
-      <div class="analyst-body collapsed"><p>${esc(x.summary)}</p></div>
-      <button class="analyst-toggle" type="button" onclick="const a=this.closest('.analyst');a.classList.toggle('open');this.textContent=a.classList.contains('open')?'收起':'展开全文'">展开全文</button>
-      ${(x.data_flags || []).map((f) => `<div class="flag">⚑ ${esc(f)}</div>`).join('')}
+      <div class="analyst-body"><p>${esc(x.summary)}</p></div>
+      ${flags.length ? `<div class="analyst-flags">${flags.map((f) => `<span class="flag">⚑ ${esc(f)}</span>`).join('')}</div>` : ''}
     </div>`;
   }).join('');
 
   const p = d.proposal, r = d.risk_decision, o = d.order;
   const orderHtml = o
-    ? `<div class="order-box">
-        <b>${esc(sideCn(o.side))} ${fmt(o.quantity, 4)} ${esc(o.symbol)}</b> · 名义 ${fmt(o.notional_usd)} USDT · ${fmt(o.leverage, 1)}x<br>
-        止损 ${fmt(o.stop_loss_price)} · 止盈 ${fmt(o.take_profit_price)} · 单笔最大亏损 ${fmt(o.risk_usd)} USDT（权益 ${(o.max_loss_pct_of_equity * 100).toFixed(2)}%）<br>
-        <span class="muted">状态 ${esc(o.status)}，需要在「交易」页手动执行</span>
-      </div>`
-    : `<div class="order-box rejected">本次没有订单：${esc(r.reasons.join('；'))}</div>`;
+    ? `<div class="order-lead"><b class="${o.side === 'short' ? 'down' : 'up'}">${esc(sideCn(o.side))} ${fmt(o.quantity, 4)} ${esc(o.symbol)}</b></div>
+      <div class="df-fields three">
+        <div class="df-field"><span class="df-label">名义</span><span class="df-val">${fmt(o.notional_usd)} USDT</span></div>
+        <div class="df-field"><span class="df-label">杠杆</span><span class="df-val">${fmt(o.leverage, 1)}x</span></div>
+        <div class="df-field"><span class="df-label">止损</span><span class="df-val">${fmt(o.stop_loss_price)}</span></div>
+        <div class="df-field"><span class="df-label">止盈</span><span class="df-val">${fmt(o.take_profit_price)}</span></div>
+        <div class="df-field"><span class="df-label">最大亏损</span><span class="df-val">${fmt(o.risk_usd)} USDT</span></div>
+        <div class="df-field"><span class="df-label">权益占比</span><span class="df-val">${(o.max_loss_pct_of_equity * 100).toFixed(2)}%</span></div>
+      </div>
+      <p class="df-note">状态 ${esc(o.status)}，需要在「交易」页手动执行</p>`
+    : `<div class="order-reject"><b>本次没有订单</b><span>${esc(r.reasons.join('；'))}</span></div>`;
 
   $('decisionBody').className = 'decision-body';
   $('decisionBody').innerHTML = `
@@ -2413,10 +2451,15 @@ function renderDecision(d, switchTab = true) {
         <ul class="muted">${(r.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
       </div>
     </div>
-    <div class="card">
-      <div class="card-head"><h2>⑤ 订单计划</h2></div>
-      ${orderHtml}
+    `;
+  // 订单计划固定在决策页底部：页面滚动时保持可见，主内容由 padding-bottom 让位。
+  const dock = $('orderDock');
+  dock.classList.remove('hidden');
+  dock.innerHTML = `<div class="card order-dock-card">
+      <div class="card-head"><h2>⑤ 订单计划</h2><span class="muted dock-hint">滚动时保持可见</span></div>
+      <div class="order-dock-body" role="region" aria-label="订单计划详情" tabindex="0">${orderHtml}</div>
     </div>`;
+  syncOrderDockHeight();
   if (switchTab) showTab('decision');
 }
 

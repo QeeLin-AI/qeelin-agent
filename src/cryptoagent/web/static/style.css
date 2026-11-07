@@ -913,32 +913,19 @@ label.field > input, label.field > select { max-width: 420px; }
 }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 16px; margin-bottom: 16px; }
 .analyst-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.analyst { background: var(--surface); border: 1px solid var(--border-soft); border-radius: 12px; padding: 16px; box-shadow: var(--shadow-sm); }
-.analyst h3 { margin: 0 0 10px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.analyst p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.7; }
-.analyst-body.collapsed {
-  max-height: 4.9em; overflow: hidden; position: relative;
-  -webkit-mask-image: linear-gradient(180deg, #000 52%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 52%, transparent 100%);
-  transition: max-height .28s ease;
+/* 分析师卡：全文常驻，靠左侧立场色条 + 标题/正文/标记三段式扫读，不再折叠 */
+.analyst {
+  position: relative; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border-soft);
+  border-radius: 12px; padding: 14px 16px 14px 18px; box-shadow: var(--shadow-sm);
 }
-.analyst.open .analyst-body.collapsed { max-height: 60em; -webkit-mask-image: none; mask-image: none; }
-.analyst-toggle {
-  display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%;
-  margin-top: 12px; padding: 8px 14px; font-size: 11.5px; font-weight: 650; letter-spacing: .03em;
-  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
-  border-radius: 8px; cursor: pointer; user-select: none;
-  transition: background .18s ease, border-color .18s ease, transform .12s ease;
-}
-.analyst-toggle:hover { background: var(--surface-3); border-color: var(--accent); }
-.analyst-toggle:active { transform: translateY(1px); }
-.analyst-toggle::after {
-  content: ""; width: 7px; height: 7px; flex: none;
-  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
-  transform: rotate(45deg) translateY(-2px); transition: transform .22s ease;
-}
-.analyst.open .analyst-toggle::after { transform: rotate(-135deg) translateY(2px); }
-.analyst .flag { margin-top: 10px; font-size: 11.5px; color: var(--amber); }
+.analyst::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border); }
+.analyst.up::before { background: var(--up); }
+.analyst.down::before { background: var(--down); }
+.analyst h3 { margin: 0 0 9px; font-size: 13px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.analyst-body p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.75; overflow-wrap: anywhere; }
+.analyst-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--border-soft); }
+.analyst .flag { font-size: 11px; line-height: 1.5; color: var(--amber); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
 .stance { font-variant-numeric: tabular-nums; font-weight: 700; }
 .debate { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .debate .bull, .debate .bear { background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px; padding: 16px; }
@@ -953,14 +940,49 @@ label.field > input, label.field > select { max-width: 420px; }
 .order-box { background: var(--surface-2); border: 1px solid var(--border-soft); border-left: 3px solid var(--down); border-radius: 10px; padding: 14px 16px; }
 .order-box.rejected { border-left-color: var(--amber); }
 
+/* 决策页 · 订单计划底部固定条
+   独立于主内容流，宽度与 main 内容区一致；高度由 JS 写入 --order-dock-h，
+   #tab-decision 用同等 padding-bottom 让位，滚动到底也不会压住最后一张卡。 */
+#tab-decision { padding-bottom: calc(var(--order-dock-h, 0px) + 16px); }
+.order-dock {
+  position: fixed; left: 240px; right: 0; bottom: 0; z-index: 15;
+  display: flex; justify-content: center;
+  padding: 0 32px; pointer-events: none;
+}
+.order-dock.hidden { display: none; }
+.order-dock > .card {
+  width: 100%; max-width: 1316px; margin: 0 0 14px;
+  pointer-events: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .30), var(--shadow-lg);
+}
+html[data-theme="light"] .order-dock > .card {
+  box-shadow: 0 -8px 30px rgba(16, 24, 40, .14), var(--shadow-lg);
+}
+.order-dock .card-head { margin-bottom: 9px; padding-bottom: 9px; }
+.dock-hint { font-size: 11px; color: var(--faint); white-space: nowrap; }
+/* 内容较多时条内滚动，锁定滚动穿透，固定条本身高度受控 */
+.order-dock-body {
+  max-height: min(32vh, 240px); overflow-y: auto;
+  overscroll-behavior: contain; padding-right: 4px;
+}
+.order-dock-body:focus-visible { outline-offset: 4px; }
+.order-lead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 9px; }
+.order-lead b { font-size: 16px; font-weight: 700; letter-spacing: -.02em; }
+.order-dock-body .df-fields { gap: 4px 16px; }
+.order-dock-body .df-field { padding: 4px 0; }
+.order-reject { display: flex; flex-direction: column; gap: 6px; }
+.order-reject b { font-size: 14px; color: var(--amber); }
+.order-reject span { font-size: 12px; line-height: 1.7; color: var(--text-2); overflow-wrap: anywhere; }
+
 /* 决策页紧凑化：只收紧本页卡片间距/内边距与说明文案，不影响其它页面 */
 #tab-decision .card { padding: 15px 18px; margin-bottom: 12px; }
 #tab-decision .card-head { padding-bottom: 9px; margin-bottom: 11px; }
 #tab-decision .card > p.muted:not(.center) { font-size: 12px; line-height: 1.5; margin: 0 0 11px; }
 #tab-decision .grid-2 { gap: 12px; margin-bottom: 12px; }
-#tab-decision .analyst-grid { gap: 9px; margin-bottom: 12px; }
-#tab-decision .analyst { padding: 12px 14px; }
-#tab-decision .analyst-body.collapsed { max-height: 4.4em; }
+#tab-decision .analyst-grid { gap: 10px; margin-bottom: 12px; }
+#tab-decision .analyst { padding: 12px 14px 12px 16px; }
 #tab-decision .thesis { margin-top: 11px; padding: 11px 14px; }
 #tab-decision .proposal-grid { gap: 8px; margin: 11px 0; }
 #tab-decision .proposal-grid .item { padding: 10px 12px; }
@@ -998,14 +1020,46 @@ label.field > input, label.field > select { max-width: 420px; }
 .st-row > .muted { font-size: 11px; word-break: break-all; }
 .cost-gate { margin-top: 12px; padding: 12px 14px; border-radius: 9px; background: var(--accent-soft); font-size: 12px; line-height: 1.7; }
 .cost-gate .muted { font-size: 11px; margin-top: 4px; }
-.factor-bars { margin-top: 14px; display: flex; flex-direction: column; gap: 7px; }
-.fb-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 64px; align-items: center; gap: 8px; font-size: 11.5px; }
-.fb-name { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fb-track { height: 6px; background: var(--surface-3); border-radius: 99px; overflow: hidden; }
-.fb-fill { display: block; height: 100%; border-radius: 99px; }
-.fb-fill.up { background: var(--up); }
-.fb-fill.down { background: var(--down); }
-.fb-val { text-align: right; font-variant-numeric: tabular-nums; }
+/* 决策页数据面板：因子信号与独立复核共用同一套层级、对齐与分组。
+   结论用大号等宽数字，字段用细线网格对齐，次要信息统一收进 .df-note。 */
+.df-block { margin-top: 14px; border-top: 1px solid var(--border-soft); padding-top: 12px; }
+.df-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+.df-title { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.df-count { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.df-conclusion { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 10px; }
+.df-key { font-size: 22px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.df-dir { font-size: 12px; color: var(--text-2); }
+.df-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
+.df-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; }
+.df-field { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; padding: 5px 0; border-bottom: 1px solid var(--border-soft); }
+.df-field.wide { grid-column: 1 / -1; }
+.df-label { flex: none; font-size: 11px; color: var(--muted); }
+.df-val { min-width: 0; font-size: 12.5px; font-weight: 650; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.df-val.text { font-size: 11.5px; font-weight: 500; color: var(--text-2); }
+.df-field.wide .df-val { flex: 1 1 auto; text-align: left; }
+.df-val.df-em { color: var(--amber); }
+.df-note { margin: 9px 0 0; font-size: 11px; line-height: 1.65; color: var(--faint); overflow-wrap: anywhere; }
+.df-detail { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.df-row { display: grid; grid-template-columns: clamp(88px, 26vw, 130px) minmax(0, 1fr) 60px; align-items: center; gap: 8px; font-size: 11.5px; }
+.df-name { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.df-track { height: 6px; background: var(--surface-3); border-radius: 99px; overflow: hidden; }
+.df-fill { display: block; height: 100%; border-radius: 99px; }
+.df-fill.up { background: var(--up); }
+.df-fill.down { background: var(--down); }
+.df-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* 独立复核：每条记录一个分组，规则 / LLM / 置信三列对齐，结论标记右置 */
+.shadow-box { display: flex; flex-direction: column; gap: 10px; }
+.shadow-list { display: flex; flex-direction: column; gap: 10px; }
+.df-item { border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 12px; background: var(--surface-2); min-width: 0; }
+.df-item .df-head { margin-bottom: 7px; }
+.df-sym { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.df-flags { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.df-flag { font-size: 10.5px; font-weight: 650; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.df-flag.same { color: var(--ok); border-color: var(--ok); }
+.df-flag.diff { color: var(--amber); border-color: var(--amber); }
+.df-flag.warn { color: var(--amber); border-color: var(--amber); }
+.df-item .df-note { margin-top: 8px; }
 pre.code {
   margin: 0; padding: 14px 16px; background: var(--surface-2);
   border: 1px solid var(--border-soft); border-radius: 10px;
@@ -1128,6 +1182,13 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 手机端顶栏只保留关键状态与操作：数据源 / 模型两个胶囊让位；
      熔断按钮回到与「强制刷新」相同的 .btn.ghost.sm 样式，不再单独放大。 */
   #dataSource, #llmTag { display: none; }
+  /* 底部固定条：窄屏无侧栏，内边距跟随 main；滚动区再收一点高度给内容让位 */
+  .order-dock { left: 0; padding: 0 18px; }
+  .order-dock > .card { max-width: none; margin-bottom: 10px; }
+  .order-dock-body { max-height: min(34vh, 210px); }
+  /* 窄屏 3 列放不下「1,820.16 USDT」，订单字段回退 2 列 3 行 */
+  .order-dock-body .df-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dock-hint { display: none; }
   /* 保证金占用计算提示：✓ 与说明文字固定首行同行，文字只在剩余宽度内换行，
      不再整块掉到下一行造成错位。仅作用于设置页该提示条。 */
   #set-params .risk-link { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
@@ -1468,7 +1529,6 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .stat-row > .stat b { font-size: 22px; }
   .card { padding: 16px; }
   .st-row { grid-template-columns: 76px 68px minmax(0, 1fr); font-size: 11px; }
-  .fb-row { grid-template-columns: 100px minmax(0, 1fr) 56px; }
   .set-row { flex-wrap: wrap; gap: 6px; }
   .set-row > .row-label { flex-basis: 100%; }
 

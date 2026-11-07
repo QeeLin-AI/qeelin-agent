@@ -208,7 +208,7 @@
           <button id="runDecision" class="btn primary">运行决策</button>
         </div>
       </div>
-      <p class="muted">分析师（并发）→ 研究员辩论 → 交易员提案 → 风控官 → 风控引擎。整个过程约 1 秒（mock 模式）。</p>
+      <p class="muted">分析师（并发）→ 研究员辩论 → 交易员提案 → 风控官 → 风控引擎。</p>
     </div>
 
     <div class="decision-duo">
@@ -235,11 +235,13 @@
         <h2>LLM 独立复核</h2>
         <span class="muted">规则动作 vs LLM 独立意见（只读对照，不改平仓）</span>
       </div>
-      <div id="decisionShadowBox" class="set-hint"></div>
+      <div id="decisionShadowBox" class="shadow-box"></div>
     </div>
     </div>
 
     <div id="decisionBody" class="decision-body empty">还没有运行决策。运行一次决策后，这里会显示完整推理过程与仓位归因。</div>
+    <!-- 订单计划底部固定条：由 renderDecision() 填充，无决策数据时隐藏 -->
+    <div id="orderDock" class="order-dock hidden"></div>
   </section>
 
   <!-- ============ 研究 ============ -->
