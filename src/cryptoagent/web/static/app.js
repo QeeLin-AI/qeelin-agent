@@ -2485,8 +2485,9 @@ function renderDecision(d, switchTab = true) {
   // 首行：BNB/USDT 做空 9.0115 BNB（品种 动作 数量 基础资产）
   const oPair = splitPair(o && o.symbol);
   const oUnit = oPair.base ? ` ${esc(oPair.base)}` : '';
+  // 只有「做多/做空」上红绿，品种、数量、单位保持正文色（整行染色会让其他信息也带上涨跌语义）
   const orderHtml = o
-    ? `<div class="order-lead"><b class="${oSideCls}">${esc(oPair.pair)} ${oSideCn} ${fmt(o.quantity, 4)}${oUnit}</b></div>
+    ? `<div class="order-lead"><b>${esc(oPair.pair)} <span class="${oSideCls}">${oSideCn}</span> ${fmt(o.quantity, 4)}${oUnit}</b></div>
       <div class="df-fields three">
         <div class="df-field"><span class="df-label">名义</span><span class="df-val">${fmt(o.notional_usd)} USDT</span></div>
         <div class="df-field"><span class="df-label">杠杆</span><span class="df-val">${fmt(o.leverage, 1)}x</span></div>
