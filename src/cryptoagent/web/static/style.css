@@ -1179,14 +1179,23 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 窄屏 3 列放不下「1,820.16 USDT」，订单字段回退 2 列 3 行 */
   .order-dock-body .df-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* 移动端两处默认折叠：桌面端不生效，按钮也不出现 */
+  /* 展开 / 收起按钮：配色对齐顶栏「强制刷新」（.btn.ghost.sm）——透明底 + 中性边框 + 次级文字 */
   .df-more {
     display: inline-flex; align-items: center; justify-content: center;
-    margin-top: 9px; padding: 6px 12px;
-    font-size: 11.5px; font-weight: 650; color: var(--accent);
-    background: var(--accent-soft); border: 1px solid var(--accent-line);
-    border-radius: 8px; cursor: pointer;
+    height: 26px; padding: 0 10px; margin-top: 9px;
+    font-size: 11px; font-weight: 550; color: var(--text-2);
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 7px; cursor: pointer;
   }
-  .df-more:hover { background: var(--surface-3); border-color: var(--accent); }
+  .df-more:hover { background: var(--surface-2); border-color: var(--accent-line); color: var(--text); }
+  /* 有效因子：按钮骑在字段下分割线的右端（上移半个按钮高度），用卡片底色盖住线，
+     不再单独占一行。字段另留 16px 下内边距，按钮只压住留白、不遮文字。 */
+  .df-field-more { padding-bottom: 16px; }
+  .df-block .df-more[data-more="factors"] {
+    display: flex; width: fit-content;
+    margin: -13px 0 6px auto;
+    background: var(--surface);
+  }
   /* 独立复核：最近 2 条常驻，其余默认收起 */
   .shadow-list.collapsed > .df-item:nth-child(n+3) { display: none; }
   /* 因子信号 · 有效因子：默认只显示 3 行 */
@@ -1372,10 +1381,17 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   }
   #scanTable td:nth-child(7).expanded .reason-text,
   #scanTable td:nth-child(7).fit .reason-text { -webkit-line-clamp: unset; overflow: visible; display: block; }
+  /* 「展开」同样走 .btn.ghost.sm 的配色：透明底 + 中性边框 + 次级文字（原来是青色下划线文字链） */
   #scanTable td:nth-child(7) .reason-toggle {
-    display: inline-block; grid-column: 2; grid-row: 2; justify-self: start; margin-top: 2px;
-    font-size: 11px; color: var(--accent); background: none; border: 0;
-    padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+    display: inline-flex; align-items: center; justify-content: center;
+    grid-column: 2; grid-row: 2; justify-self: start; margin-top: 4px;
+    height: 22px; padding: 0 8px;
+    font-size: 11px; font-weight: 550; color: var(--text-2);
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    cursor: pointer; text-decoration: none;
+  }
+  #scanTable td:nth-child(7) .reason-toggle:hover {
+    background: var(--surface-2); border-color: var(--accent-line); color: var(--text);
   }
   #scanTable td:nth-child(7).fit .reason-toggle { display: none; }
 

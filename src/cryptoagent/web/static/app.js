@@ -27,6 +27,40 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const sideCn = (s) => (s === 'LONG' ? '多' : s === 'SHORT' ? '空' : (s || ''));
 // 成交动作中文：开仓 / 平仓（交易所原始成交已带 买入/卖出 则原样保留）
 const actionCn = (a) => (a === 'OPEN' ? '开仓' : a === 'CLOSE' ? '平仓' : (a || ''));
+// 决策方向中文：后端 proposal.action / risk_decision.action 是 long/short/flat，
+// 直接输出会在 ③ 交易员提案、④ 风控、机会榜里露出英文，统一走这里。
+const dirCn = (a) => ({ long: '做多', short: '做空', flat: '观望' }[String(a || '').toLowerCase()] || (a || ''));
+// 风控官结论中文：approve / reduce / reject
+const verdictCn = (v) => ({ approve: '通过', reduce: '减仓', reject: '拒绝' }[String(v || '').toLowerCase()] || (v || ''));
+// 订单状态中文。注意：决策快照（/api/decisions/latest）写入时 status 固定是 PLANNED，
+// 真实状态在 /api/status 的 last_decision.order（execute() 成功后后端会改成 FILLED）。
+const ORDER_STATUS_CN = {
+  PLANNED: '待执行', SENT: '已发送', FILLED: '已成交',
+  REJECTED: '已拒绝', CANCELED: '已撤销', CANCELLED: '已撤销',
+};
+const orderStatusCn = (s) => ORDER_STATUS_CN[String(s || '').toUpperCase()] || s || '';
+// 同一笔订单的身份：品种 + 方向 + 数量（快照自带的 status 不可信，靠它去实时数据里认领）
+const orderKey = (o) => [o.symbol, String(o.position_side || o.side || '').toUpperCase(), Number(o.quantity || 0)].join('|');
+// 合并实时状态：快照里的 order 只提供计划内容，状态优先取 /api/status 的同一笔订单
+function liveOrderStatus(o) {
+  if (!o) return '';
+  const lo = (lastStatus && lastStatus.last_decision && lastStatus.last_decision.order) || null;
+  if (lo && orderKey(lo) === orderKey(o) && lo.status) return lo.status;
+  return o.status;
+}
+// 状态行文案：待执行才提示去交易页手动执行，已成交不再提示
+function orderNote(o) {
+  const st = liveOrderStatus(o);
+  const hint = String(st || '').toUpperCase() === 'PLANNED' ? '，需要在「交易」页手动执行' : '';
+  return `状态 ${orderStatusCn(st)}${hint}`;
+}
+// 轮询时只刷这一行，不整块重渲染（否则滚动位置与「展开更多」状态会被重置）
+function paintOrderStatus() {
+  const note = document.querySelector('#orderDock .df-note');
+  if (!note || !latestDecision || !latestDecision.order) return;
+  const text = orderNote(latestDecision.order);
+  if (note.textContent !== text) note.textContent = text;
+}
 // 卡片右上角时间戳：本地记录是 %Y-%m-%d %H:%M:%S(19位)，裁掉年份保留 MM-DD HH:MM:SS；
 // 交易所回读已是 %m-%d %H:%M:%S(14位) 则原样保留。
 const shortTs = (v) => {
@@ -262,6 +296,8 @@ async function poll() {
     // 「持仓管理员」卡片永远拿到 undefined、一直 hidden（曾经的实际故障）。
     renderPositionManagement(s);
     renderDecisionShadow(s);
+    // 订单计划的状态行跟实时订单走（决策快照里永远写着 PLANNED）
+    paintOrderStatus();
   } catch (e) {
     console.error(e);
   }
@@ -1199,7 +1235,7 @@ function factorSigHtml(p) {
     <div class="df-head"><span class="df-title">因子信号</span><span class="df-count">${active.length} 个有效因子</span></div>
     <div class="df-conclusion"><b class="df-key ${cls}">${c >= 0 ? '+' : ''}${Number(c).toFixed(2)}</b><span class="df-dir">${dir}</span></div>
     <div class="df-fields">
-      <div class="df-field wide"><span class="df-label">有效因子</span><span class="df-val text${clampCls}">${esc(names)}</span></div>
+      <div class="df-field wide${hasMore ? ' df-field-more' : ''}"><span class="df-label">有效因子</span><span class="df-val text${clampCls}">${esc(names)}</span></div>
     </div>
     ${more}
     ${detail}
@@ -1750,7 +1786,7 @@ function renderScan(data) {
     return `<tr>
       <td class="mono">${esc(r.symbol)}</td>
       <td>${fmt(r.price)}</td>
-      <td class="${cls}">${esc(r.action)}</td>
+      <td class="${cls}">${esc(dirCn(r.action))}</td>
       <td>${(r.size_pct * 100).toFixed(1)}%</td>
       <td>${fmt(r.leverage, 1)}x</td>
       <td>${verdict}</td>
@@ -2435,16 +2471,10 @@ function renderDecision(d, switchTab = true) {
   const oSideRaw = String((o && (o.position_side || o.side)) || '').toUpperCase();
   const oIsSell = oSideRaw === 'SHORT' || oSideRaw === 'SELL';
   const oIsBuy = oSideRaw === 'LONG' || oSideRaw === 'BUY';
-  const oSideCn = oIsSell ? '卖出' : (oIsBuy ? '买入' : '');
+  const oSideCn = oIsSell ? '做空' : (oIsBuy ? '做多' : '');
   const oSideCls = oIsSell ? 'down' : 'up';
-  // 订单状态中文（后端目前只有 PLANNED；其余为兜底，避免以后新增状态又露出英文）
-  const ORDER_STATUS_CN = {
-    PLANNED: '待执行', SENT: '已发送', FILLED: '已成交',
-    REJECTED: '已拒绝', CANCELED: '已撤销', CANCELLED: '已撤销',
-  };
-  const oStatusCn = o ? (ORDER_STATUS_CN[String(o.status || '').toUpperCase()] || o.status || '') : '';
   const orderHtml = o
-    ? `<div class="order-lead"><b class="${oSideCls}">${esc(o.symbol)} ${oSideCn} ${fmt(o.quantity, 4)} 数量</b></div>
+    ? `<div class="order-lead"><b class="${oSideCls}">${esc(o.symbol)} ${oSideCn} 数量 ${fmt(o.quantity, 4)}</b></div>
       <div class="df-fields three">
         <div class="df-field"><span class="df-label">名义</span><span class="df-val">${fmt(o.notional_usd)} USDT</span></div>
         <div class="df-field"><span class="df-label">杠杆</span><span class="df-val">${fmt(o.leverage, 1)}x</span></div>
@@ -2453,7 +2483,7 @@ function renderDecision(d, switchTab = true) {
         <div class="df-field"><span class="df-label">最大亏损</span><span class="df-val">${fmt(o.risk_usd)} USDT</span></div>
         <div class="df-field"><span class="df-label">权益占比</span><span class="df-val">${(o.max_loss_pct_of_equity * 100).toFixed(2)}%</span></div>
       </div>
-      <p class="df-note">状态 ${esc(oStatusCn)}，需要在「交易」页手动执行</p>`
+      <p class="df-note">${esc(orderNote(o))}</p>`
     : `<div class="order-reject"><b>本次没有订单</b><span>${esc(r.reasons.join('；'))}</span></div>`;
 
   $('decisionBody').className = 'decision-body';
@@ -2474,7 +2504,7 @@ function renderDecision(d, switchTab = true) {
       <div class="card">
         <div class="card-head"><h2>③ 交易员提案</h2></div>
         <div class="proposal-grid">
-          <div class="item"><span>方向</span><b class="${p.action === 'long' ? 'up' : p.action === 'short' ? 'down' : ''}">${esc(p.action)}</b></div>
+          <div class="item"><span>方向</span><b class="${p.action === 'long' ? 'up' : p.action === 'short' ? 'down' : ''}">${esc(dirCn(p.action))}</b></div>
           <div class="item"><span>仓位</span><b>${(p.size_pct * 100).toFixed(1)}%</b></div>
           <div class="item"><span>杠杆</span><b>${fmt(p.leverage, 1)}x</b></div>
           <div class="item"><span>止损</span><b>${(p.stop_loss_pct * 100).toFixed(2)}%</b></div>
@@ -2488,10 +2518,10 @@ function renderDecision(d, switchTab = true) {
       </div>
       <div class="card">
         <div class="card-head"><h2>④ 风控</h2></div>
-        <p>风控官：<b>${esc(d.risk_officer.verdict)}</b>（仓位乘数 ${Number(d.risk_officer.size_multiplier).toFixed(2)}）</p>
+        <p>风控官：<b>${esc(verdictCn(d.risk_officer.verdict))}</b>（仓位乘数 ${Number(d.risk_officer.size_multiplier).toFixed(2)}）</p>
         <ul class="muted">${(d.risk_officer.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
         <p>风控引擎：<b class="${r.approved ? 'up' : 'down'}">${r.approved ? '通过' : '拒绝'}</b>
-           · ${esc(r.action)} · 仓位 ${(r.size_pct * 100).toFixed(2)}% · ${fmt(r.leverage, 1)}x</p>
+           · ${esc(dirCn(r.action))} · 仓位 ${(r.size_pct * 100).toFixed(2)}% · ${fmt(r.leverage, 1)}x</p>
         <ul class="muted">${(r.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
       </div>
     </div>
