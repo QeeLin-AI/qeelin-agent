@@ -429,7 +429,7 @@ function renderEvoBench(p, o) {
   const rows = [
     ['期望值 (R/笔)', 'expectancy_r', 2],
     ['按笔夏普', 'r_sharpe', 2],
-    ['最大回撤 (R)', 'max_dd_r', 1],
+    ['最大回撤 (R)', 'max_dd_r', 2],
   ];
   tb.innerHTML = rows.map(([label, key, d]) => {
     const cell = (v) => (v === null || v === undefined || Number.isNaN(Number(v)))
