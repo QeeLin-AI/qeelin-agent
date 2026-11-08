@@ -2629,19 +2629,27 @@ class TradingEngine:
         }
 
     def _attach_factor_snapshot(self, symbol: str) -> None:
-        """开仓成交后补因子快照（必须在成交之后算，绝不拖慢下单）。
+        """开仓成交后补因子快照（后台线程，绝不阻塞下单与全局锁）。
 
-        因子计算要起子进程（~1.25s，命中 90 秒缓存则零成本）。失败或拿不到行情
-        就当作没有快照：平仓时只是少统计一笔，不影响任何交易逻辑。
+        因子计算要起子进程（~1.25s，命中 90 秒缓存则零成本）。execute 全程持
+        `self.lock`，在这里同步算会卡住持仓守护/其它品种的开平仓，所以放到一次性
+        后台线程里做。失败或拿不到行情就当作没有快照：平仓时只是少统计一笔，
+        不影响任何交易逻辑；下一次 `_save()` 会把它一起落盘。
         """
+        def _work() -> None:
+            try:
+                pos = self._get_position(symbol)
+                if pos is None:
+                    return
+                rec = self._factor_record(symbol)
+                if rec:
+                    pos["factor_snapshot"] = rec
+            except Exception:  # noqa: BLE001 - 快照失败不影响持仓
+                pass
+
         try:
-            pos = self._get_position(symbol)
-            if pos is None:
-                return
-            rec = self._factor_record(symbol)
-            if rec:
-                pos["factor_snapshot"] = rec
-        except Exception:  # noqa: BLE001 - 快照失败不影响持仓
+            threading.Thread(target=_work, name="factor-snap", daemon=True).start()
+        except Exception:  # noqa: BLE001 - 起不了线程也不能影响交易
             pass
 
     def _sync_live_stops(self, pos: dict, new_stop: float) -> bool:
