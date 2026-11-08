@@ -484,7 +484,7 @@ function renderEvoChanges(d) {
       : '';
   }
   if (!items.length) {
-    tb.innerHTML = '<tr><td colspan="6" class="muted center">还没有自动改动。L1 参数校准需 20 笔平仓样本，因子研究需先通过三闸。</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="muted center">还没有自动改动。L1 参数校准需 20 笔平仓样本，因子研究需先通过三闸。</td></tr>';
     return;
   }
   tb.innerHTML = items.map((it) => {
@@ -509,13 +509,21 @@ function renderEvoChanges(d) {
       ? `${evoVal(it.before)} → ${evoVal(it.after)}`
       : evoPhrase(evoVal(it.after));
     const ts = String(it.applied_at || it.created_at || '');
-    return `<tr>
+    // 只有这三种状态代表「改动正在生效」，才允许回滚；已回滚/已拒绝不再给按钮
+    const canRollback = ['applied', 'degraded', 'confirmed'].includes(String(it.status || ''));
+    const act = canRollback
+      ? `<button class="btn ghost xs evo-rollback" data-rollback="${esc(it.id)}"`
+        + ` title="改回 ${esc(hasBefore ? evoVal(it.before) : '（无旧值）')}">回滚</button>`
+      : '<span class="evo-act-none">—</span>';
+    const rowCls = it.status === 'degraded' ? ' class="is-degraded"' : '';
+    return `<tr${rowCls}>
       <td class="muted">${esc(ts.slice(5, 16))}</td>
       <td>${esc(EVO_KIND_CN[it.kind] || it.kind || '')}</td>
       <td title="${esc(it.target || '')}">${esc(evoShortTarget(it.target))}</td>
       <td>${esc(change)}</td>
       <td><span class="evo-state ${cls}">${esc(st)}</span></td>
-      <td class="muted">${esc(att)}</td>
+      <td class="muted evo-att ${cls}">${esc(att)}</td>
+      <td class="evo-act">${act}</td>
     </tr>`;
   }).join('');
 }
@@ -535,6 +543,30 @@ function renderEvoLessons() {
     return `<div class="evo-lesson ${cls}">${esc(h.symbol || '')} ${esc(h.review.lesson)}</div>`;
   }).join('');
 }
+
+// 账本行内回滚：确认 → 调后端写回旧值 → 刷新整表（状态、归因、按钮一起更新）。
+// 回滚是「追加一条记录 + 写回旧值」，不删历史，所以确认文案要把这点说清楚。
+$('evoChangesTable').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-rollback]');
+  if (!btn) return;
+  const row = btn.closest('tr');
+  const cells = row ? row.children : [];
+  const full = (cells[2] && cells[2].getAttribute('title')) || (cells[2] ? cells[2].textContent : '');
+  const change = cells[3] ? cells[3].textContent.trim() : '';
+  if (!confirm(
+    `回滚「${full}」到改动前？\n\n本次改动：${change}\n\n`
+    + '回滚会写回旧值并追加一条记录，历史不会被删除。'
+  )) return;
+  btn.disabled = true;
+  try {
+    const d = await api('/api/evolution/rollback', 'POST', { id: btn.dataset.rollback });
+    toast(`已回滚：${d.target}${d.kind === 'factor' ? '（因子已移出库）' : ''}`, 'ok');
+    loadEvolution();
+  } catch (err) {
+    toast(`回滚失败：${err.message}`, 'err');
+    btn.disabled = false;
+  }
+});
 
 /* ---------------- 状态轮询 ---------------- */
 async function poll() {

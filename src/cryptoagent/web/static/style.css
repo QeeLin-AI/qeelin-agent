@@ -2138,6 +2138,18 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 .evo-state.warn { color: var(--amber); }
 .evo-state.muted { color: var(--muted); }
 
+/* 账本表格：变差的行整行标出，回滚按钮就在同一行右端——「变差 → 退回」不用
+   跨页找目标，也不用记住改的是哪个参数。 */
+#evoChangesTable tr.is-degraded td { background: rgba(242, 99, 111, .07); }
+#evoChangesTable tr.is-degraded td:first-child { box-shadow: inset 2px 0 0 var(--up); }
+#evoChangesTable tr.is-degraded:hover td { background: rgba(242, 99, 111, .12); }
+#evoChangesTable th.act, #evoChangesTable td.evo-act { text-align: right; white-space: nowrap; }
+.evo-rollback { height: 26px; padding: 0 10px; font-size: 11.5px; min-height: 0; }
+.evo-act-none { color: var(--faint); }
+/* 归因结论按好坏着色：一眼看出这条改动是收益还是负担 */
+.evo-att.bad { color: var(--up); }
+.evo-att.ok { color: var(--ok); }
+
 /* 1120 以下：复盘 + 门槛并排会把门槛表压到 340px 以下，先拆这一行 */
 @media (max-width: 1120px) {
   .evo-mid { grid-template-columns: 1fr; }
@@ -2174,6 +2186,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 「新建因子」4 个汉字约 50px，改动列 78px（内容区 66px）足够，余下给目标列 */
   #evoChangesTable th:nth-child(4), #evoChangesTable td:nth-child(4) { width: 78px; }
   #evoChangesTable th:nth-child(5), #evoChangesTable td:nth-child(5) { width: 52px; }
+  /* 操作列只放一个「回滚」按钮，56px 刚好；余下宽度全部给目标列 */
+  #evoChangesTable th.act, #evoChangesTable td.evo-act { width: 56px; padding-left: 0; }
   #evoChangesTable td:nth-child(1),
   #evoChangesTable td:nth-child(4),
   #evoChangesTable td:nth-child(5) { white-space: nowrap; }

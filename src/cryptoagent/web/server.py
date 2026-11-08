@@ -1823,7 +1823,14 @@ class WebApp:
         return gov.changes_with_attribution(rows, limit=limit)
 
     def evolution_rollback(self, payload: dict) -> dict:
-        """按 change_id 回滚到那次改动前的值（可回滚任意历史改动，不只最后一条）。"""
+        """按 change_id 回滚到那次改动前的值（可回滚任意历史改动，不只最后一条）。
+
+        三类目标各有各的「写回」方式，不能只做 setattr：
+        - `factor_library.<name>`：回滚 = 把研究因子移出库（原文件留档，不销毁）
+        - `position.<key>`：真正的生效值在 engine.position_tuning（L1 校准叠加在
+          cfg.position 之上），只改 cfg 不会立刻生效，还会被下一轮校准推回去
+        - 其余 `risk/llm/market.<key>`：直接写回 cfg 并落盘
+        """
         from ..config import config_path, save_config
         from ..evolution import get_governor
 
@@ -1836,18 +1843,84 @@ class WebApp:
             raise ApiError("找不到该改动记录", 404)
         if rec.get("status") not in ("applied", "degraded", "confirmed"):
             raise ApiError(f"该改动状态为 {rec.get('status')}，不可回滚", 400)
-        grp, _, key = str(rec.get("target") or "").partition(".")
+
+        target = str(rec.get("target") or "")
+        grp, _, key = target.partition(".")
+
+        # ① 因子：把 .py 从 factor_library 移走。删除前原样留一份到
+        #    runs/evolution/removed_factors/——账本不删历史，文件也不该凭空消失。
+        if grp == "factor_library":
+            import shutil
+            from pathlib import Path
+
+            if not key:
+                raise ApiError(f"目标 {target} 缺少因子名", 400)
+            fpath = Path(self.cfg.research.factor_library) / f"{key}.py"
+            if not fpath.exists():
+                raise ApiError(f"因子文件 {key}.py 已不在库中（可能已被移除）", 400)
+            keep = Path(self.cfg.runs_dir) / "evolution" / "removed_factors"
+            keep.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(fpath, keep / f"{key}.{time.strftime('%Y%m%d_%H%M%S')}.py")
+            fpath.unlink()
+            gov.rollback(cid)
+            return {
+                "rolled_back": cid,
+                "kind": "factor",
+                "target": target,
+                "value": f"{key}.py 已移出因子库",
+                "kept_at": str(keep),
+            }
+
+        # ② 配置 / 持仓参数
         obj = getattr(self.cfg, grp, None)
         if obj is None or not hasattr(obj, key):
-            raise ApiError(f"目标 {rec.get('target')} 在当前配置中不存在", 400)
+            raise ApiError(f"目标 {target} 在当前配置中不存在", 400)
+        cur = getattr(obj, key)
+        raw = rec.get("before")
+        # 按字段当前类型回写：账本里存的是 JSON，int 字段拿回 float 会让
+        # range()/切片这类用法直接报错
+        try:
+            if isinstance(cur, bool):
+                val = bool(raw)
+            elif isinstance(cur, int):
+                val = int(round(float(raw)))
+            elif isinstance(cur, float):
+                val = float(raw)
+            else:
+                val = raw
+        except (TypeError, ValueError):
+            raise ApiError(f"回滚值 {raw!r} 无法转换为 {type(cur).__name__}", 400)
+
         snap = self._settings_snapshot()
-        setattr(obj, key, rec.get("before"))
+        tuning_snap = None
+        if grp == "position":
+            tuning_snap = {
+                "effective": dict(self.engine.position_tuning.get("effective") or {}),
+                "anchor": dict(self.engine.position_tuning.get("anchor") or {}),
+                "pending": self.engine.position_tuning.get("pending"),
+            }
+        setattr(obj, key, val)
+        if grp == "position":
+            # 同步 L1 校准的生效值与基线：只改 cfg 的话，位置管理员读到的仍是
+            # position_tuning["effective"]，回滚等于没做
+            eff = self.engine.position_tuning.get("effective")
+            anchor = self.engine.position_tuning.get("anchor")
+            if isinstance(eff, dict) and key in eff:
+                eff[key] = val
+            if isinstance(anchor, dict) and key in anchor:
+                anchor[key] = val
+            self.engine.position_tuning["pending"] = {}
+
         # 回滚后仍要满足保证金不等式，否则整体撤销
         pos = float(self.cfg.risk.max_position_pct)
         slots = max(1, int(self.cfg.risk.max_concurrent_positions or 1))
         margin = float(self.cfg.risk.max_margin_usage_pct)
         if pos * slots > margin + 1e-9:
             self._settings_restore(snap)
+            if tuning_snap:
+                self.engine.position_tuning["effective"] = tuning_snap["effective"]
+                self.engine.position_tuning["anchor"] = tuning_snap["anchor"]
+                self.engine.position_tuning["pending"] = tuning_snap["pending"]
             raise ApiError(
                 f"回滚后 {pos:.0%}×{slots} 超过保证金上限 {margin:.0%}，已撤销本次回滚", 400
             )
@@ -1858,8 +1931,9 @@ class WebApp:
         gov.rollback(cid)
         return {
             "rolled_back": cid,
-            "target": rec.get("target"),
-            "value": rec.get("before"),
+            "kind": rec.get("kind") or "config",
+            "target": target,
+            "value": val,
             "risk": self.risk_config(),
         }
 
