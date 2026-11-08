@@ -2123,7 +2123,7 @@ function renderStatus(s) {
       })();
       const slip = slipVal === null
         ? '--'
-        : `<span class="${slipVal > 0 ? 'up' : (slipVal < 0 ? 'down' : 'muted')}" title="${esc(slipTitle)}">${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}</span>`;
+        : `<span class="${slipVal > 0 ? 'up' : (slipVal < 0 ? 'down' : 'muted')}" title="${esc(slipTitle)}">${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}<span class="slip-unit"> bps</span></span>`;
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
       // 开仓成交没有已实现盈亏：盈亏列开仓显示「--」，平仓才显示实际盈亏。
