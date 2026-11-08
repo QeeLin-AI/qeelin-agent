@@ -373,7 +373,10 @@ def _okx_rows_to_df(rows: list[list]) -> pd.DataFrame:
     )
     df.index = pd.to_datetime(df["ts"].astype("int64"), unit="ms", utc=True)
     df.index.name = "ts"
-    df = df[["open", "high", "low", "close", "vol"]].astype(float)
+    # volume 用 volCcy（以币为单位的成交量，base 量）而非 vol（张数）：
+    # 张数 × 合约面值 = 币数，量纲才和币安 fapi 的 volume（base 量）对齐，
+    # 否则量价/参与率/换手率因子在 OKX 下会整体差一个面值倍数、信号错乱。
+    df = df[["open", "high", "low", "close", "volCcy"]].astype(float)
     df.columns = ["open", "high", "low", "close", "volume"]
     df = df[~df.index.duplicated(keep="last")].sort_index()
     df["funding_rate"] = 0.0
