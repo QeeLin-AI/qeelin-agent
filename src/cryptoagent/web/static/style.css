@@ -1271,9 +1271,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .side-foot .theme-btn { width: 30px; padding: 0; gap: 0; flex: none; border: 0; background: transparent; }
   .side-foot .theme-btn .theme-text { display: none; }
   .side-foot .theme-btn .theme-ico { width: 15px; height: 15px; }
-  /* 图标上色：暗色主题显示太阳（暖橙），亮色主题显示月亮（蓝色）；描边沿用 currentColor */
-  .side-foot .theme-btn .theme-ico { color: var(--amber); }
-  html[data-theme="light"] .side-foot .theme-btn .theme-ico { color: var(--blue); }
+  /* 日月图标自带配色（暖橙太阳 / 蓝紫月亮 + 金色星），这里不再用 color 染色 */
   main { padding: 22px 18px 70px; }
   .topbar { padding: 10px 18px; }
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }
@@ -1660,7 +1658,10 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .tab .nav-ico { display: block; width: 15px; height: 15px; }
   .tab .lbl-long { display: none; }
   .tab .lbl-short { display: inline; }
-  .side-foot { padding-left: 2px; }
+  /* 主题按钮与左侧分割线留出呼吸位：原来只留 2px，32px 的按钮像是贴在线上。
+     这里取 8px，并把侧栏右内边距 12→8 补回来，导航可用宽度基本不变。 */
+  .side-foot { padding-left: 8px; }
+  .sidebar { padding-right: 8px; }
   /* —— 顶栏（≤520）三处对齐修正 ——
      1) 行情时间戳优先完整。≤860 段给 .price-meta-info 加的 contain: inline-size
         让这行宽度不参与列宽计算，于是它只能分到「品种选择」那一列的宽度，
