@@ -177,7 +177,8 @@ class BinanceFuturesClient:
                 ack = Path(__file__).resolve().parents[2] / ".cryptoagent_live_ack"
             if not ack.exists():
                 raise ExchangeError(
-                    f"主网交易需要确认文件 {ack}（建个空文件即可），防止误操作"
+                    f"主网写操作需要确认文件 {ack}：在项目根目录建一个空文件即可。"
+                    "这是防止误触真实资金的第二道闸门，无法从网页开启。"
                 )
 
     def _request(self, method: str, path: str, params: dict | None = None, signed: bool = False) -> dict:
@@ -490,7 +491,8 @@ class OKXClient:
                 ack = Path(__file__).resolve().parents[2] / ".cryptoagent_live_ack"
             if not ack.exists():
                 raise ExchangeError(
-                    f"主网交易需要确认文件 {ack}（建个空文件即可），防止误操作"
+                    f"主网写操作需要确认文件 {ack}：在项目根目录建一个空文件即可。"
+                    "这是防止误触真实资金的第二道闸门，无法从网页开启。"
                 )
 
     @staticmethod

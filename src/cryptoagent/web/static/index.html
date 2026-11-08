@@ -470,6 +470,11 @@
         <label class="set-row" id="livePassRow"><span class="row-label">Passphrase</span><input id="livePass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
         <label class="set-row"><span class="row-label">确认文本</span><input id="confirmText" type="text" placeholder="我确认使用真实资金" autocomplete="off" /></label>
       </div>
+      <p class="muted hint-key" style="margin:8px 0 0">
+        <strong>主网解锁的前置条件（两道安全闸，网页无法代开）：</strong><br>
+        ① 服务器 <code>.env</code> 里加一行 <code>CRYPTOAGENT_I_UNDERSTAND_THE_RISK=yes</code>，然后重启服务；<br>
+        ② 在项目根目录建一个空文件 <code>.cryptoagent_live_ack</code>。
+      </p>
       <div class="actions">
         <button id="armBtn" class="btn danger">解锁主网实盘</button>
         <button id="liveDisarmBtn" class="btn ghost">断开（回到本地模拟）</button>
