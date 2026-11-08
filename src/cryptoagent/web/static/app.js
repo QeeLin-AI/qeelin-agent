@@ -2079,8 +2079,17 @@ function renderStatus(s) {
   const tb = $('fillsTable').querySelector('tbody');
   if (s.fills && s.fills.length) {
     // A4：计划价 vs 成交价偏差、滑点、手续费、盈亏，全部回流展示
+    // 滑点统一成「成本口径」：正数 = 成交价劣于计划价（吃亏），负数 = 优于计划价。
+    // 原始 slippage_bps 是「成交价 − 计划价」，方向没归一化——买入价高是吃亏、
+    // 卖出价低也是吃亏，直接用符号判红绿必然有一半是错的。
+    const slipOf = (f) => {
+      if (f.slippage_bps === null || f.slippage_bps === undefined) return null;
+      const raw = Number(f.slippage_bps);
+      if (!Number.isFinite(raw)) return null;
+      return String(f.side || '').toUpperCase() === 'SHORT' ? -raw : raw;
+    };
     const avgSlip = (() => {
-      const xs = s.fills.map((f) => f.slippage_bps).filter((x) => x !== null && x !== undefined);
+      const xs = s.fills.map(slipOf).filter((x) => x !== null);
       return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
     })();
     // 展示层合并：仅改变渲染出的行，s.fills 原始明细与上面的平均滑点统计均不受影响
@@ -2092,8 +2101,10 @@ function renderStatus(s) {
     }
     tb.innerHTML = shown.map((f) => {
       const cls = f.side === 'LONG' ? 'up' : 'down';
-      const slip = f.slippage_bps !== null && f.slippage_bps !== undefined
-        ? `<span class="${f.slippage_bps > 0 ? 'down' : 'up'}">${f.slippage_bps >= 0 ? '+' : ''}${Number(f.slippage_bps).toFixed(2)}</span>` : '--';
+      const slipVal = slipOf(f);
+      const slip = slipVal === null
+        ? '--'
+        : `<span class="${slipVal > 0 ? 'up' : (slipVal < 0 ? 'down' : 'muted')}" title="正数 = 成交价劣于计划价（成本），负数 = 优于计划价">${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}</span>`;
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
       // 开仓成交没有已实现盈亏：盈亏列开仓显示「--」，平仓才显示实际盈亏。
@@ -2143,7 +2154,7 @@ function renderStatus(s) {
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
       <td>${fmt(p.leverage, 1)}x</td>
       <td class="col-2line"><span class="up">${fmtPx(p.stop)}</span><span class="down">${fmtPx(p.tp)}</span></td>
-      <td class="${cls}">${unreal == null ? '--' : fmt(unreal)}</td>
+      <td class="${cls}"${unreal == null ? '' : ` title="毛盈亏 ${p.unrealized_gross != null ? fmt(p.unrealized_gross) : '--'} · 双边手续费预估 ${p.fees_est != null ? fmt(p.fees_est) : '--'} · 净额 ${fmt(unreal)}（与平仓后到手同口径）"`}>${unreal == null ? '--' : fmt(unreal)}</td>
       <td><button class="btn ghost danger xs" data-close-pos="${esc(sym)}">平仓</button></td></tr>`;
     }).join('');
   } else {

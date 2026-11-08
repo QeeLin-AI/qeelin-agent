@@ -305,8 +305,12 @@ class TestQuoteFetchUnpack(unittest.TestCase):
                 mock.patch("cryptoagent.engine.fetch_klines", side_effect=RuntimeError("boom")):
             self.assertEqual(e._quote_for("SOLUSDT"), 0.0)
 
-    def test_refresh_position_quotes_only_inactive(self):
-        """报价线程只刷「非当前品种」：当前品种由页面实时价喂，不重复请求。"""
+    def test_refresh_position_quotes_covers_current_symbol(self):
+        """报价线程刷新**全部**持仓品种，当前品种也不再跳过。
+
+        页面现价读的是 K 线末根收盘，盘中不会每 4 秒更新；只刷非当前品种会让
+        当前仓的标记价与浮盈滞后几分钟（看着浮盈、点平仓已经反向）。
+        """
         from unittest import mock
 
         e = _engine(symbol="SOLUSDT")
@@ -320,10 +324,10 @@ class TestQuoteFetchUnpack(unittest.TestCase):
 
         with mock.patch("cryptoagent.engine.fetch_live_price", side_effect=fake) as m:
             got = e.refresh_position_quotes()
-        self.assertEqual(m.call_count, 1)
+        self.assertEqual(m.call_count, 2)
         self.assertAlmostEqual(got["ETHUSDT"], 3050.0)
-        self.assertAlmostEqual(e._last_prices["ETHUSDT"], 3050.0)
-        self.assertNotIn("SOLUSDT", e._last_prices)
+        self.assertAlmostEqual(got["SOLUSDT"], 99.0)
+        self.assertAlmostEqual(e._last_prices["SOLUSDT"], 99.0)
         self.assertIn("ETHUSDT", e._price_ts)
 
     def test_quote_guard_thread_alive(self):

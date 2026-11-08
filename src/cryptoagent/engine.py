@@ -888,18 +888,24 @@ class TradingEngine:
         book[sym] = float(ts or time.time())
 
     def _mark_price(self, symbol: str, hint: float | None = None) -> float:
-        """标记价：活跃品种用传入价，其余品种只用缓存。
+        """最新成交价（Last）：优先用报价线程的缓存，hint 只做兜底。
 
         这里**不发网络请求**——它会被 status() 每 3 秒调用一次，现场拉行情会把
-        HTTP 轮询拖死。非活跃品种的价格由报价线程（4 秒一轮，走 /ticker/price）
-        与持仓管理轮询共同维护。
+        HTTP 轮询拖死。缓存由报价线程（4 秒一轮，含当前品种）维护。
+
+        hint 一般是当前品种 K 线末根的收盘价。盘中 K 线不会每 4 秒刷新，
+        直接拿它当标记价，浮盈会滞后几分钟——用户看到 +2U、点平仓却已经反向。
+        所以只在缓存缺失/过期（>15s）时兜底，且**不覆盖缓存时间戳**，
+        避免旧价把「新鲜」状态污染掉。
         """
         sym = str(symbol).upper()
-        cur = str(self.cfg.market.symbol).upper()
-        if sym == cur and hint and float(hint) > 0:
-            self._stamp_price(sym, float(hint))
+        cached = float(self._last_prices.get(sym) or 0.0)
+        ts = float((getattr(self, "_price_ts", None) or {}).get(sym) or 0.0)
+        if cached > 0 and (time.time() - ts) <= 15.0:
+            return cached
+        if hint and float(hint) > 0 and sym == str(self.cfg.market.symbol).upper():
             return float(hint)
-        return float(self._last_prices.get(sym) or 0.0)
+        return cached
 
     def _position_notional(self, price: float) -> float:
         """全部持仓的名义价值（币数 × 当前价），与杠杆无关。"""
@@ -1118,6 +1124,7 @@ class TradingEngine:
             "side": side,
             "qty": qty,
             "entry": fill,
+            "entry_fee": round(fee, 8),
             "leverage": lev,
             "stop": stop,
             "tp": tp,
@@ -1188,6 +1195,8 @@ class TradingEngine:
                 "entry": float(pos.get("entry") or 0),
                 "exit": round_price(float(exit_price or 0)),
                 "pnl": round(float(pnl or 0), 4),
+                # 开仓费单列：pnl 已是「毛盈亏 − 双边费」的净额，审计时靠它对账
+                "fee_open": round(float(pos.get("entry_fee") or 0.0), 4),
                 "leverage": pos.get("leverage"),
                 # 自迭代要用的量：没有这三项，事后连「赚了几个 R」都算不出来
                 "initial_stop": initial_stop,
@@ -1218,9 +1227,18 @@ class TradingEngine:
         fill = price * (1 - slip) if self._pos_side(pos) == "LONG" else price * (1 + slip)
         pnl = (fill - pos["entry"]) * pos["qty"] * direction
         fee = pos["qty"] * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
+        # 开仓费在 _paper_open 已从账本扣过，这里不能再减一次；但流水/统计的 pnl
+        # 必须是「这笔交易完整净额」（双边费），否则累计盈亏与权益曲线对不上。
+        open_fee = float(pos.get("entry_fee") or 0.0)
+        if open_fee <= 0 and float(pos.get("entry") or 0.0) > 0:
+            open_fee = (
+                float(pos["entry"]) * float(pos["qty"])
+                * self.cfg.backtest.costs.fee_bps / 10_000.0
+            )
+        pnl_net = pnl - fee - open_fee
         self.state["equity"] += pnl - fee
         self.state["consecutive_losses"] = (
-            self.state["consecutive_losses"] + 1 if pnl < 0 else 0
+            self.state["consecutive_losses"] + 1 if pnl_net < 0 else 0
         )
         rec = {
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1230,13 +1248,14 @@ class TradingEngine:
             "qty": round(pos["qty"], 6),
             "price": round_price(fill),
             "fee": round(fee, 4),
-            "pnl": round(pnl - fee, 4),
+            "fee_open": round(open_fee, 4),
+            "pnl": round(pnl_net, 4),
             "reason": reason,
             "account_scope": self._scope(),
         }
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
-        self._record_close(pos, fill, pnl - fee, reason, "paper", rule=rule)
+        self._record_close(pos, fill, pnl_net, reason, "paper", rule=rule)
         self._drop_position(pos.get("symbol"))
         return rec
 
@@ -2441,15 +2460,15 @@ class TradingEngine:
     def refresh_position_quotes(self) -> dict[str, float]:
         """把所有持仓品种的最新成交价刷进 _last_prices（毫秒级 ticker）。
 
-        当前品种由页面/实时价线程喂价，这里跳过；其余品种每轮一次轻量请求。
+        **当前品种也刷**：页面价格读的是 K 线末根收盘，盘中不会每 4 秒更新，
+        只刷「其它品种」会让当前仓的标记价/浮盈滞后几分钟，看起来像行情卡住、
+        平仓时才发现价格早已反向。这里每轮对全部持仓品种各发一次轻量请求。
+
         取价失败保持旧值不动，绝不清零——清掉会让页面从价格变成「—」。
         """
-        cur = str(self.cfg.market.symbol).upper()
         prefer = self.state.get("exchange", "binance")
         out: dict[str, float] = {}
         for sym in list(self._positions_map().keys()):
-            if sym == cur:
-                continue
             try:
                 px, _src = fetch_live_price(sym, prefer=prefer)
             except Exception:  # noqa: BLE001 - 单品种失败不影响其它品种
@@ -3006,6 +3025,9 @@ class TradingEngine:
                         "side": side,
                         "qty": fill_qty,
                         "entry": fill_px,
+                        # 开仓手续费随仓固化：平仓时用它算净盈亏，展示层用它算净浮盈。
+                        # 不落这一步，累计盈亏会系统性高估 Σ(开仓费)。
+                        "entry_fee": round(fee, 8),
                         "leverage": lev,
                         "stop": stop,
                         "tp": tp,
@@ -3099,7 +3121,15 @@ class TradingEngine:
                     if detail is not None:
                         gross = float(detail["pnl"])  # 交易所口径的已实现盈亏（不含手续费）
                     fee = float(detail["fee"]) if detail else 0.0
-                    pnl = gross - fee
+                    # 净盈亏 = 毛盈亏 − 平仓费 − 开仓费。历史版本只扣平仓费，
+                    # 导致「累计已实现」比真实权益系统性高估 Σ(开仓费)（每笔 ≈2.5U）。
+                    open_fee = float(pos.get("entry_fee") or 0.0)
+                    if open_fee <= 0 and float(pos.get("entry") or 0.0) > 0:
+                        open_fee = (
+                            float(pos["entry"]) * float(pos["qty"])
+                            * float(self.cfg.backtest.costs.fee_bps or 0.0) / 10_000.0
+                        )
+                    pnl = gross - fee - open_fee
                     self.state["fills"].append(
                         {
                             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -3109,6 +3139,7 @@ class TradingEngine:
                             "qty": round(float(pos["qty"]), 6),
                             "price": round_price(exit_px),
                             "fee": round(fee, 6),
+                            "fee_open": round(open_fee, 6),
                             "pnl": round(pnl, 4),
                             "reason": reason,
                             "order_id": res.order_id,
@@ -3116,7 +3147,9 @@ class TradingEngine:
                         }
                     )
                     self.state["fills"] = self.state["fills"][-500:]
-                    self.state["equity"] += pnl
+                    # 账本只加「毛盈亏 − 平仓费」：开仓费在交易所侧已扣，本地从未记账，
+                    # 再加一次会让 state.equity 与交易所余额偏离一笔开仓费。
+                    self.state["equity"] += gross - fee
                     self._record_close(pos, exit_px, pnl, reason, "live", rule=rule)
                     self._drop_position(sym)
                     self._save()
@@ -3384,18 +3417,30 @@ class TradingEngine:
             # 其它品种用守护线程缓存的报价；没报价的 unrealized 给 None（前端显示 —），
             # 绝不拿当前品种的价格去套。
             positions: list[dict] = []
+            fee_rate = float(self.cfg.backtest.costs.fee_bps or 0.0) / 10_000.0
             for sym, raw in self._positions_map().items():
                 mark = self._mark_price(sym, price)
                 entry = float(raw.get("entry") or 0.0)
                 qty = float(raw.get("qty") or 0.0)
                 direction = 1.0 if raw.get("side") == "LONG" else -1.0
-                unreal = (mark - entry) * qty * direction if (mark > 0 and entry > 0) else None
+                gross = (mark - entry) * qty * direction if (mark > 0 and entry > 0) else None
+                # 浮盈亏按**净额**展示：毛盈亏 − 已付开仓费 − 预估平仓费。
+                # 只显示毛值，5000U 名义（单边 ≈2.5U）下 +2U 的浮盈平仓后必然变亏损，
+                # 用户视角就是「明明浮盈却亏了」。毛值仍保留在 unrealized_gross 供审计。
+                open_fee = float(raw.get("entry_fee") or 0.0)
+                if open_fee <= 0 and entry > 0 and qty > 0:
+                    open_fee = entry * qty * fee_rate
+                close_fee = mark * qty * fee_rate if mark > 0 else 0.0
+                fees_est = open_fee + close_fee
+                unreal = (gross - fees_est) if gross is not None else None
                 positions.append({
                     **raw,
                     "symbol": sym,
                     "mark": round(mark, 8) if mark > 0 else None,
                     "mark_ts": (getattr(self, "_price_ts", None) or {}).get(sym),
                     "unrealized": round(unreal, 2) if unreal is not None else None,
+                    "unrealized_gross": round(gross, 2) if gross is not None else None,
+                    "fees_est": round(fees_est, 2) if gross is not None else None,
                     "notional": round(qty * mark, 2) if mark > 0 else None,
                 })
             cur_sym = str(self.cfg.market.symbol).upper()
