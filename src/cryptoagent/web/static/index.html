@@ -331,20 +331,40 @@
       </div>
     </div>
 
-    <div class="card evo-card">
-      <div class="evo-head">
-        <div class="evo-head-main">
-          <h2>复盘归因</h2>
-          <p class="evo-desc">每笔平仓的确定性判定，用来定位「赚在哪、亏在哪」</p>
+    <!-- 复盘归因与真人门槛并排：两者都是「能力评估」，同一行阅读更顺；
+         进化账本是 6 列数据表，需要完整宽度，单独整行。 -->
+    <div class="evo-mid">
+      <div class="card evo-card">
+        <div class="evo-head">
+          <div class="evo-head-main">
+            <h2>复盘归因</h2>
+            <p class="evo-desc">每笔平仓的确定性判定，用来定位「赚在哪、亏在哪」</p>
+          </div>
+          <span id="evoReviewMeta" class="evo-meta-text"></span>
         </div>
-        <span id="evoReviewMeta" class="evo-meta-text"></span>
+        <div class="evo-dist" id="evoVerdicts"></div>
+        <div class="evo-labels">
+          <span class="evo-labels-title">主要错误</span>
+          <div class="evo-chips" id="evoMistakes"></div>
+        </div>
+        <div class="evo-lessons" id="evoLessons"></div>
       </div>
-      <div class="evo-dist" id="evoVerdicts"></div>
-      <div class="evo-labels">
-        <span class="evo-labels-title">主要错误</span>
-        <div class="evo-chips" id="evoMistakes"></div>
+
+      <div class="card evo-card">
+        <div class="evo-head">
+          <div class="evo-head-main">
+            <h2>真人对照门槛</h2>
+            <p class="evo-desc">当前值与及格、接近真人、超越真人三档标准的差距</p>
+          </div>
+          <span class="evo-tag">≥ 100 笔后生效</span>
+        </div>
+        <div class="table-scroll">
+          <table class="table evo-table" id="evoBenchTable">
+            <thead><tr><th>指标</th><th class="num">当前</th><th class="num">及格</th><th class="num">接近真人</th><th class="num">超越</th></tr></thead>
+            <tbody><tr><td colspan="5" class="muted center">读取中…</td></tr></tbody>
+          </table>
+        </div>
       </div>
-      <div class="evo-lessons" id="evoLessons"></div>
     </div>
 
     <div class="card evo-card">
@@ -359,22 +379,6 @@
         <table class="table evo-table" id="evoChangesTable">
           <thead><tr><th>时间</th><th>类型</th><th>目标</th><th>改动</th><th>状态</th><th>应用后归因</th></tr></thead>
           <tbody><tr><td colspan="6" class="muted center">读取中…</td></tr></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card evo-card">
-      <div class="evo-head">
-        <div class="evo-head-main">
-          <h2>真人对照门槛</h2>
-          <p class="evo-desc">当前值与及格、接近真人、超越真人三档标准的差距</p>
-        </div>
-        <span class="evo-tag">≥ 100 笔后生效</span>
-      </div>
-      <div class="table-scroll">
-        <table class="table evo-table" id="evoBenchTable">
-          <thead><tr><th>指标</th><th class="num">当前</th><th class="num">及格</th><th class="num">接近真人</th><th class="num">超越</th></tr></thead>
-          <tbody><tr><td colspan="5" class="muted center">读取中…</td></tr></tbody>
         </table>
       </div>
     </div>
