@@ -126,6 +126,82 @@ def test_daily_pnl_matches_pnl_summary():
 
 
 # ---------------------------------------------------------------------------
+# 资金费：作为 FUNDING 流水入账，与手续费同向扣减累计已实现盈亏
+# ---------------------------------------------------------------------------
+def test_pnl_summary_includes_funding_fees():
+    e = _engine("binance:demo")
+    e.state["position_history"] = [_close(10.0, "binance:demo")]
+    e.state["fills"] = [
+        {"ts": "2026-11-06 10:00:00", "action": "OPEN", "fee": 1.0, "account_scope": "binance:demo"},
+        {"ts": "2026-11-06 12:00:00", "action": "FUNDING", "fee": 2.0, "account_scope": "binance:demo"},
+        {"ts": "2026-11-06 14:00:00", "action": "FUNDING", "fee": -0.5, "account_scope": "binance:demo"},
+    ]
+    out = e._pnl_summary()
+    # realized = 10(毛盈亏) - 1(开仓费) - (2 - 0.5)(资金费净支出 1.5) = 7.5
+    assert out["fees_paid"] == 1.0
+    assert out["funding_paid"] == 1.5
+    assert out["realized"] == 7.5
+
+
+def test_funding_rows_do_not_leak_into_fees():
+    """FUNDING 的 fee 只能进 funding_paid，不能混进手续费 fees_paid。"""
+    e = _engine("binance:demo")
+    e.state["fills"] = [
+        {"ts": "2026-11-06 10:00:00", "action": "OPEN", "fee": 3.0, "account_scope": "binance:demo"},
+        {"ts": "2026-11-06 12:00:00", "action": "FUNDING", "fee": 2.0, "account_scope": "binance:demo"},
+    ]
+    assert e._counted_fees(e.state["fills"]) == 3.0
+    assert e._counted_funding(e.state["fills"]) == 2.0
+
+
+def test_daily_pnl_includes_funding_fees():
+    e = _engine("binance:demo")
+    e.state["position_history"] = [_close(10.0, "binance:demo", "2026-11-06")]
+    e.state["fills"] = [
+        {"ts": "2026-11-06 10:00:00", "action": "OPEN", "fee": 1.0, "account_scope": "binance:demo"},
+        {"ts": "2026-11-07 10:00:00", "action": "FUNDING", "fee": 2.0, "account_scope": "binance:demo"},
+        {"ts": "2026-11-08 10:00:00", "action": "FUNDING", "fee": -0.5, "account_scope": "binance:demo"},
+    ]
+    daily = e._daily_pnl()
+    assert sum(d["pnl"] for d in daily) == e._pnl_summary()["realized"] == 7.5
+    by_day = {d["date"]: d["pnl"] for d in daily}
+    assert by_day["2026-11-06"] == 9.0     # 10 - 1(开仓费)
+    assert by_day["2026-11-07"] == -2.0    # 支付资金费
+    assert by_day["2026-11-08"] == 0.5     # 收到资金费
+
+
+def test_sync_funding_fees_appends_and_dedups():
+    import time
+
+    e = _engine("binance:demo")
+    e.state["mode"] = "live"
+    e.state["positions"] = {"BTCUSDT": {"symbol": "BTCUSDT", "side": "LONG", "qty": 1.0, "entry": 100.0, "mode": "live"}}
+    e.state["funding_synced_until_ms"] = 0
+    e.state["account_reset_epoch"] = 0
+    now = int(time.time() * 1000)
+
+    class _Client:
+        def income(self, start_ms, limit=1000):
+            return [
+                {"incomeType": "FUNDING_FEE", "income": -2.0, "time": now - 1000, "symbol": "BTCUSDT"},
+                {"incomeType": "FUNDING_FEE", "income": 0.5, "time": now - 500, "symbol": "BTCUSDT"},
+                {"incomeType": "COMMISSION", "income": -1.0, "time": now - 800, "symbol": "BTCUSDT"},
+            ]
+
+    e.live_client = _Client()
+    e._sync_funding_fees()
+    fundings = [f for f in e.state["fills"] if f["action"] == "FUNDING"]
+    assert len(fundings) == 2
+    assert [f["fee"] for f in fundings] == [2.0, -0.5]   # fee = -income
+    assert e.state["funding_synced_until_ms"] == now - 500
+
+    # 二次同步：锚点已推进，无新资金费，不重复入账
+    e._sync_funding_fees()
+    fundings = [f for f in e.state["fills"] if f["action"] == "FUNDING"]
+    assert len(fundings) == 2
+
+
+# ---------------------------------------------------------------------------
 # 旧记录归因：打一次标签后不再随切换漂移
 # ---------------------------------------------------------------------------
 def test_legacy_rows_are_tagged_with_current_scope_once():

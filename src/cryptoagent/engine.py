@@ -220,6 +220,8 @@ class TradingEngine:
             # 记下「重置时刻 / 当时权益」，让 overlay 只显示这一刻之后的成交与盈亏。
             "account_reset_epoch": 0,
             "account_reset_equity": 0.0,
+            # 资金费入账去重锚点（毫秒）：只入账该时间戳之后新产生的 FUNDING_FEE
+            "funding_synced_until_ms": 0,
             "last_decision": None,
             "auto": {"running": False, "interval_sec": 300, "execute": False, "last_run": ""},
             "halt": False,
@@ -568,25 +570,40 @@ class TradingEngine:
             ):
                 yield f
 
+    @classmethod
+    def _funding_rows(cls, fills: list[dict]):
+        """筛出资金费流水（action=FUNDING）。fee 存「净资金费支出」：正=支付、负=收到。"""
+        for f in fills:
+            if isinstance(f, dict) and str(f.get("action") or "").upper() == "FUNDING":
+                yield f
+
+    @classmethod
+    def _counted_funding(cls, fills: list[dict]) -> float:
+        """已入账的资金费净支出（正=支付、负=收到）。只认 FUNDING 流水。"""
+        return round(sum(float(f.get("fee") or 0.0) for f in cls._funding_rows(fills)), 6)
+
     def _pnl_summary(self, scope: str | None = None) -> dict:
-        """当前账户的累计已实现盈亏 = Σ(平仓毛盈亏) − Σ(已发生手续费)。
+        """当前账户的累计已实现盈亏 = Σ(平仓毛盈亏) − Σ(已发生手续费) − Σ(已发生资金费)。
 
         必须用全量 `position_history` 聚合，不能拿 `status()` 里那 30 条算：
         页面上写的是「累计」，只加最近 30 笔会随窗口滚动而变小。
-        胜率/笔数仍只按平仓记录统计，手续费不是一笔「交易」。
+        胜率/笔数仍只按平仓记录统计，手续费/资金费不是一笔「交易」。
         """
         scope = self._scope() if scope is None else scope
         rows = self._scoped_rows("position_history", scope)
-        fees_paid = self._counted_fees(self._scoped_rows("fills", scope))
+        fills = self._scoped_rows("fills", scope)
+        fees_paid = self._counted_fees(fills)
+        funding_paid = self._counted_funding(fills)
         pnls = [float(r.get("pnl") or 0.0) for r in rows]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
         gross_pnl = round(sum(pnls), 6)
         return {
             "scope": scope,
-            "realized": round(gross_pnl - fees_paid, 6),
+            "realized": round(gross_pnl - fees_paid - funding_paid, 6),
             "gross_pnl": gross_pnl,
             "fees_paid": fees_paid,
+            "funding_paid": funding_paid,
             "trades": len(pnls),
             "wins": len(wins),
             "losses": len(losses),
@@ -1144,6 +1161,9 @@ class TradingEngine:
                 # 只能让 overlay 从这个锚点起重新算「最近成交」与「当日盈亏」。
                 self.state["account_reset_epoch"] = int(time.time() * 1000)
                 self.state["account_reset_equity"] = float(eq)
+                # 资金费入账锚点随重置清零：fills 已清空，下一轮资金费同步从
+                # 重置时刻起重新累计，否则会漏掉重置之后新产生的资金费。
+                self.state["funding_synced_until_ms"] = 0
                 self._live_eq_cache = None
                 self._accounts_cache = None
                 self._save()
@@ -1606,6 +1626,62 @@ class TradingEngine:
                 self.last_error = f"平仓补记失败：{type(exc).__name__}: {exc}"[:200]
             with self.lock:
                 self._drop_position(symbol)
+                self._save()
+
+    def _sync_funding_fees(self) -> None:
+        """把持仓期间交易所真实产生的资金费同步进本地账本（fills 记 action=FUNDING）。
+
+        资金费每 8 小时结算一次，只体现在 income / bills 的 FUNDING_FEE 流水里，
+        本地下单回执拿不到它。这里周期拉取、按时间戳去重，把「上次已同步之后」
+        新产生的资金费补记进 fills，让累计已实现盈亏与交易所余额对齐（不含资金费
+        会系统性偏乐观）。
+
+        只处理实盘（mode=live）且有持仓：模拟盘本地撮合不产生真实资金费。
+        fee 存「净资金费支出」（= −income，正=支付、负=收到），与手续费同向入账。
+        """
+        if self.state.get("mode") != "live" or self.live_client is None:
+            return
+        if not self._positions_map():
+            return
+        # 去重下界：已同步锚点 → 账户重置锚点 → 最近 24h（首次不灌全量历史）
+        floor = int(self.state.get("funding_synced_until_ms") or 0)
+        if not floor:
+            floor = int(self.state.get("account_reset_epoch") or 0)
+        if not floor:
+            floor = int((time.time() - 86400) * 1000)
+        try:
+            rows = self.live_client.income(floor, limit=1000)
+        except Exception:  # noqa: BLE001 - 拿不到流水就不入账，不阻塞守护循环
+            return
+        funding = [
+            r for r in (rows or [])
+            if str(r.get("incomeType") or "").upper() == "FUNDING_FEE"
+            and int(r.get("time") or 0) > floor
+        ]
+        if not funding:
+            return
+        funding.sort(key=lambda r: int(r.get("time") or 0))
+        scope = self._scope()
+        added = 0
+        with self.lock:
+            for r in funding:
+                ts_ms = int(r.get("time") or 0)
+                income = float(r.get("income") or 0.0)
+                if income == 0.0 or ts_ms <= 0:
+                    continue
+                sym = str(r.get("symbol") or "").strip().upper() or str(self.cfg.market.symbol).upper()
+                self.state["fills"].append({
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_ms / 1000)),
+                    "action": "FUNDING",
+                    "symbol": sym,
+                    "fee": round(-income, 6),   # 收到为正的 income → 负支出；支付为负 → 正支出
+                    "account_scope": scope,
+                    "funding_ts_ms": ts_ms,
+                })
+                added += 1
+            if added:
+                self.state["fills"] = self.state["fills"][-500:]
+                self.state["funding_synced_until_ms"] = max(int(r.get("time") or 0) for r in funding)
                 self._save()
 
     def switch_symbol(self, symbol: str) -> dict:
@@ -2506,6 +2582,9 @@ class TradingEngine:
                 if not self._positions_map():
                     continue
                 self._reconcile_position_with_exchange()
+                # 资金费同步：实盘持仓期间交易所每 8h 结算一次，本地回执拿不到，
+                # 这里周期性补记进账本，让累计已实现盈亏与交易所余额对齐。
+                self._sync_funding_fees()
                 # 实时价只对应「当前活跃品种」；其它品种由 _quote_for 自行取价
                 live_px = None
                 if self.live_price_provider is not None:
@@ -3532,10 +3611,10 @@ class TradingEngine:
     # 状态输出
     # ------------------------------------------------------------------
     def _daily_pnl(self, days: int = 120, scope: str | None = None) -> list[dict]:
-        """按日期聚合已实现盈亏 = 平仓毛盈亏（按平仓日） − 手续费（按发生日）。
+        """按日期聚合已实现盈亏 = 平仓毛盈亏（按平仓日） − 手续费 − 资金费（按发生日）。
 
-        与累计盈亏共用 `_fee_rows`：口径必须一致，且 Σdaily 必须等于
-        `_pnl_summary()["realized"]`，否则会出现「累计 +120 / 日历 -30」。
+        与累计盈亏共用 `_fee_rows` / `_funding_rows`：口径必须一致，且 Σdaily 必须
+        等于 `_pnl_summary()["realized"]`，否则会出现「累计 +120 / 日历 -30」。
         开仓当日就会有一条负的费用，这正符合「费用发生即计入已实现」。
         """
         scope = self._scope() if scope is None else scope
@@ -3557,6 +3636,13 @@ class TradingEngine:
                 continue
             row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
             row["pnl"] = round(row["pnl"] - fee, 6)
+        for f in self._funding_rows(self._scoped_rows("fills", scope)):
+            funding = float(f.get("fee") or 0.0)   # 正=支付、负=收到
+            day = str(f.get("ts") or "")[:10]
+            if not funding or len(day) != 10:
+                continue
+            row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
+            row["pnl"] = round(row["pnl"] - funding, 6)
         return [agg[k] for k in sorted(agg)][-days:]
 
     def status(self, price_override: float | None = None) -> dict:

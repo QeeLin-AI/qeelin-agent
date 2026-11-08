@@ -84,21 +84,34 @@ def _counted_fees(fills: list[dict]) -> float:
     return round(sum(_num(f.get("fee")) for f in _fee_rows(fills)), 6)
 
 
-def _pnl_rows(rows: list[dict], fees_paid: float = 0.0) -> dict:
-    """累计已实现盈亏 = Σ(平仓毛盈亏) − Σ(已发生手续费)。
+def _funding_rows(fills: list[dict]):
+    """资金费流水（action=FUNDING）。fee 存「净资金费支出」：正=支付、负=收到。"""
+    for f in fills or []:
+        if isinstance(f, dict) and str(f.get("action") or "").upper() == "FUNDING":
+            yield f
 
-    手续费在发生时就计入（开仓费开仓即扣、平仓费平仓即扣），不摊进浮盈，
-    也不留到平仓时从平仓 pnl 里扣。胜率/笔数仍只数真实平仓，不算费用。
+
+def _counted_funding(fills: list[dict]) -> float:
+    return round(sum(_num(f.get("fee")) for f in _funding_rows(fills)), 6)
+
+
+def _pnl_rows(rows: list[dict], fees_paid: float = 0.0, funding_paid: float = 0.0) -> dict:
+    """累计已实现盈亏 = Σ(平仓毛盈亏) − Σ(已发生手续费) − Σ(已发生资金费)。
+
+    手续费/资金费都在发生时就计入（开仓费开仓即扣、平仓费平仓即扣、资金费结算
+    即扣），不摊进浮盈，也不留到平仓时从平仓 pnl 里扣。胜率/笔数仍只数真实平仓。
     """
     pnls = [_num(r.get("pnl")) for r in rows if isinstance(r, dict)]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p < 0]
     gross = round(sum(pnls), 6)
     fees = round(_num(fees_paid), 6)
+    funding = round(_num(funding_paid), 6)
     return {
-        "realized": round(gross - fees, 6),
+        "realized": round(gross - fees - funding, 6),
         "gross_pnl": gross,
         "fees_paid": fees,
+        "funding_paid": funding,
         "trades": len(pnls),
         "wins": len(wins),
         "losses": len(losses),
@@ -108,7 +121,7 @@ def _pnl_rows(rows: list[dict], fees_paid: float = 0.0) -> dict:
 
 
 def _daily(rows: list[dict], fills: list[dict] | None = None) -> list[dict]:
-    """按日期聚合：平仓毛盈亏归平仓日，手续费归发生日。Σdaily == realized。"""
+    """按日期聚合：平仓毛盈亏归平仓日，手续费/资金费归发生日。Σdaily == realized。"""
     agg: dict[str, dict] = {}
     for h in rows:
         day = str(h.get("closed_at") or "")[:10]
@@ -127,6 +140,13 @@ def _daily(rows: list[dict], fills: list[dict] | None = None) -> list[dict]:
             continue
         row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
         row["pnl"] = round(row["pnl"] - fee, 6)
+    for f in _funding_rows(fills):
+        funding = _num(f.get("fee"))   # 正=支付、负=收到
+        day = str(f.get("ts") or "")[:10]
+        if not funding or len(day) != 10:
+            continue
+        row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
+        row["pnl"] = round(row["pnl"] - funding, 6)
     return [agg[k] for k in sorted(agg)]
 
 
@@ -338,7 +358,11 @@ class AccountStore:
             stats[scope] = {
                 "fills": len(data["fills"]),
                 "position_history": len(data["position_history"]),
-                "realized": _pnl_rows(data["position_history"], _counted_fees(data["fills"]))["realized"],
+                "realized": _pnl_rows(
+                    data["position_history"],
+                    _counted_fees(data["fills"]),
+                    _counted_funding(data["fills"]),
+                )["realized"],
             }
 
         # state 只保留当前账户，旧账户已各自落盘
@@ -400,7 +424,7 @@ class AccountStore:
         acct = data.get("account") or {}
         rows = [r for r in (data.get("position_history") or []) if isinstance(r, dict)]
         fills = [f for f in (data.get("fills") or []) if isinstance(f, dict)]
-        stat = _pnl_rows(rows, _counted_fees(fills))
+        stat = _pnl_rows(rows, _counted_fees(fills), _counted_funding(fills))
         equity = _num(acct.get("equity"))
         peak = _num(acct.get("peak_equity")) or equity
         gross_loss = stat["gross_loss"]

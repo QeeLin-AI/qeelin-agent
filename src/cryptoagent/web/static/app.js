@@ -2419,7 +2419,7 @@ function renderPnl() {
   const summary = lastStatus?.pnl || null;
   // 只有开仓费、还没有任何平仓时也要用后端摘要：否则会退回前端只加 pnl，
   // 把「开仓即计入已实现」的手续费漏掉，累计盈亏显示成 0。
-  const useSummary = !!(summary && (Number(summary.trades) > 0 || Number(summary.fees_paid) > 0 || !fills.length));
+  const useSummary = !!(summary && (Number(summary.trades) > 0 || Number(summary.fees_paid) > 0 || Number(summary.funding_paid) !== 0 || !fills.length));
   const trades = useSummary ? Number(summary.trades || 0) : fills.length;
   const total = useSummary
     ? Number(summary.realized || 0)
@@ -2429,8 +2429,12 @@ function renderPnl() {
   if (useSummary) {
     const gross = Number(summary.gross_pnl || 0);
     const fees = Number(summary.fees_paid || 0);
-    totalEl.title = `平仓毛盈亏 ${gross >= 0 ? '+' : ''}${fmt(gross, 2)} U − 已发生手续费 ${fmt(fees, 2)} U`
-      + ` = ${total >= 0 ? '+' : ''}${fmt(total, 2)} U；开仓费、平仓费在发生时即计入`;
+    const funding = Number(summary.funding_paid || 0);
+    const fundingStr = funding !== 0
+      ? `${funding > 0 ? ' − 已发生资金费' : ' + 收到资金费'} ${fmt(Math.abs(funding), 2)} U`
+      : '';
+    totalEl.title = `平仓毛盈亏 ${gross >= 0 ? '+' : ''}${fmt(gross, 2)} U − 已发生手续费 ${fmt(fees, 2)} U${fundingStr}`
+      + ` = ${total >= 0 ? '+' : ''}${fmt(total, 2)} U；开仓费、平仓费、资金费在发生时即计入`;
   }
 
   const winCount = useSummary ? Number(summary.wins || 0) : fills.filter((f) => (f.pnl || 0) > 0).length;
