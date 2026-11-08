@@ -2614,7 +2614,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": res})
         if path == "/api/trading/close":
             # 多品种：不传 symbol 时平「当前品种」（单仓时自动落到唯一那笔）
-            res = eng.close(price=app.live_price, reason="web",
+            # 不传 price：让 engine.close 按「仓位自己的品种」取符号感知实时价
+            # （ws 优先），避免把当前品种的全局标量价格套到手动平掉的非当前品种上。
+            res = eng.close(price=None, reason="web",
                             symbol=(payload.get("symbol") or None))
             app.invalidate_exchange_cache()
             return self._json({"ok": True, "data": res})

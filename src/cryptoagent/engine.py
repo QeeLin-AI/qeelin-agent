@@ -3376,7 +3376,28 @@ class TradingEngine:
     def close(self, price: float | None = None, reason: str = "manual",
               symbol: str | None = None, rule: str = "") -> dict:
         """平仓。`symbol` 不传时平「当前品种」；只有一个仓时也兼容不传的老调用。"""
-        price = price if price is not None else self.price()
+        # 先解析目标仓位的品种（不持锁），以便按「仓位自己的品种」取符号感知实时价。
+        # 放在 self.lock 之外：_quote_for 在 ws 断线时会回退 REST（最长 ~10s），
+        # 不应在锁内阻塞其它交易线程。
+        _pos = self._resolve_position(symbol)
+        _sym = ""
+        if _pos is not None:
+            _sym = self._pos_symbol(_pos, "")
+            if not _sym:
+                for _k, _v in self._positions_map().items():
+                    if _v is _pos:
+                        _sym = _k
+                        break
+        _sym = _sym or str(self.cfg.market.symbol).upper()
+        # 平仓参考价：优先调用方显式传入；否则按仓位品种取符号感知实时价（ws 优先，
+        # 其次该品种 REST ticker）。绝不拿当前品种 K 线末根或全局标量冒充其它品种——
+        # 多仓手动平仓若误用错价，会把错误成交价套到目标仓位上、算错盈亏。
+        if price is None:
+            price = self._quote_for(_sym) if _sym else self.price()
+            # ws/rest 都拿不到价时的兜底：仅当前品种退回 K 线末根（符号正确）；
+            # 非当前品种宁可为 0 暴露错误，也不用一个错价静默算错盈亏。
+            if (not price) and _sym == str(self.cfg.market.symbol).upper():
+                price = self.price()
         with self.lock:
             pos = self._resolve_position(symbol)
             if not pos:
