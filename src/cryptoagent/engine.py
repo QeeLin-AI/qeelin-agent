@@ -1341,9 +1341,40 @@ class TradingEngine:
                 "reason": reason,
             }
         )
+        # 复盘官：确定性归因（纯规则、不调 LLM），供绩效官与进化官消费。
+        # 归因是旁路，任何异常都不能影响平仓记账。
+        try:
+            from .agents.reviewer import review_trade
+
+            hist[-1]["review"] = review_trade(hist[-1])
+        except Exception:  # noqa: BLE001
+            pass
         self.state["position_history"] = hist[-200:]
         # 喂给持仓管理员的自校准（样本不足时内部会自动不动）
         self._learn_from_close(pos, float(exit_price or 0.0), rule)
+
+    def performance_snapshot(self, force: bool = False) -> dict:
+        """统一绩效快照（60 秒缓存）。
+
+        所有进化系统都必须读这一份口径：各自统计会让「改完到底有没有变好」
+        变成各说各话。按笔 R 计算，不看权益（权益受充值/切换账户/重置污染，
+        不是策略能力）。
+        """
+        now = time.time()
+        cached = getattr(self, "_perf_cache", None)
+        if not force and cached and now - float(cached[0]) < 60.0:
+            return cached[1]
+        try:
+            from .agents.scorekeeper import compute_kpis
+
+            snap = compute_kpis(self._scoped_rows("position_history"))
+        except Exception as exc:  # noqa: BLE001 - 绩效算不出来不能影响交易
+            snap = {
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        self._perf_cache = (now, snap)
+        return snap
 
     def _paper_close(self, price: float, reason: str, symbol: str | None = None,
                      rule: str = "") -> dict | None:
@@ -3928,6 +3959,8 @@ class TradingEngine:
                 "accounts": self._accounts_summary(),
                 "daily": self._daily_pnl(scope=self._scope()),
                 "consecutive_losses": self.state["consecutive_losses"],
+                # 统一绩效口径（60s 缓存）：复盘归因 + 按规则/品种/方向分组 KPI
+                "performance": self.performance_snapshot(),
                 "last_decision": self.state.get("last_decision"),
                 "auto": {
                     **self.state.get("auto", {}),
