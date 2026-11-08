@@ -1268,9 +1268,12 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .side-foot-note { display: none; }
   .side-foot .btn { width: auto; }
   /* 手机端顶部横向导航寸土寸金：主题按钮只留日月图标，把宽度还给主菜单 */
-  .side-foot .theme-btn { width: 30px; padding: 0; gap: 0; flex: none; }
+  .side-foot .theme-btn { width: 30px; padding: 0; gap: 0; flex: none; border: 0; background: transparent; }
   .side-foot .theme-btn .theme-text { display: none; }
   .side-foot .theme-btn .theme-ico { width: 15px; height: 15px; }
+  /* 图标上色：暗色主题显示太阳（暖橙），亮色主题显示月亮（蓝色）；描边沿用 currentColor */
+  .side-foot .theme-btn .theme-ico { color: var(--amber); }
+  html[data-theme="light"] .side-foot .theme-btn .theme-ico { color: var(--blue); }
   main { padding: 22px 18px 70px; }
   .topbar { padding: 10px 18px; }
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }
