@@ -2235,15 +2235,23 @@ function renderStatus(s) {
   // 面板开着的时候，状态行和切换按钮要跟着实时刷新
   if (!$('testnetBox').classList.contains('hidden')) renderExchangePanel('testnet');
   if (!$('liveBox').classList.contains('hidden')) renderExchangePanel('live');
-  // 四套 Key 分开显示，别再笼统写「已配置」
+  // 四套 Key 分 Demo / 主网 两行展示；仅当已配置凭据时才显示这两行
   if ($('keysPresent')) {
     const K = s.keys || {};
-    const tags = [];
-    if (K.binance && K.binance.demo) tags.push('币安模拟');
-    if (K.binance && K.binance.live) tags.push('币安实盘');
-    if (K.okx && K.okx.live) tags.push('OKX实盘');
-    if (K.okx && K.okx.demo) tags.push('OKX模拟');
-    $('keysPresent').textContent = tags.length ? tags.join('/') : '未配置';
+    const demo = [];
+    if (K.binance && K.binance.demo) demo.push('币安');
+    if (K.okx && K.okx.demo) demo.push('OKX');
+    const live = [];
+    if (K.binance && K.binance.live) live.push('币安');
+    if (K.okx && K.okx.live) live.push('OKX');
+    const kp = $('keysPresent');
+    if (demo.length || live.length) {
+      kp.classList.remove('hidden');
+      kp.innerHTML = `<span class="k-line">Demo：${demo.length ? demo.join('/') : '无'}</span>` +
+                     `<span class="k-line">主网：${live.length ? live.join('/') : '无'}</span>`;
+    } else {
+      kp.classList.add('hidden');
+    }
   }
   renderRisk(s.risk);
   renderResearchAuto(s.research_auto);
