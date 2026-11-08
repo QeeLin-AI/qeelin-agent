@@ -208,6 +208,14 @@ def attribute_change(change: dict, rows: list[dict], window: int = 50) -> dict:
     }
 
 
+def _epoch(ts: Any) -> float:
+    """把 "YYYY-mm-dd HH:MM:SS" 转 epoch；解析失败返回 0（视为很久以前）。"""
+    try:
+        return time.mktime(time.strptime(str(ts), "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class Governor:
     """账本 + 闸门 + 归因的统一入口。"""
 
@@ -251,6 +259,30 @@ class Governor:
             n_at_apply=n, applied_at=_now(), note=str(note)[:200],
         )
         return asdict(self.ledger.append(ch))
+
+    def record_applied_once(self, kind: str, target: str, before: Any, after: Any,
+                            source: str, rationale: str, kpi: dict | None,
+                            evidence: dict | None = None, note: str = "",
+                            n_at_apply: int | None = None,
+                            within_sec: float = 86400.0) -> dict | None:
+        """同一个 target 在窗口内已记过就跳过，避免重复记账。
+
+        典型场景：研究循环因服务重启重跑，同一因子被再次写进 factor_library。
+        每次都记一条会让账本显示「进化了两次」，既高估采纳率，也会把归因区间切碎。
+        """
+        for r in self.ledger.all():
+            if str(r.get("target")) != str(target):
+                continue
+            if str(r.get("status")) not in ("applied", "confirmed", "degraded"):
+                continue
+            at = _epoch(r.get("applied_at") or r.get("created_at") or "")
+            if at and time.time() - at < float(within_sec):
+                return None
+        return self.record_applied(
+            kind=kind, target=target, before=before, after=after, source=source,
+            rationale=rationale, kpi=kpi, evidence=evidence, note=note,
+            n_at_apply=n_at_apply,
+        )
 
     def reject(self, change_id: str, reason: str) -> dict | None:
         return self.ledger.update(

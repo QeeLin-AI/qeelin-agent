@@ -576,7 +576,7 @@ class ResearchLoop:
 
                 holdout = report.get("holdout") or {}
                 gov = get_governor(self.cfg.runs_dir)
-                gov.record_applied(
+                gov.record_applied_once(
                     kind="factor",
                     target=f"factor_library.{best.proposal.name}",
                     before=None,

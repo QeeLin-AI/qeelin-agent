@@ -86,6 +86,29 @@ def test_record_applied_with_explicit_n(tmp_path):
     assert rec["evidence"]["kind"] == "research_gate"
 
 
+def test_record_applied_once_dedupes(tmp_path):
+    """研究循环重启重跑会再次采纳同名因子，24 小时内只记一条。"""
+    gov = Governor(tmp_path)
+    first = gov.record_applied_once(
+        "factor", "factor_library.same", None, "新建", "factor_research", "h", None, n_at_apply=5)
+    second = gov.record_applied_once(
+        "factor", "factor_library.same", None, "新建", "factor_research", "h", None, n_at_apply=5)
+    assert first is not None
+    assert second is None
+    assert len(gov.ledger.all()) == 1
+
+
+def test_record_applied_once_no_confirm_needed(tmp_path):
+    """被回滚过的 target 允许再次记录（那不是重复，是重新尝试）。"""
+    gov = Governor(tmp_path)
+    rec = gov.record_applied_once(
+        "factor", "factor_library.x", None, "新建", "s", "h", None, n_at_apply=1)
+    gov.rollback(rec["id"])
+    again = gov.record_applied_once(
+        "factor", "factor_library.x", None, "新建", "s", "h", None, n_at_apply=1)
+    assert again is not None
+
+
 def test_propose_rejects_unknown_kind(tmp_path):
     gov = Governor(tmp_path)
     try:
