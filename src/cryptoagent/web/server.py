@@ -753,7 +753,10 @@ class WebApp:
             proposer = build_proposer(self.cfg, llm, verbose=False, live_evidence=evidence)
         except Exception:  # noqa: BLE001 - 研究不能因 LLM 初始化失败而中断
             proposer = None
-        loop = ResearchLoop(self.cfg, df, proposer=proposer, verbose=False)
+        # 因子落库的归因起点：用当前账户已有的平仓笔数，之后新增的才算「因子生效后」
+        n_at_apply = len(self.engine._scoped_rows("position_history"))
+        loop = ResearchLoop(self.cfg, df, proposer=proposer, verbose=False,
+                            n_at_apply=n_at_apply)
         report = loop.run(max(1, min(iterations, 30)))
         rows = self._rows_from_history(report["history"])
         self.last_research = {

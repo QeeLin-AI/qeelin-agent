@@ -2199,6 +2199,42 @@ class TradingEngine:
                     gate["l2_checks"] = {"has_candidate": False}
                     gate.setdefault("l2_passed", False)
                 self.position_tuning["gate"] = gate
+            # 进化账本：L1 校准的改动同样要留痕，否则「进化采纳率」永远算不出来。
+            # 走到这里的 changes 已过「连续确认 + L2 回放闸门」，是真正生效的一批。
+            # 去重：同一参数 1 小时内且目标值相同就不再记，避免参数震荡把账本刷爆。
+            try:
+                from .evolution import get_governor
+
+                gov = get_governor(self.cfg.runs_dir)
+                perf_snap = self.performance_snapshot()
+                seen = dict(getattr(self, "_calib_ledger", None) or {})
+                for ch in changes:
+                    key = str(ch.get("param") or "")
+                    to = ch.get("to")
+                    if not key:
+                        continue
+                    prev_rec = seen.get(key) or {}
+                    if (now - float(prev_rec.get("at") or 0.0) < 3600.0
+                            and abs(float(prev_rec.get("to") or 0.0)
+                                    - float(to or 0.0)) < 1e-9):
+                        continue
+                    gov.record_applied(
+                        kind="rule",
+                        target=f"position.{key}",
+                        before=ch.get("from"),
+                        after=to,
+                        source="position_calibration",
+                        rationale=str(ch.get("why") or ""),
+                        kpi=perf_snap,
+                        evidence=({"kind": "replay_gate",
+                                   "gate": dict(self.position_tuning.get("gate") or {})}
+                                  if self._evolution_mode() != "stats" else {}),
+                        note=f"rule={ch.get('rule')}",
+                    )
+                    seen[key] = {"at": now, "to": to}
+                self._calib_ledger = seen
+            except Exception:  # noqa: BLE001 - 记账失败不影响已生效的参数
+                pass
             log = list(self.position_tuning.get("changes") or [])
             for ch in changes:
                 log.append({**ch, "ts": now})

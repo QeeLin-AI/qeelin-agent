@@ -229,15 +229,19 @@ class Governor:
 
     def record_applied(self, kind: str, target: str, before: Any, after: Any,
                        source: str, rationale: str, kpi: dict | None,
-                       evidence: dict | None = None, note: str = "") -> dict:
+                       evidence: dict | None = None, note: str = "",
+                       n_at_apply: int | None = None) -> dict:
         """已经生效的改动（例如现有 setter 直接应用后）补记一条账。
 
         这类记录不强求 evidence——它记的是「事实」而不是「提案」，
         但 `n_at_apply` 必须准确，否则后续归因会算错区间。
+        `n_at_apply` 未显式给出时从 kpi 里取；因子落库这类没有 KPI 快照的
+        场景由调用方直接传当前平仓笔数。
         """
         if kind not in KINDS:
             raise ValueError(f"未知改动类型 {kind}，允许：{KINDS}")
-        n = int(((kpi or {}).get("overall") or {}).get("n_with_r") or 0)
+        n = (int(n_at_apply) if n_at_apply is not None
+             else int(((kpi or {}).get("overall") or {}).get("n_with_r") or 0))
         ch = Change(
             id=new_id(kind), kind=kind, target=str(target),
             before=before, after=after, source=str(source),

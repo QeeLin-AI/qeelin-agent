@@ -75,6 +75,17 @@ def test_ledger_persists_across_instances(tmp_path):
     assert again.ledger.get(rec["id"]) is not None
 
 
+def test_record_applied_with_explicit_n(tmp_path):
+    """因子落库没有 KPI 快照，必须能显式指定归因起点。"""
+    gov = Governor(tmp_path)
+    rec = gov.record_applied(
+        "factor", "factor_library.probe", None, "新建因子文件", "factor_research",
+        "假设", None, n_at_apply=42,
+        evidence={"kind": "research_gate", "oos_sharpe": 0.5})
+    assert rec["n_at_apply"] == 42
+    assert rec["evidence"]["kind"] == "research_gate"
+
+
 def test_propose_rejects_unknown_kind(tmp_path):
     gov = Governor(tmp_path)
     try:

@@ -443,11 +443,14 @@ def _score(train: dict, valid: dict) -> float:
 
 class ResearchLoop:
     def __init__(self, cfg: AppConfig, df: pd.DataFrame, proposer: Proposer | None = None,
-                 verbose: bool = True) -> None:
+                 verbose: bool = True, n_at_apply: int = 0) -> None:
         self.cfg = cfg
         self.df = df
         self.proposer = proposer or TemplateProposer()
         self.verbose = verbose
+        # 因子落库时的归因起点：之后只用「这一笔之后的平仓」评判它是否真的有用，
+        # 否则会被落库前的历史稀释（进化账本的 attribute_change 依赖这个数）。
+        self.n_at_apply = max(0, int(n_at_apply or 0))
         self.train, self.valid, self.test = split_market(
             df, cfg.research.train_frac, cfg.research.valid_frac
         )
@@ -565,6 +568,36 @@ class ResearchLoop:
                 f'# holdout sharpe: {(report.get("holdout") or {}).get("sharpe", float("nan")):.2f}\n\n'
             )
             (lib / f"{best.proposal.name}.py").write_text(header + best.proposal.code, encoding="utf-8")
+            # 进化账本：因子被采纳（写进 factor_library）也要留痕，否则「进化采纳率」
+            # 只统计得到参数改动。它的证据是研究三闸（IS / OOS / 留出集），
+            # 属于事前闸门，比事后归因更强。
+            try:
+                from .evolution import get_governor
+
+                holdout = report.get("holdout") or {}
+                gov = get_governor(self.cfg.runs_dir)
+                gov.record_applied(
+                    kind="factor",
+                    target=f"factor_library.{best.proposal.name}",
+                    before=None,
+                    after="新建因子文件",
+                    source="factor_research",
+                    rationale=str(best.proposal.hypothesis or ""),
+                    kpi=None,
+                    n_at_apply=self.n_at_apply,
+                    evidence={
+                        "kind": "research_gate",
+                        "is_sharpe": round(float(best.train.get("sharpe") or 0.0), 4),
+                        "oos_sharpe": round(float(best.valid.get("sharpe") or 0.0), 4),
+                        "holdout_sharpe": (
+                            round(float(holdout.get("sharpe")), 4)
+                            if holdout.get("sharpe") is not None else None
+                        ),
+                    },
+                    note=f"family={best.proposal.family}",
+                )
+            except Exception:  # noqa: BLE001 - 记账失败不影响因子落库
+                pass
 
     def _markdown(self, report: dict, best: Evaluation | None) -> str:
         lines = [
