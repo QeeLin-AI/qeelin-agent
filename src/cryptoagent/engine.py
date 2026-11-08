@@ -1755,6 +1755,38 @@ class TradingEngine:
         self._save()
         return {"mode": "paper", "armed": False}
 
+    def _okx_swap_symbols(self) -> set[str]:
+        """OKX 永续（SWAP）品种白名单（内部 symbol 集合），懒加载并缓存。
+
+        auto_rotate 在 okx 下只从这里面选品种，从源头避开 OKX 51001
+        「Instrument ID doesn't exist」——某些币安有永续、OKX 却没有的币种，
+        若不拦截会在切换 / 下单时才撞错。拉取失败则缓存空集合，调用方据此
+        退回「不过滤」的原行为，绝不因网络问题阻断轮动。
+        """
+        cached = getattr(self, "_okx_swap_set", None)
+        if cached is not None:
+            return cached
+        out: set[str] = set()
+        try:
+            import json
+            import urllib.request
+            from .netutil import ssl_context
+            req = urllib.request.Request(
+                "https://www.okx.com/api/v5/public/instruments?instType=SWAP",
+                headers={"User-Agent": "cryptoagent"},
+            )
+            with urllib.request.urlopen(req, timeout=10, context=ssl_context()) as resp:
+                js = json.loads(resp.read().decode("utf-8"))
+            for it in (js.get("data") or []):
+                inst = str(it.get("instId") or "")
+                if inst.endswith("-USDT-SWAP"):
+                    base = inst[: -len("-USDT-SWAP")]
+                    out.add(f"{base}USDT")
+        except Exception:  # noqa: BLE001 - 白名单拉不到就不过滤，不能阻断轮动
+            out = set()
+        self._okx_swap_set = out
+        return out
+
     def _scan_opportunities(self) -> list[dict]:
         """扫全部品种的因子复合信号，返回按机会分降序的 [{symbol, composite, score, active}]。
 
@@ -1849,11 +1881,15 @@ class TradingEngine:
         held = set(self._positions_map().keys())
         thr = float(getattr(self.cfg.market, "rotate_min_score", 0.0) or 0.0)
         ranked: list[tuple[float, str]] = []
+        okx_only = self._okx_swap_symbols() if self.state.get("exchange") == "okx" else None
         for r in rows:
             if r.get("error"):
                 continue
             sym = str(r.get("symbol") or "").upper()
             if not sym or sym in held:
+                continue
+            # okx 下只保留交易所确实支持的永续品种，从源头避开 51001
+            if okx_only and sym not in okx_only:
                 continue
             try:
                 score = float(r.get("score") or 0.0)
@@ -1883,7 +1919,13 @@ class TradingEngine:
         # 白白浪费一次决策机会，也挡住了真正的第二个仓位。
         held = set(self._positions_map().keys())
         rows_all = rows
-        rows = [r for r in rows if str(r.get("symbol", "")).upper() not in held]
+        # okx 下只保留交易所确实支持的永续品种，从源头避开 51001
+        okx_only = self._okx_swap_symbols() if self.state.get("exchange") == "okx" else None
+        rows = [
+            r for r in rows
+            if str(r.get("symbol", "")).upper() not in held
+            and (not okx_only or str(r.get("symbol", "")).upper() in okx_only)
+        ]
         if not rows:
             return None
         top = rows[0]
@@ -2596,15 +2638,10 @@ class TradingEngine:
                 # 资金费同步：实盘持仓期间交易所每 8h 结算一次，本地回执拿不到，
                 # 这里周期性补记进账本，让累计已实现盈亏与交易所余额对齐。
                 self._sync_funding_fees()
-                # 实时价只对应「当前活跃品种」；其它品种由 _quote_for 自行取价
-                live_px = None
-                if self.live_price_provider is not None:
-                    try:
-                        v = float(self.live_price_provider() or 0.0)
-                        if v > 0:
-                            live_px = v
-                    except Exception:  # noqa: BLE001
-                        pass
+                # 符号感知取当前活跃品种实时价（ws 优先），不再用全局标量，
+                # 避免 auto_rotate 切品种瞬间滞后的标量污染持仓管理。
+                v = self._quote_for(self.cfg.market.symbol)
+                live_px = v if v > 0 else None
                 # 逐仓管理：每个品种用自己的行情、自己的移动止损节流。
                 # 一个品种报错不能连累其它仓位（以前单个仓位异常就整轮中断）。
                 for pos in list(self._positions_map().values()):
@@ -3558,15 +3595,12 @@ class TradingEngine:
                     self.last_error = f"自主选品种失败：{exc}"
 
             df, src = self.refresh_data()
-            price = float(df["close"].iloc[-1])
-            # 有实时报价时优先用实时价，模拟盘止损才跟得上秒级行情
-            if self.live_price_provider is not None:
-                try:
-                    lp = float(self.live_price_provider() or 0.0)
-                    if lp > 0:
-                        price = lp
-                except Exception:  # noqa: BLE001
-                    pass
+            # 符号感知实时价：优先 ws 推送（<1s，按当前品种取），其次 K 线末根兜底。
+            # 不再用全局 live_price_provider 标量——它只反映「当前活跃品种」，
+            # auto_rotate 切品种后会滞后，把别的品种价套到当前仓上（串台）。
+            price = self._quote_for(self.cfg.market.symbol)
+            if price <= 0 and self.df is not None:
+                price = float(df["close"].iloc[-1])
             stopped = self.check_stops(price)
 
             plan = targets or [str(self.cfg.market.symbol).upper()]
@@ -3586,18 +3620,14 @@ class TradingEngine:
                     except Exception as exc:  # noqa: BLE001 - 单个品种切换失败不影响其它
                         self.last_error = f"切换 {sym_u} 失败：{exc}"
                         continue
-                    # switch_symbol 内部已经 refresh_data 并写好了 self.df，
-                    # 用它返回的最新价即可；重复刷新会再拉一次行情、再预热一次。
-                    price = sw.get("price")
-                    if not price:
+                    # 符号感知实时价：switch 后按切换目标的品种取（ws 优先），
+                    # 缺失时退回 switch_symbol 自己算出的 price。杜绝用「当前品种」
+                    # 全局标量把价套错对象。
+                    sw_price = float(sw.get("price") or 0.0)
+                    lp = self._quote_for(sym_u)
+                    price = lp if lp > 0 else sw_price
+                    if price <= 0:
                         continue
-                    if self.live_price_provider is not None:
-                        try:
-                            lp = float(self.live_price_provider() or 0.0)
-                            if lp > 0:
-                                price = lp
-                        except Exception:  # noqa: BLE001
-                            pass
                 payload = self.run_decision(price=price)
                 executed = None
                 if self.auto_execute and payload.get("order"):
