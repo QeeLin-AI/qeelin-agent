@@ -2537,7 +2537,7 @@ class TradingEngine:
 
     # ---- 行情 WebSocket 推送 --------------------------------------------
     def start_ws_guard(self) -> None:
-        """启动行情 WebSocket 推送线程（幂等）。空仓不连、持仓后自动订阅。"""
+        """启动行情 WebSocket 推送线程（幂等）。订阅持仓品种 + 当前活跃品种。"""
         if not getattr(self, "_ws_enabled", True):
             return
         thread = getattr(self, "_ws_thread", None)
@@ -2549,7 +2549,7 @@ class TradingEngine:
         self._ws_thread = PriceStream(
             exchange=self.state.get("exchange", "binance"),
             get_exchange=lambda: self.state.get("exchange", "binance"),
-            get_symbols=lambda: list(self._positions_map().keys()),
+            get_symbols=self._ws_symbols,
             on_price=self._on_ws_price,
         )
         self._ws_thread.start()
@@ -2571,6 +2571,14 @@ class TradingEngine:
     def _on_ws_price(self, sym: str, px: float) -> None:
         if px and px > 0:
             self._stamp_price(str(sym).upper(), float(px))
+
+    def _ws_symbols(self) -> list[str]:
+        """行情流订阅的品种：全部持仓 + 当前活跃品种（顶栏价格也要实时）。"""
+        syms = list(self._positions_map().keys())
+        cur = str(self.cfg.market.symbol).upper()
+        if cur not in syms:
+            syms.append(cur)
+        return syms
 
     # ---- 全品种缓存预热 --------------------------------------------------
     def start_symbol_cache_guard(self, interval_sec: int | None = None) -> None:

@@ -88,7 +88,7 @@ def _serialized(fn):
 
 
 class WebApp:
-    def __init__(self, cfg: AppConfig, live: bool = False, live_interval: float = 5.0) -> None:
+    def __init__(self, cfg: AppConfig, live: bool = False, live_interval: float = 1.0) -> None:
         self.cfg = cfg
         self.engine = TradingEngine(cfg)
         self.research_lock = threading.Lock()
@@ -211,22 +211,33 @@ class WebApp:
 
     def _live_loop(self) -> None:
         while not self._live_stop.is_set():
-            try:
-                price, src = fetch_live_price(
-                    self.cfg.market.symbol, prefer=self.engine.state.get("exchange", "binance")
-                )
-                self.live_price = price
-                self.live_source = src
+            cur = str(self.cfg.market.symbol).upper()
+            now = time.time()
+            # ws 行情流推送优先：当前活跃品种已被推过且新鲜就直接复用，零 REST；
+            # ws 断线/未就绪时回退 REST ticker，保证顶栏价格永不卡死。
+            wpx = float((getattr(self.engine, "_last_prices", None) or {}).get(cur) or 0.0)
+            wts = float((getattr(self.engine, "_price_ts", None) or {}).get(cur) or 0.0)
+            if wpx > 0 and (now - wts) < 3.0:
+                self.live_price = wpx
+                self.live_source = "okx" if self.engine.state.get("exchange") == "okx" else "binance-fapi"
                 self.live_ts = time.strftime("%Y-%m-%d %H:%M:%S")
                 self.live_error = ""
-            except Exception as exc:  # noqa: BLE001
-                self.live_error = str(exc)[:200]
+            else:
+                try:
+                    price, src = fetch_live_price(
+                        cur, prefer=self.engine.state.get("exchange", "binance")
+                    )
+                    self.live_price = price
+                    self.live_source = src
+                    self.live_ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                    self.live_error = ""
+                except Exception as exc:  # noqa: BLE001
+                    self.live_error = str(exc)[:200]
             # 24h 涨跌幅低频刷新（fapi ticker/24hr 权重高，60 秒一次就够）
-            now = time.time()
             if now - self._live_change_at >= 60:
                 try:
                     _last, chg = fetch_24h(
-                        self.cfg.market.symbol, prefer=self.engine.state.get("exchange", "binance")
+                        cur, prefer=self.engine.state.get("exchange", "binance")
                     )
                     self.live_change = round(chg, 3)
                     self._live_change_at = now
