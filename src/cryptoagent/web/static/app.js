@@ -3313,10 +3313,9 @@ $('themeBtn').addEventListener('click', () => {
     const sc = await api('/api/scan');
     if (sc && sc.rows) renderScan(sc);
   } catch (_) { /* 还没扫描过 */ }
-  // 3 秒一轮：标记价要跟着报价线程（4 秒）走，8 秒会明显发木。
-  // /api/status 不现场打交易所——实时价来自 ticker 线程，实盘权益 20 秒缓存，
-  // 其余全是内存数据，所以这个频率不会把签名接口刷爆。
-  setInterval(poll, 3000);
+  // 2 秒一轮：最新价来自交易所行情流（WebSocket）实时推送，后端缓存始终 <1s；
+  // /api/status 不现场打交易所——其余全是内存数据，所以这个频率不会把接口刷爆。
+  setInterval(poll, 2000);
   // 只在循环尚未启动时启动：poll() 里的 _anchorUptime 通常已经起了一个，
   // 这里再无条件赋值会造成两个 rAF 循环并行（且旧句柄丢失、无法停止）。
   if (!_uptimeRAF) _uptimeRAF = requestAnimationFrame(_renderUptimeFrame);

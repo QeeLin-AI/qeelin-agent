@@ -187,9 +187,14 @@ class TradingEngine:
         self._warm_last_result: dict = {}
         self._kl_short_warm_at: dict[str, float] = {}
         self._composite_cache: dict = {}
+        # 行情 WebSocket：持仓品种最新价由交易所实时推送（断线自动回退 REST）。
+        self._ws_stop = threading.Event()
+        self._ws_thread = None
+        self._ws_enabled = bool(getattr(self.cfg.market, "ws_quotes", True))
         self.start_position_guard()
         self.start_quote_guard()
         self.start_symbol_cache_guard()
+        self.start_ws_guard()
 
     # ------------------------------------------------------------------
     def _default_state(self) -> dict:
@@ -1382,6 +1387,7 @@ class TradingEngine:
             self.state["mode"] = "live"
             self.state["testnet"] = True
             self.state["exchange"] = exchange
+            self._ws_restart()
             # 顺序很重要：先让 _reset_account_scope 用旧 scope 落盘再换血。
             # 提前写 account_scope 会让它把新账户文件当成旧账户覆盖掉。
             if reset_needed:
@@ -1408,6 +1414,7 @@ class TradingEngine:
         self.state["mode"] = "live"
         self.state["testnet"] = testnet
         self.state["exchange"] = exchange
+        self._ws_restart()
         if reset_needed:
             self._reset_account_scope(acct, scope=new_scope, old_scope=prev_scope)
             self.reload_for_exchange()
@@ -2507,8 +2514,15 @@ class TradingEngine:
         取价失败保持旧值不动，绝不清零——清掉会让页面从价格变成「—」。
         """
         prefer = self.state.get("exchange", "binance")
+        now = time.time()
+        # ws 推送窗口：ws 刚推过的品种跳过 REST，别把毫秒级实时价又覆盖回 4 秒快照。
+        # ws 断线后 3 秒内 REST 自动接管，价格不会卡死。
+        ws_fresh = 3.0 if getattr(self, "_ws_enabled", True) else 0.0
         out: dict[str, float] = {}
         for sym in list(self._positions_map().keys()):
+            ts = float((getattr(self, "_price_ts", None) or {}).get(sym) or 0.0)
+            if ts and (now - ts) < ws_fresh:
+                continue
             try:
                 px, _src = fetch_live_price(sym, prefer=prefer)
             except Exception:  # noqa: BLE001 - 单品种失败不影响其它品种
@@ -2520,6 +2534,43 @@ class TradingEngine:
             self._stamp_price(sym, px)
             out[sym] = px
         return out
+
+    # ---- 行情 WebSocket 推送 --------------------------------------------
+    def start_ws_guard(self) -> None:
+        """启动行情 WebSocket 推送线程（幂等）。空仓不连、持仓后自动订阅。"""
+        if not getattr(self, "_ws_enabled", True):
+            return
+        thread = getattr(self, "_ws_thread", None)
+        if thread is not None and getattr(thread, "alive", False):
+            return
+        from .wsfeed import PriceStream
+
+        self._ws_stop.clear()
+        self._ws_thread = PriceStream(
+            exchange=self.state.get("exchange", "binance"),
+            get_exchange=lambda: self.state.get("exchange", "binance"),
+            get_symbols=lambda: list(self._positions_map().keys()),
+            on_price=self._on_ws_price,
+        )
+        self._ws_thread.start()
+
+    def stop_ws_guard(self) -> None:
+        """停止行情推送线程（供测试清理；产品路径由 daemon 随进程退出）。"""
+        thread = getattr(self, "_ws_thread", None)
+        if thread is not None:
+            thread.stop()
+            self._ws_thread = None
+
+    def _ws_restart(self) -> None:
+        """交易所切换后重连行情流（binance ↔ okx 端点不同）。"""
+        if not hasattr(self, "_ws_stop"):
+            return  # object.__new__ 构造的轻量测试实例未跑 __init__，跳过
+        self.stop_ws_guard()
+        self.start_ws_guard()
+
+    def _on_ws_price(self, sym: str, px: float) -> None:
+        if px and px > 0:
+            self._stamp_price(str(sym).upper(), float(px))
 
     # ---- 全品种缓存预热 --------------------------------------------------
     def start_symbol_cache_guard(self, interval_sec: int | None = None) -> None:

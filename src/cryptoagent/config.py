@@ -82,6 +82,9 @@ class MarketConfig:
     # 只在主行情刷新时拉，机会扫描不拉；拿不到就静默降级，不影响决策。
     derivatives_enabled: bool = True
     derivatives_ttl_sec: int = 300
+    # 持仓品种最新价走交易所行情流（WebSocket）实时推送，不再只靠 4 秒 REST 轮询；
+    # 断线自动回退到 REST。仅公开行情，不传 Key、不下单。
+    ws_quotes: bool = True
 
 
 @dataclass
