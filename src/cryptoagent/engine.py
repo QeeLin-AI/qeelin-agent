@@ -1254,11 +1254,13 @@ class TradingEngine:
         return fill_rec
 
     def _record_close(self, pos: dict, exit_price: float, pnl: float, reason: str, mode: str,
-                      rule: str = "") -> None:
+                      rule: str = "", fee: float = 0.0) -> None:
         """把一次平仓写进持仓历史：持仓历史表 + 每日盈亏统计都靠它。
 
         `pnl` 是**价格变动毛额**，与平仓前的浮盈同口径；手续费由成交流水单独
-        计入累计已实现盈亏，不在这里扣。
+        计入累计已实现盈亏，不在这里扣。但「是否真的赚了」必须看净额——
+        所以同时落 `net_pnl` / `net_realized_r`（毛额 − 开仓费 − 平仓费），
+        复盘官与绩效官优先读净额。高频小止盈下毛 R 会把胜率显著算高。
         """
         # 分析师权重校准：用「市场实际方向」而非这笔仓的盈亏评判立场
         # （开仓方向由交易员定，不该算到分析师头上）。
@@ -1315,6 +1317,18 @@ class TradingEngine:
         if entry_f > 0 and r_pct > 0:
             realized_r = round((float(exit_price or 0.0) - entry_f) / entry_f * sign / r_pct, 4)
             initial_stop = round_price(entry_f * (1.0 - sign * r_pct))
+        # 净额口径：毛额扣掉「开仓费 + 平仓费」。费用按开仓名义换算成 R，
+        # 这样「净赚几个 R」可以直接和毛 R 对比。手续费占比在紧止损时会很大，
+        # 高频小止盈的场景下毛 R 为正、净 R 可能已经接近 0。
+        fee_total = float(fee or 0.0) + float(pos.get("entry_fee") or 0.0)
+        net_pnl = round(float(pnl or 0.0) - fee_total, 4)
+        net_realized_r = None
+        if realized_r is not None and entry_f > 0 and r_pct > 0:
+            notional_entry = entry_f * float(pos.get("qty") or 0.0)
+            if notional_entry > 0:
+                net_realized_r = round(
+                    realized_r - fee_total / (notional_entry * r_pct), 4
+                )
         hist.append(
             {
                 "symbol": pos.get("symbol") or self.cfg.market.symbol,
@@ -1325,6 +1339,11 @@ class TradingEngine:
                 "pnl": round(float(pnl or 0), 4),
                 # 开仓费单列：pnl 是毛额，审计「毛 − 开仓费 − 平仓费」时靠它对账
                 "fee_open": round(float(pos.get("entry_fee") or 0.0), 4),
+                "fee_close": round(float(fee or 0.0), 4),
+                "fee_total": round(fee_total, 4),
+                # 净额：复盘/绩效统一读这两个字段，避免「毛赚实亏」被算成赢单
+                "net_pnl": net_pnl,
+                "net_realized_r": net_realized_r,
                 "leverage": pos.get("leverage"),
                 # 自迭代要用的量：没有这三项，事后连「赚了几个 R」都算不出来
                 "initial_stop": initial_stop,
@@ -1417,7 +1436,7 @@ class TradingEngine:
         }
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
-        self._record_close(pos, fill, pnl, reason, "paper", rule=rule)
+        self._record_close(pos, fill, pnl, reason, "paper", rule=rule, fee=fee)
         self._drop_position(pos.get("symbol"))
         return rec
 
@@ -1649,7 +1668,7 @@ class TradingEngine:
                 if net_for_risk < 0
                 else 0
             )
-            self._record_close(pos, exit_px, pnl, "exchange", "live", rule="exchange")
+            self._record_close(pos, exit_px, pnl, "exchange", "live", rule="exchange", fee=fee)
             self._save()
         self._log_live("CLOSE", str(pos.get("side")), qty, exit_px, order_id)
         self._notify(
@@ -3732,7 +3751,7 @@ class TradingEngine:
                     # 账本只加「毛盈亏 − 平仓费」：开仓费在交易所侧已扣，本地从未记账，
                     # 再加一次会让 state.equity 与交易所余额偏离一笔开仓费。
                     self.state["equity"] += gross - fee
-                    self._record_close(pos, exit_px, pnl, reason, "live", rule=rule)
+                    self._record_close(pos, exit_px, pnl, reason, "live", rule=rule, fee=fee)
                     self._drop_position(sym)
                     self._save()
                     self._log_live("CLOSE", self._pos_side(pos), pos["qty"], exit_px, res.order_id)

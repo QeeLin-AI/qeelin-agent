@@ -38,8 +38,20 @@ def _num(value) -> float | None:
         return None
 
 
+def realized_r_of(row: dict) -> float | None:
+    """一笔平仓的「到手 R」：优先净额（已扣开仓费与平仓费），回退毛额。
+
+    高频小止盈时两者差距很大：毛 R 0.30、扣完成本净 R 可能只剩 0.15。
+    用毛额算胜率与期望值会系统性偏高，进而让「进化」朝错误方向调整。
+    """
+    v = _num((row or {}).get("net_realized_r"))
+    if v is not None:
+        return v
+    return _num((row or {}).get("realized_r"))
+
+
 def _stats(rows: list[dict]) -> dict:
-    rs = [x for x in (_num(r.get("realized_r")) for r in rows) if x is not None]
+    rs = [x for x in (realized_r_of(r) for r in rows) if x is not None]
     n = len(rs)
     if n == 0:
         return {"n": len(rows), "n_with_r": 0}
@@ -114,7 +126,7 @@ def compute_kpis(rows: list[dict], min_sample: int = MIN_SAMPLE) -> dict:
     # 把从未盈利的单也算进来会把均值拉成负数，指标就失去意义了。
     caps = []
     for r in rows:
-        rr, mfe = _num(r.get("realized_r")), _num(r.get("mfe_r"))
+        rr, mfe = realized_r_of(r), _num(r.get("mfe_r"))
         if rr is not None and mfe is not None and mfe >= 0.5:
             caps.append(max(0.0, min(2.0, rr / mfe)))
     if caps:

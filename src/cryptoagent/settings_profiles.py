@@ -141,9 +141,9 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "frequency": {
         "label": "高频",
-        "summary": "门槛 0.30、单笔 0.8%、最多 4 仓、每轮评 4 品种、盈亏比 2.0。"
-                   "典型趋势跟踪：多数单小止损出局（胜率会低于五成），"
-                   "靠少数跑出 2R 以上的单把总账拉正。适合能盯盘、接受连续小亏。",
+        "summary": "门槛 0.30、单笔 0.8%、最多 4 仓、盈亏比 1.15、持仓最长 4 根。"
+                   "薅波动：小赚就跑、错了立刻认，靠高胜率累积；"
+                   "单笔只赚 1.15R，胜率需 >52% 才覆盖手续费与滑点。",
         "risk": {
             "sizing_mode": "risk",
             "max_loss_per_trade_pct": 0.008,
@@ -152,17 +152,19 @@ PROFILES: dict[str, dict[str, Any]] = {
             "max_margin_usage_pct": 0.60,          # 0.12×4=0.48 ≤ 0.60
             "min_confidence": 0.30,                # 门槛最低：笔数优先
             "max_leverage": 10.0,
-            # 3.0→1.0：高盈亏比靠「让利润跑」，不靠杠杆；强制 3x 只会放大噪音
             "min_leverage": 1.0,
             "leverage_override": 0.0,
             "daily_loss_limit_pct": 0.06,
             "max_drawdown_pct": 0.20,
             "max_portfolio_notional_pct": 2.0,     # 0.12×10=1.2 ≤ 2.0
-            "correlated_exposure_pct": 1.2,
-            # 1.2→2.0：这是本档的核心。低盈亏比 + 高频 = 被手续费与噪音磨死；
-            # 高盈亏比 + 低胜率才是可持续的高频形态（亏 1R 赢 2R，胜率 34% 即可打平）
-            "min_risk_reward": 2.0,
-            "min_stop_atr_mult": 0.5,              # 允许更紧止损，抬高 R:R
+            # 1.2→2.0：加密品种几乎同属一个相关性组，1.2 只够开一个顶格仓。
+            # 按典型单笔名义（0.8%/2%止损=0.4）算，4 仓共 1.6，2.0 刚好容得下
+            "correlated_exposure_pct": 2.0,
+            # 1.15：薅波动的核心是「赚了就落袋」，不是让利润奔跑。
+            # 止盈只要比止损大一点就走，靠次数和高胜率累积；
+            # 下限不能低于 1.1，否则一笔亏损要两笔盈利才能填平，成本会吃掉全部边际
+            "min_risk_reward": 1.15,
+            "min_stop_atr_mult": 0.45,             # 止损更紧：判断错了立刻出局，不拖
             "debate_score_weight": 0.35,           # 高频更易被噪音带偏，裁判权重略高
         },
         "position": {
@@ -174,14 +176,15 @@ PROFILES: dict[str, dict[str, Any]] = {
             "llm_shadow": False,
             "llm_offpeak_only": True,
             "bars_from_index": True,
-            "peak_drawdown_exit_enabled": False,
-            "peak_drawdown_r": 1.0,
-            # 换手要快，但盈利单不能砍太早——这是「高盈亏比」的必要条件
-            "max_hold_bars": 12,           # 12 根 1h：半天不涨就走，席位让给下一个机会
-            "trail_activate_r": 1.5,       # 1.5R 才启动移动止损，别打断趋势
-            "trail_atr_mult": 2.5,         # 跟踪距离放宽，容忍回踩
-            "min_progress_r": 0.4,         # 时间止损更严：12 根后还不到 0.4R 就撤
-            "reversal_composite": 0.7,     # 不轻易用反转信号退出
+            # 「赚了就跑」的三层保障，缺一不可：
+            # ① 止盈近（R:R 1.15）② 移动止损早启动且贴身 ③ 峰值回吐就走
+            "peak_drawdown_exit_enabled": True,    # 本档唯一开启此规则的档位
+            "peak_drawdown_r": 0.5,                # 浮盈到过启动线后，从高点回吐 0.5R 即平
+            "max_hold_bars": 4,                    # 4 根 1h：4 小时不动就换下一个机会
+            "trail_activate_r": 0.5,               # 浮盈 0.5R 就启动保护，先锁住再说
+            "trail_atr_mult": 1.0,                 # 跟踪贴身（1×ATR），不给回撤留空间
+            "min_progress_r": 0.2,                 # 4 根后还不到 0.2R 就撤，别占着席位
+            "reversal_composite": 0.5,             # 反转信号更敏感，早退
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 1800,
@@ -192,8 +195,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         },
         "market": {
             "auto_rotate": True,
-            # 0.12→0.10：本档本来就要笔数，选品门槛再降一档；
-            # 质量由「盈亏比 2.0 + 止损 ATR」两道闸兜住，不靠选品过滤
+            # 0.10：本档本来就要笔数，选品不做过严过滤；
+            # 质量由「紧止损 + 峰值回撤退出」两道规则兜住，不靠选品
             "min_score": 0.10,
             "every_cycles": 1,
             "auto_top_k": 4,               # 4 仓容量，每轮评 4 个品种
@@ -205,27 +208,33 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "aggressive": {
         "label": "进取",
-        "summary": "单笔 2%、最多 3 仓、杠杆 1~10x、置信 0.42、盈亏比 1.8、回撤上限 30%。"
-                   "高风险高收益：承受 5 连亏即停的波动，换单笔 2% 的收益弹性；"
-                   "研究也峰时跑（信号全但成本高）。需强心脏与充足本金。",
+        "summary": "单笔 3%、最多 3 仓、杠杆 1~20x、置信 0.38、盈亏比 1.5、回撤上限 40%。"
+                   "真·高风险：3 仓同时止损即亏 9%，连亏 5 笔触发 15% 日亏线；"
+                   "本金可以亏掉四成，不是稳健玩法。研究也峰时跑（信号全但成本高）。",
         "risk": {
             "sizing_mode": "risk",
-            "max_loss_per_trade_pct": 0.020,
-            # 0.25→0.30：单品种敢给更大保证金，是「高收益」的来源
+            # 2%→3%：单笔风险直接拉到账户能承受的上限。3 仓同时打满 = 9%，
+            # 仍低于 15% 日亏线，但要连亏 5 笔才停——这是本档的真实代价
+            "max_loss_per_trade_pct": 0.030,
             "max_position_pct": 0.30,
             "max_concurrent_positions": 3,
             "max_margin_usage_pct": 0.95,      # 0.30×3=0.90 ≤ 0.95
-            "min_confidence": 0.42,            # 比稳健松，抓更多机会
+            "min_confidence": 0.38,            # 继续放低：激进档宁可多开、靠仓位赚
+            # 不设 20x：0.30×20=6.0 正好等于组合名义上限，第一仓就占满，
+            # 第二仓必被风控拒掉，3 仓名存实亡。10x 下单笔名义 3.0，能开满 2 仓、
+            # 第三仓视止损宽度而定——这才是「激进但还能同时持仓」的可行解
             "max_leverage": 10.0,
-            "min_leverage": 1.0,               # 杠杆交给决策，不强制 3x 起
+            "min_leverage": 1.0,
             "leverage_override": 0.0,
-            "daily_loss_limit_pct": 0.10,      # 10%：0.02×5 笔才停，容忍更大幅度波动
-            "max_drawdown_pct": 0.30,
-            "max_portfolio_notional_pct": 3.5, # 0.30×10=3.0 ≤ 3.5，留一点余量
-            "correlated_exposure_pct": 2.0,
-            # 1.3→1.8：高收益不靠「高胜率」（做不到），靠小止损 + 让利润跑。
-            # 胜率 40% × 1.8R 的期望值，比胜率 55% × 1.0R 更抗噪
-            "min_risk_reward": 1.8,
+            "daily_loss_limit_pct": 0.15,      # 15%：3%×5 笔才停
+            "max_drawdown_pct": 0.40,          # 40%：从 5000 跌到 3000 才熔断
+            "max_portfolio_notional_pct": 6.0, # 单笔名义 3.0，组合上限 6.0
+            # 2.5→3.0：加密品种高度相关，放宽到"允许两仓同组满额"，
+            # 第三仓必须换组（否则等于把风险叠在一个方向上）
+            "correlated_exposure_pct": 3.0,
+            # 1.8→1.5：激进档的核心是「敢开 + 仓位重」，不是「等一笔大行情」。
+            # 盈亏比要求越高，通过率越低；本档要的是次数 × 仓位，让胜率贡献收益
+            "min_risk_reward": 1.5,
             "min_stop_atr_mult": 0.6,
             "debate_score_weight": 0.3,
         },
@@ -239,11 +248,11 @@ PROFILES: dict[str, dict[str, Any]] = {
             "peak_drawdown_exit_enabled": False,
             "peak_drawdown_r": 1.0,
             # 激进档要「赚大钱」：持有更久、跟踪更宽，避免把 3R 的单砍在 1R
-            "max_hold_bars": 36,
-            "trail_activate_r": 1.2,
-            "trail_atr_mult": 2.2,
+            "max_hold_bars": 24,
+            "trail_activate_r": 1.0,
+            "trail_atr_mult": 2.0,
             "min_progress_r": 0.3,
-            "reversal_composite": 0.75,
+            "reversal_composite": 0.7,
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 900,

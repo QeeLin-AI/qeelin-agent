@@ -36,7 +36,11 @@ def review_trade(row: dict) -> dict:
     任何字段缺失都降级为 neutral，绝不抛异常——复盘是旁路，不能影响记账。
     """
     row = row or {}
-    realized = _num(row.get("realized_r"))
+    # 优先净额：毛 R 不扣手续费，高频小止盈下会把「毛赚实亏」记成赢单，
+    # 复盘结论与胜率都会失真。老记录没有 net_realized_r 时回退毛额。
+    realized = _num(row.get("net_realized_r"))
+    if realized is None:
+        realized = _num(row.get("realized_r"))
     mfe = _num(row.get("mfe_r"))
     r_pct = _num(row.get("r_pct"))
     rule = str(row.get("rule") or row.get("reason") or "")

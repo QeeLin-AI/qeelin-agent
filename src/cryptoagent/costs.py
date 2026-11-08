@@ -146,6 +146,17 @@ def evaluate_execution_cost(
                 f"执行成本 {total:.3%} ≥ 止盈 {tp:.2%}，净边际 {res.net_edge_pct:+.3%}，拒绝"
             )
             return res
+        # 净赚但太薄：扣完成本只剩零点零几个百分点，实盘会被滑点与费率波动吃掉。
+        # 「赚了就跑」必须建立在「净额确实为正」之上，不是毛额为正。
+        floor = float(getattr(costs, "min_net_edge_pct", 0.0) or 0.0)
+        if floor > 0 and res.net_edge_pct < floor:
+            res.approved = False
+            res.size_multiplier = 0.0
+            res.reasons.append(
+                f"净边际 {res.net_edge_pct:.3%} < 下限 {floor:.3%}"
+                f"（止盈 {tp:.2%} − 成本 {total:.3%}），扣完手续费不值得做"
+            )
+            return res
         if participation > costs.max_participation_hard:
             res.approved = False
             res.size_multiplier = 0.0
