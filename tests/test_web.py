@@ -553,6 +553,18 @@ class _FakeExchange:
         ]
 
 
+class _FakeOKXExchange(_FakeExchange):
+    """OKX：balance 是不含浮盈的钱包口径，equity 是已含浮盈的账户权益。"""
+
+    def account(self):
+        return {
+            "balance": 100.0,
+            "available": 98.0,
+            "unrealized_pnl": 5.0,
+            "equity": 105.0,
+        }
+
+
 class TestAccountView(unittest.TestCase):
     """总览页要跟着模式走：模拟看本地账本，解锁后看交易所真实账户。"""
 
@@ -593,6 +605,18 @@ class TestAccountView(unittest.TestCase):
         # 今日盈亏排除划转：5.0 - 0.12 = 4.88
         self.assertAlmostEqual(st["day_pnl_abs"], 4.88, places=2)
         self.assertEqual(st["account_error"], "")
+
+    def test_exchange_equity_field_not_double_counted(self):
+        # OKX 的 eq 已含 upl，总览页权益必须是 105，不能是 100 + 5 + 5
+        self.app.engine.armed = True
+        self.app.engine.state["mode"] = "live"
+        self.app.engine.state["testnet"] = True
+        self.app.engine.live_client = _FakeOKXExchange()
+        st = self.app.status()
+        self.assertEqual(st["account_view"], "exchange")
+        self.assertAlmostEqual(st["equity"], 105.0)
+        self.assertAlmostEqual(st["wallet_balance"], 100.0)
+        self.assertAlmostEqual(st["unrealized_pnl"], 5.0)
 
     def test_live_mode_exposes_exchange_position(self):
         self.app.engine.armed = True

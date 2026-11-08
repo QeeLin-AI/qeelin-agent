@@ -24,7 +24,7 @@ from ..config import AppConfig, update_dotenv
 from ..data import fetch_24h, fetch_live_price
 from ..engine import TradingEngine
 from .. import __version__
-from ..execution import ExchangeError
+from ..execution import ExchangeError, account_equity
 from ..research import ResearchLoop, build_proposer
 from ..agents.llm import LLMClient, is_offpeak, offpeak_info, seconds_until_offpeak
 
@@ -529,7 +529,7 @@ class WebApp:
                 "mode": "模拟" if self.engine.state.get("testnet", True) else "实盘",
             }
 
-        equity = round(acct["balance"] + acct["unrealized_pnl"], 4)
+        equity = round(account_equity(acct), 4)
         # 权益曲线：每 30 秒记一个点，切换模式后不要把本地曲线接上去
         if not self._ex_history or (now - self._ex_hist_at) >= 30:
             self._ex_hist_at = now

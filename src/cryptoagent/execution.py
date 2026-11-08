@@ -94,6 +94,30 @@ def read_api_keys(exchange: str, testnet: bool = True) -> tuple[str, str, str]:
     return key, secret, passphrase
 
 
+def account_equity(acct: dict) -> float:
+    """账户权益：优先取客户端给出的 `equity`，缺少该字段才按「余额 + 浮盈」回退。
+
+    币安 `walletBalance` 不含未实现盈亏，`equity = walletBalance + unrealizedProfit`；
+    OKX `details.eq`（币种权益）**本身已含** `upl`（= 余额 + 全仓/逐仓浮动收益），
+    再叠一次 upl 会把浮盈算两遍。两家客户端都在 `account()` 里直接给出 `equity`，
+    所有调用方统一走这里，不要在别处自己拼。
+    """
+    if not isinstance(acct, dict):
+        return 0.0
+    raw = acct.get("equity")
+    if raw is not None:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            return value
+    try:
+        return float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class ExchangeError(RuntimeError):
     pass
 
@@ -222,10 +246,14 @@ class BinanceFuturesClient:
     def account(self) -> dict:
         data = self._request("GET", "/fapi/v2/account", signed=True)
         usdt = next((a for a in data.get("assets", []) if a["asset"] == "USDT"), {})
+        wallet = float(usdt.get("walletBalance", 0.0))
+        upl = float(usdt.get("unrealizedProfit", 0.0))
         return {
-            "balance": float(usdt.get("walletBalance", 0.0)),
+            "balance": wallet,
             "available": float(usdt.get("availableBalance", 0.0)),
-            "unrealized_pnl": float(usdt.get("unrealizedProfit", 0.0)),
+            "unrealized_pnl": upl,
+            # 币安 walletBalance 不含浮盈，账户权益要显式加上；调用方别再自己加一次
+            "equity": wallet + upl,
         }
 
     def positions(self, symbol: str | None = None) -> list[dict]:
@@ -579,14 +607,20 @@ class OKXClient:
         details = (d[0].get("details") if d else []) or []
         usdt = next((x for x in details if x.get("ccy") == "USDT"), None)
         if usdt:
+            # OKX 的 eq（币种权益）= 余额 + 全仓/逐仓浮动收益，已经含 upl；
+            # 早期把 eq 直接塞进 balance 再叠加 upl 会把浮盈算两遍。
+            # balance 去掉浮盈以对齐币安 walletBalance 口径，equity 单列真值。
+            eq = self._f(usdt.get("eq"))
+            upl = self._f(usdt.get("upl"))
             return {
-                "balance": self._f(usdt.get("eq")),
+                "balance": eq - upl,
                 "available": self._f(usdt.get("availBal")),
-                "unrealized_pnl": self._f(usdt.get("upl")),
+                "unrealized_pnl": upl,
+                "equity": eq,
             }
         # 没有 USDT 明细时退回总权益
         total = self._f(d[0].get("totalEq")) if d else 0.0
-        return {"balance": total, "available": total, "unrealized_pnl": 0.0}
+        return {"balance": total, "available": total, "unrealized_pnl": 0.0, "equity": total}
 
     def positions(self, symbol: str | None = None) -> list[dict]:
         inst = to_okx_inst(symbol) if symbol else None

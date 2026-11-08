@@ -43,7 +43,7 @@ from .data import (
     set_kl_cache_dir,
 )
 from .derivatives import enrich_derivatives
-from .execution import BinanceFuturesClient, OKXClient, ExchangeError, read_api_keys
+from .execution import BinanceFuturesClient, OKXClient, ExchangeError, account_equity, read_api_keys
 from .notify import get_notifier
 from .risk import AccountState
 
@@ -1025,7 +1025,7 @@ class TradingEngine:
             acct = self.live_client.account()
         except Exception:  # noqa: BLE001 - 拿不到就退回本地账本，绝不阻塞决策
             return None
-        equity = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+        equity = account_equity(acct)
         if equity <= 0:
             return None
         self._live_eq_cache = (equity, now)
@@ -1075,7 +1075,7 @@ class TradingEngine:
         equity: float | None = None
         if acct:
             try:
-                equity = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+                equity = account_equity(acct)
             except (TypeError, ValueError):
                 equity = None
         store = getattr(self, "accounts", None)
@@ -1148,7 +1148,7 @@ class TradingEngine:
                 if client is not None:
                     try:
                         acct = client.account()
-                        eq = float(acct.get("balance") or 0.0) + float(acct.get("unrealized_pnl") or 0.0)
+                        eq = account_equity(acct)
                     except Exception:  # noqa: BLE001 - 取不到余额就用当前权益
                         eq = None
                 if not eq or eq <= 0:
