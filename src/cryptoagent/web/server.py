@@ -2258,12 +2258,17 @@ class WebApp:
         p = self.cfg.position
         bool_keys = ("enabled", "llm_explain", "llm_shadow", "llm_offpeak_only",
                      "bars_from_index", "peak_drawdown_exit_enabled", "auto_tune",
+                     "reversal_enabled",
                      "evolution_llm_enabled", "evolution_llm_allow_action",
                      "evolution_llm_allow_loosen")
         int_keys = {
             "llm_min_interval_sec": (0, 86400),
             "reversal_ema_bars": (16, 96),
             "composite_max_age_sec": (0, 3600),
+            # 退出参数也纳入白名单：否则「训练档」这类方案无法固化持仓规则，
+            # 切走再切回时这些值不会恢复（只能手改配置文件）
+            "max_hold_bars": (4, 500),
+            "reversal_min_hold_bars": (1, 50),
             "evolution_rule_min_samples": (5, 100),
             "evolution_confirm_rounds": (1, 10),
             "evolution_replay_min_cases": (5, 200),
@@ -2274,6 +2279,11 @@ class WebApp:
         }
         float_keys = {
             "peak_drawdown_r": (0.5, 2.0),
+            "trail_activate_r": (0.2, 3.0),
+            "trail_atr_mult": (0.5, 5.0),
+            "trail_min_gap_pct": (0.0005, 0.02),
+            "min_progress_r": (0.0, 2.0),
+            "reversal_composite": (0.2, 1.0),
             "evolution_replay_min_median_delta": (-1.0, 1.0),
             "evolution_replay_max_worst_delta": (0.0, 5.0),
             "evolution_llm_min_confidence": (0.0, 1.0),

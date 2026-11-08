@@ -236,6 +236,67 @@ PROFILES: dict[str, dict[str, Any]] = {
             "peak_mode": "full",
         },
     },
+    "training": {
+        "label": "训练",
+        "summary": "单笔 0.5%、最多 3 仓、杠杆 1~5x、置信 0.40、单回合最长 24 根。"
+                   "目标是「活得久、样本多、信号干净」：连亏 10 笔也只亏 5%，"
+                   "不会一开局就撞熔断；适合长期跑模拟盘积累训练数据。",
+        "risk": {
+            # 单笔风险压到 0.5%：训练期最怕的是「还没攒够样本就触发熔断停摆」
+            "sizing_mode": "risk",
+            "max_loss_per_trade_pct": 0.005,
+            "max_position_pct": 0.15,
+            "max_concurrent_positions": 3,
+            "max_margin_usage_pct": 0.60,          # 0.15×3=0.45 ≤ 0.60
+            "min_confidence": 0.40,                # 比进取松、比高频严：样本与信噪的折中
+            "max_leverage": 5.0,
+            "min_leverage": 1.0,                   # 取消「强制 3x 起」
+            "leverage_override": 0.0,
+            "daily_loss_limit_pct": 0.04,          # 0.5%×8 笔才停，不至于一天就歇
+            "max_drawdown_pct": 0.15,
+            "max_portfolio_notional_pct": 2.0,     # 0.15×5=0.75 ≤ 2.0
+            "correlated_exposure_pct": 1.5,
+            "min_risk_reward": 1.25,               # 略低于 1.3，让合格单更容易过
+            "min_stop_atr_mult": 0.6,
+            "debate_score_weight": 0.3,
+        },
+        "position": {
+            "enabled": True,
+            "auto_tune": True,
+            "llm_explain": False,
+            "llm_shadow": False,
+            "llm_offpeak_only": True,
+            "bars_from_index": True,
+            "peak_drawdown_exit_enabled": False,
+            "peak_drawdown_r": 1.0,
+            # 退出规则：加快回合速度 + 让退出方式分布更多样（复盘归因才有数据）
+            "reversal_enabled": True,
+            "reversal_min_hold_bars": 3,
+            "reversal_ema_bars": 48,
+            "reversal_composite": 0.6,
+            "composite_max_age_sec": 300,
+            "max_hold_bars": 24,                   # 48→24 根 1h：单回合最长 1 天
+            "min_progress_r": 0.3,
+            "trail_activate_r": 0.8,
+            "trail_atr_mult": 1.8,
+            "trail_min_gap_pct": 0.003,
+            "llm_min_interval_sec": 900,
+            "evolution_mode": "stats",
+            "evolution_llm_enabled": False,
+            "evolution_llm_allow_action": False,
+            "evolution_llm_allow_loosen": False,
+        },
+        "market": {
+            "auto_rotate": True,
+            "min_score": 0.12,                     # 0.15→0.12：更多品种入选，样本多样
+            "every_cycles": 1,
+            "auto_top_k": 3,
+        },
+        "llm": {
+            "offpeak_research_only": True,         # 研究只在谷时跑，省一半
+            "peak_mode": "full",                   # 决策峰时照常用 LLM（训练要真信号）
+        },
+    },
     "evolution": {
         "label": "AI 进化（L3）",
         "summary": "稳健底座 + 开启 L3：LLM 可提议退出参数与动作（默认仅保守方向）。"
