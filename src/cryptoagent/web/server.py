@@ -1490,6 +1490,33 @@ class WebApp:
             if not (0.0 <= v <= 1.0):
                 raise ApiError("置信度门槛只能在 0 ~ 1 之间", 400)
             r.min_confidence = v
+        if "min_risk_reward" in payload:
+            try:
+                v = float(payload["min_risk_reward"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("min_risk_reward 必须是数字", 400) from exc
+            if not (1.0 <= v <= 5.0):
+                raise ApiError("盈亏比下限只能在 1.0 ~ 5.0 之间", 400)
+            r.min_risk_reward = v
+        if "min_stop_atr_mult" in payload:
+            try:
+                v = float(payload["min_stop_atr_mult"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("min_stop_atr_mult 必须是数字", 400) from exc
+            # 0 = 关闭「止损宽度 vs ATR」检查；上限 3.0 已属激进
+            if not (0.0 <= v <= 3.0):
+                raise ApiError("止损 ATR 倍数只能在 0 ~ 3 之间", 400)
+            r.min_stop_atr_mult = v
+        if "debate_score_weight" in payload:
+            try:
+                v = float(payload["debate_score_weight"])
+            except (TypeError, ValueError) as exc:
+                raise ApiError("debate_score_weight 必须是数字", 400) from exc
+            # 上限与 judge_debate 内部的硬夹紧保持一致（0.5），否则配置写 0.8
+            # 会被静默截成 0.5，页面显示的与实际生效的不一致。
+            if not (0.0 <= v <= 0.5):
+                raise ApiError("辩论裁判权重只能在 0 ~ 0.5 之间", 400)
+            r.debate_score_weight = v
         if "sizing_mode" in payload:
             mode = str(payload["sizing_mode"]).strip().lower()
             if mode == "max":      # 旧值：两者取大已废弃，回落到「听交易员」
