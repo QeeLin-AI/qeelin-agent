@@ -2102,9 +2102,24 @@ function renderStatus(s) {
     tb.innerHTML = shown.map((f) => {
       const cls = f.side === 'LONG' ? 'up' : 'down';
       const slipVal = slipOf(f);
+      // bps 做主口径：跨品种可比、与手续费同单位（fee 也是 5bps 这种量级）。
+      // 绝对价差放进 title——「差 6.5U」在 BTC 上只有 8.6bps，BNB 差 1.11U 却是
+      // 15.95bps，单看价差会把严重程度判反，所以不做主显示。
+      const slipTitle = (() => {
+        if (slipVal === null) return '';
+        const plan = Number(f.plan_price), fill = Number(f.price);
+        if (!Number.isFinite(plan) || !Number.isFinite(fill) || plan <= 0 || fill <= 0) {
+          return `成本滑点 ${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}bps`;
+        }
+        const short = String(f.side || '').toUpperCase() === 'SHORT';
+        const diffCost = short ? plan - fill : fill - plan;
+        const sgn = diffCost > 0 ? '+' : (diffCost < 0 ? '-' : '');
+        return `计划 ${fmtPx(plan)} → 成交 ${fmtPx(fill)}，价差 ${sgn}${fmtPx(Math.abs(diffCost))}`
+          + `（${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}bps）。正数 = 吃亏，负数 = 占便宜`;
+      })();
       const slip = slipVal === null
         ? '--'
-        : `<span class="${slipVal > 0 ? 'up' : (slipVal < 0 ? 'down' : 'muted')}" title="正数 = 成交价劣于计划价（成本），负数 = 优于计划价">${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}</span>`;
+        : `<span class="${slipVal > 0 ? 'up' : (slipVal < 0 ? 'down' : 'muted')}" title="${esc(slipTitle)}">${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}</span>`;
       const tip = f.reason ? ` title="${esc(f.reason)}"` : '';
       const mergeTag = f.__n ? `<span class="merge-tag">${f.__n} 笔合并</span>` : '';
       // 开仓成交没有已实现盈亏：盈亏列开仓显示「--」，平仓才显示实际盈亏。
