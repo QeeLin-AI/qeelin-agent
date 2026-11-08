@@ -60,18 +60,22 @@ def _quantize(value: float, step: float) -> float:
     return round(int(value / step + 1e-9) * step, 10)
 
 
-def _num_str(value: float, decimals: int = 10) -> str:
-    """数字转交易所要的十进制字符串：不用科学计数法（OKX 会判参数错误）。
+def _fmt_by_step(value: float, step: float) -> str:
+    """按步长的小数位数格式化成交易所要的十进制字符串。
 
-    优先用 repr 的最短往返表示：`f"{70123.46:.12f}"` 会写出
-    70123.460000000006 这种交易所不认的字符串，repr 则是干净的 70123.46。
-    只有遇到科学计数法（1e-05）才退回定点格式并去掉尾部零。
+    OKX 对价格/数量做严格的小数位校验：`repr(73604.66000000001)` 会被判
+    "Parameter triggerPx error"。所以小数位数必须由 tickSz / lotSz 决定，
+    先按该位数四舍五入再定点输出，顺带避免科学计数法。
     """
-    text = repr(float(value))
-    if "e" in text or "E" in text:
-        text = f"{float(value):.{decimals}f}".rstrip("0").rstrip(".")
-    elif text.endswith(".0"):
-        text = text[:-2]
+    nd = 0
+    step = abs(float(step or 0.0))
+    if step > 0:
+        text = f"{step:.12f}".rstrip("0")
+        if "." in text:
+            nd = len(text.split(".")[1])
+    text = f"{round(float(value), nd):.{nd}f}"
+    if nd:
+        text = text.rstrip("0").rstrip(".")
     return text or "0"
 
 
@@ -749,8 +753,8 @@ class OKXClient:
                     "symbol": from_okx_inst(p.get("instId", symbol or "")),
                     "side": side,
                     # 对外统一「币数」，与币安 positionAmt 口径一致；张数单独给出便于对账
-                    "qty": abs(contracts) * ct_val,
-                    "contracts": abs(contracts),
+                    "qty": round(abs(contracts) * ct_val, 10),
+                    "contracts": round(abs(contracts), 10),
                     "ct_val": ct_val,
                     "entry": self._f(p.get("avgPx")),
                     "mark": self._f(p.get("markPx")),
@@ -799,26 +803,33 @@ class OKXClient:
             # OKX 的 side 只接受小写 buy / sell，传 "BUY" 会得到 51000 side error
             "side": str(side).strip().lower(),
             "ordType": "market",
-            "sz": _num_str(contracts),
+            "sz": _fmt_by_step(contracts, lot),
         }
         if reduce_only:
             body["reduceOnly"] = "true"
         raw = self._request("POST", "/api/v5/trade/order", body=body, signed=True)
         d = self._data(raw)
         oid = str(d[0].get("ordId", "")) if d else ""
-        # 市价单平均价要再查一次成交回填（接口不直接返回）
+        # 市价单平均价要再查一次成交回填（接口不直接返回）。
+        # 成交刚落地时 fills 可能还没索引到，短暂重试两次，否则引擎只能拿
+        # 事前价格当成交价、手续费记 0，本地账本第一笔就与交易所偏离。
         price = 0.0
-        try:
-            fills = self._data(self._request(
-                "GET", "/api/v5/trade/fills",
-                {"instType": "SWAP", "instId": to_okx_inst(symbol), "ordId": oid, "limit": 1},
-                signed=True,
-            ))
-            if fills:
-                price = float(fills[0].get("fillPx", 0.0) or 0.0)
-        except ExchangeError:
-            pass
-        return OrderResult(ok=True, order_id=oid, price=price, qty=contracts * ct_val, raw=raw)
+        for attempt in range(3):
+            try:
+                fills = self._data(self._request(
+                    "GET", "/api/v5/trade/fills",
+                    {"instType": "SWAP", "instId": to_okx_inst(symbol), "ordId": oid, "limit": 1},
+                    signed=True,
+                ))
+                if fills:
+                    price = float(fills[0].get("fillPx", 0.0) or 0.0)
+                    if price > 0:
+                        break
+            except ExchangeError:
+                pass
+            if attempt < 2:
+                time.sleep(0.25)
+        return OrderResult(ok=True, order_id=oid, price=price, qty=round(contracts * ct_val, 10), raw=raw)
 
     def place_stop_market(
         self,
@@ -849,9 +860,9 @@ class OKXClient:
             "tdMode": "cross",
             "side": str(side).strip().lower(),
             "ordType": "trigger",
-            "triggerPx": _num_str(_round_price(trigger_price, info["tickSz"])),
+            "triggerPx": _fmt_by_step(_round_price(trigger_price, info["tickSz"]), info["tickSz"]),
             "triggerPxType": "mark",
-            "sz": _num_str(contracts),
+            "sz": _fmt_by_step(contracts, info["lotSz"]),
             "orderPx": "-1",       # -1 = 触发后按市价
         }
         if close_position:
@@ -955,7 +966,7 @@ class OKXClient:
                         "ts_ms": epoch,
                         "action": "买入" if str(t.get("side", "")).lower() == "buy" else "卖出",
                         "side": side,
-                        "qty": self._f(t.get("fillSz")) * ct_val,
+                        "qty": round(self._f(t.get("fillSz")) * ct_val, 10),
                         "price": self._f(t.get("fillPx")),
                         "pnl": self._f(t.get("pnl")),
                         "fee": -self._f(t.get("fee")),

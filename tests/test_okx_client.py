@@ -157,7 +157,16 @@ class TestOKXOrderUnits(unittest.TestCase):
         self.assertEqual(seen["sz"], "2")
         self.assertEqual(seen["triggerPx"], "70123.46")   # tickSz=0.01
         self.assertEqual(seen["reduceOnly"], "true")
-        self.assertEqual(seen["orderType"] if "orderType" in seen else seen["ordType"], "trigger")
+        self.assertEqual(seen["ordType"], "trigger")
+
+    def test_trigger_price_has_no_float_noise(self):
+        """实测踩过：75984.19×0.97 取整后是 73704.66000000001，OKX 判 triggerPx error。"""
+        from cryptoagent.execution import _fmt_by_step, _round_price
+
+        self.assertEqual(_fmt_by_step(73604.66000000001, 0.01), "73604.66")
+        self.assertEqual(_fmt_by_step(_round_price(75984.19 * 0.97, 0.01), 0.01), "73704.66")
+        self.assertEqual(_fmt_by_step(0.00001, 0.00001), "0.00001")
+        self.assertNotIn("e", _fmt_by_step(0.0000001, 0.00000001))
 
     def test_long_short_mode_is_rejected_with_clear_error(self):
         c = _client()
