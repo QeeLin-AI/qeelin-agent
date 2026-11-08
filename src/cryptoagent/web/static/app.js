@@ -132,7 +132,7 @@ const mergeFillsForDisplay = (fills) => {
     };
   });
 };
-// 数据源标签：把 `binance-vision:BTCUSDT 1h（无资金费率）` 压成 `币安镜像 · 1h`
+// 数据源标签：把 `cache:BNBUSDT 1h 末根 …` 压成 `缓存 BNB 1h`，完整原串留在 title
 const shortSource = (src) => {
   if (!src) return '--';
   const s = String(src);
@@ -142,7 +142,7 @@ const shortSource = (src) => {
   const sym = pair ? `${pair[1]} ${pair[2]}` : '';
   if (kind.startsWith('synthetic')) return '合成假数据';
   if (kind.startsWith('stale-cache')) return `旧缓存 ${sym}`.trim();
-  if (kind === 'cache') return `本地缓存 ${sym}`.trim();
+  if (kind === 'cache') return `缓存 ${sym}`.trim();
   if (kind === 'okx-cache') return `OKX缓存 ${sym}`.trim();
   const label = { 'binance-vision': '币安镜像', 'binance-spot': '币安现货', 'binance-fapi': '币安永续', 'binance-fapi-demo': '币安合约(模拟)', 'gate-futures': 'Gate 永续', 'okx-swap': 'OKX永续' }[kind] || kind;
   return `${label} ${sym}`.trim();
@@ -1912,7 +1912,7 @@ function renderStatus(s) {
     priceEl.className = 'price';
     priceEl.textContent = fmt(s.price);
   }
-  $('dataSource').textContent = `数据源 ${loading ? '加载中…' : shortSource(s.data_source)}`;
+  $('dataSource').textContent = loading ? '加载中…' : shortSource(s.data_source);
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">V</span>${esc(s.server.version)}`;
@@ -2459,8 +2459,30 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// 决策被跳过（当前品种有持仓 / 持仓已满）时给一条常驻说明。
+// 后端在跑 LLM 之前就直接返回，所以是「瞬间完成」——不是模型没调用或功能失效。
+const SKIP_ACTION_CN = { hold: '继续持有', tighten: '收紧止损', close: '平仓' };
+function renderDecisionSkip(d) {
+  const box = $('decisionSkipNote');
+  if (!box) return;
+  if (!d || !d.skipped) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  const m = d.management || {};
+  const act = SKIP_ACTION_CN[m.action] || m.action || '';
+  const sub = act ? `持仓管理员本轮：${act}${m.reason ? `（${m.reason}）` : ''}` : '';
+  box.innerHTML = `<b>未运行决策</b>：${esc(d.reason || '')}`
+    + (sub ? `<span class="ds-sub">${esc(sub)}</span>` : '')
+    + '<span class="ds-sub">持仓期间不重复开仓是既定行为（省掉不必要的 LLM 调用），平仓后可再次运行。</span>';
+  box.classList.remove('hidden');
+}
+
 function renderDecision(d, switchTab = true) {
+  if (d && d.skipped) { renderDecisionSkip(d); return; }
   if (!d || !d.analysts) return;
+  renderDecisionSkip(null);   // 真正跑完一次决策后，清掉上一次的「跳过」说明
   latestDecision = d;
   const a = d.analysts || [];
   const analysts = a.map((x) => {
@@ -2555,6 +2577,12 @@ $('runDecision').addEventListener('click', async () => {
   btn.disabled = true; btn.textContent = '运行中…';
   try {
     const data = await api('/api/decision', 'POST', { rounds: Number($('rounds').value) || 2 });
+    if (data && data.skipped) {
+      // 跳过不等于失败：说明原因，别弹「决策完成」让用户以为瞬间跑完了整条 LLM 链
+      renderDecisionSkip(data);
+      toast(`未运行决策：${data.reason}`, 'err');
+      return;
+    }
     renderDecision(data);
     toast('决策完成', 'ok');
   } catch (e) {
@@ -3202,10 +3230,9 @@ function applyTheme(mode) {
   document.documentElement.dataset.theme = light ? 'light' : 'dark';
   const btn = $('themeBtn');
   if (btn) {
-    // 图标与文字分开存：窄屏只留图标，改 textContent 会把图标一起抹掉
-    const ico = btn.querySelector('.theme-ico');
+    // 日 / 月 SVG 由 CSS 按 data-theme 切换，这里只更新文字与可访问名称，
+    // 不要用 textContent 覆盖 .theme-ico（会把两个 SVG 抹掉）。
     const txt = btn.querySelector('.theme-text');
-    if (ico) ico.textContent = light ? '🌙' : '☀';
     if (txt) txt.textContent = light ? '暗色主题' : '亮色主题';
     btn.title = light ? '切换到暗色主题' : '切换到亮色主题';
     btn.setAttribute('aria-label', btn.title);

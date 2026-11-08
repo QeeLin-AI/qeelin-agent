@@ -249,7 +249,16 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
 .side-foot-note { font-size: 11px; color: var(--faint); margin-bottom: 10px; letter-spacing: .02em; }
 .side-foot .btn { width: 100%; }
 .theme-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.theme-btn .theme-ico { font-size: 13px; line-height: 1; }
+/* 日 / 月用内联线性 SVG，不再用 ☀ / 🌙 字符：字符 emoji 依赖系统字体回退，
+   在 30px 小按钮里会被渲染成细线米字形，看起来像「变形」。两套图标按主题切换，
+   线条粗细与顶栏刷新图标一致（stroke=currentColor, 2px）。 */
+.theme-btn .theme-ico { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; flex: none; }
+.theme-ico svg { width: 15px; height: 15px; display: block; flex: none; }
+.theme-ico .ico-moon { display: none; }
+html[data-theme="light"] .theme-ico .ico-sun { display: none; }
+html[data-theme="light"] .theme-ico .ico-moon { display: block; }
+/* 熔断是状态行里唯一的方角按钮，改成胶囊与数据源 / LLM / 已运行统一 */
+#haltBtn { border-radius: 99px; }
 
 /* ---------------------------------------------------------------- 顶栏 */
 .topbar {
@@ -914,6 +923,15 @@ label.field > input, label.field > select { max-width: 420px; }
   padding: 32px 20px; text-align: center; overflow-wrap: anywhere;
   border: 1px dashed var(--border); border-radius: 12px; background: var(--surface);
 }
+/* 决策被跳过时的常驻说明：比 toast 持久，解释「为什么没有跑 LLM」，不覆盖上一次决策内容 */
+.decision-skip {
+  margin-bottom: 16px; padding: 11px 14px;
+  border: 1px solid var(--border); border-left: 3px solid var(--amber);
+  border-radius: 10px; background: var(--surface);
+  font-size: 12.5px; line-height: 1.65; color: var(--text-2);
+}
+.decision-skip b { color: var(--amber); font-weight: 650; }
+.decision-skip .ds-sub { display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px; }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 16px; margin-bottom: 16px; }
 .analyst-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-bottom: 16px; }
 /* 分析师卡：全文常驻，靠左侧立场色条 + 标题/正文/标记三段式扫读，不再折叠 */
@@ -1252,7 +1270,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 手机端顶部横向导航寸土寸金：主题按钮只留日月图标，把宽度还给主菜单 */
   .side-foot .theme-btn { width: 30px; padding: 0; gap: 0; flex: none; }
   .side-foot .theme-btn .theme-text { display: none; }
-  .side-foot .theme-btn .theme-ico { font-size: 14px; }
+  .side-foot .theme-btn .theme-ico { width: 15px; height: 15px; }
   main { padding: 22px 18px 70px; }
   .topbar { padding: 10px 18px; }
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }
