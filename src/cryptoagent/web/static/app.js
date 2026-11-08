@@ -2173,7 +2173,7 @@ function renderStatus(s) {
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
       <td>${fmt(p.leverage, 1)}x</td>
       <td class="col-2line"><span class="up">${fmtPx(p.stop)}</span><span class="down">${fmtPx(p.tp)}</span></td>
-      <td class="${cls}"${unreal == null ? '' : ` title="浮动盈亏＝价格变动毛额，未扣手续费 · 这笔仓已付开仓费＋预估平仓费合计 ${p.fees_est != null ? fmt(p.fees_est) : '--'} U（手续费在发生时就直接计入累计已实现盈亏）"`}>${unreal == null ? '--' : fmt(unreal)}</td>
+      <td class="${cls}"${unreal == null ? '' : ` title="预估双边手续费 ${p.fees_est != null ? fmt(p.fees_est) : '--'} U"`}>${unreal == null ? '--' : fmt(unreal)}</td>
       <td><button class="btn ghost danger xs" data-close-pos="${esc(sym)}">平仓</button></td></tr>`;
     }).join('');
   } else {
