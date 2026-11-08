@@ -2171,8 +2171,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
      单元格默认 overflow:visible，溢出部分会直接压到目标列上形成重叠。
      给足 84px 并把字号降到 11.5px，同时统一裁切兜底。 */
   #evoChangesTable th:nth-child(1), #evoChangesTable td:nth-child(1) { width: 84px; font-size: 11.5px; }
-  /* 「新建因子文件」6 个汉字约 75px，改动列给足 92px（内容区 80px）才不触发省略号 */
-  #evoChangesTable th:nth-child(4), #evoChangesTable td:nth-child(4) { width: 92px; }
+  /* 「新建因子」4 个汉字约 50px，改动列 78px（内容区 66px）足够，余下给目标列 */
+  #evoChangesTable th:nth-child(4), #evoChangesTable td:nth-child(4) { width: 78px; }
   #evoChangesTable th:nth-child(5), #evoChangesTable td:nth-child(5) { width: 52px; }
   #evoChangesTable td:nth-child(1),
   #evoChangesTable td:nth-child(4),

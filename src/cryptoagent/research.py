@@ -580,7 +580,7 @@ class ResearchLoop:
                     kind="factor",
                     target=f"factor_library.{best.proposal.name}",
                     before=None,
-                    after="新建因子文件",
+                    after="新建因子",
                     source="factor_research",
                     rationale=str(best.proposal.hypothesis or ""),
                     kpi=None,

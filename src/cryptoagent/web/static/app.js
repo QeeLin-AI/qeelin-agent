@@ -330,6 +330,9 @@ const evoShortTarget = (t) => {
   const i = s.lastIndexOf('.');
   return i >= 0 ? s.slice(i + 1) : s;
 };
+// 动作短语归一化：「新建因子文件」是早期文案，统一显示为「新建因子」。
+// 历史记录已经落盘、账本不删历史，所以只能在展示层抹平。
+const evoPhrase = (v) => String(v == null ? '' : v).replace('新建因子文件', '新建因子');
 
 async function loadEvolution() {
   // 绩效数据随 status 轮询已有；这里只补「方案」与「账本」两个接口
@@ -426,8 +429,10 @@ function renderEvoPerf(p) {
       : '';
     const legend = `<div class="evo-dist-legend">${EVO_VERDICT_KEYS.map((k, i) => {
       const share = sum ? Math.round((counts[i] / sum) * 100) : 0;
+      // 无样本时不显示「—」占位：只有数字 0 更干净
+      const pct = sum ? `<span>${share}%</span>` : '';
       return `<div class="evo-legend"><label><i class="dot" style="background:${EVO_VERDICT_COLOR[k]}"></i>${EVO_VERDICT_CN[k]}</label>`
-        + `<b>${counts[i]}<span>${sum ? `${share}%` : '—'}</span></b></div>`;
+        + `<b>${counts[i]}${pct}</b></div>`;
     }).join('')}</div>`;
     vd.innerHTML = bar + legend;
   }
@@ -498,11 +503,11 @@ function renderEvoChanges(d) {
     } else if (a.need) {
       att = `${a.have || 0}/${a.need} 笔`;
     }
-    // 新建类改动没有「之前的值」，直接显示结果，避免「— → 新建因子文件」这种冗余
+    // 新建类改动没有「之前的值」，直接显示结果，避免「— → 新建因子」这种冗余
     const hasBefore = it.before !== null && it.before !== undefined && it.before !== '';
     const change = hasBefore
       ? `${evoVal(it.before)} → ${evoVal(it.after)}`
-      : evoVal(it.after);
+      : evoPhrase(evoVal(it.after));
     const ts = String(it.applied_at || it.created_at || '');
     return `<tr>
       <td class="muted">${esc(ts.slice(5, 16))}</td>
