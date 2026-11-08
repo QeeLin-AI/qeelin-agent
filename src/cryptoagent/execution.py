@@ -993,26 +993,47 @@ class OKXClient:
           type=6 是保证金划转，不是资金费（老代码错把 6 当资金费，资金费永远为 0）。
         """
         self._guard()
-        rows = self._data(self._request(
-            "GET", "/api/v5/account/bills",
-            {"instType": "SWAP", "limit": min(limit, 100)}, signed=True))
         out = []
-        for r in rows or []:
-            ts = int(r.get("ts", 0) or 0)
-            if ts and ts < start_ms:
-                continue
-            typ = str(r.get("type", ""))
-            # 统一带毫秒时间戳：重置账户后 server 要按「重置时刻」重新起算当日盈亏
-            if typ == "2":   # 交易：已实现盈亏 + 手续费
-                pnl = float(r.get("pnl", 0.0) or 0.0)
-                fee = float(r.get("fee", 0.0) or 0.0)
-                if pnl:
-                    out.append({"income": pnl, "incomeType": "REALIZED_PNL", "time": ts})
-                if fee:
-                    out.append({"income": fee, "incomeType": "COMMISSION", "time": ts})
-            elif typ == "8":  # 资金费（Funding rate）
-                out.append({"income": float(r.get("balChg", 0.0) or 0.0), "incomeType": "FUNDING_FEE", "time": ts})
-            # 其它类型（划转 1 / 保证金划转 6 / 利息 7 / 强平 5 等）忽略，server 端也不会计入盈亏
+        seen: set[str] = set()
+        after = ""
+        # bills 单页最多 100 条；一天成交密集时（每笔开/平各一条 + 手续费）
+        # 一页装不下，必须用 after 往更早翻。上限 5 页=500 条，防死循环。
+        for _page in range(5):
+            params: dict = {"instType": "SWAP", "limit": 100, "begin": int(start_ms)}
+            if after:
+                params["after"] = after
+            rows = self._data(self._request(
+                "GET", "/api/v5/account/bills", params, signed=True))
+            if not rows:
+                break
+            for r in rows:
+                bill_id = str(r.get("billId") or "")
+                if bill_id and bill_id in seen:
+                    continue
+                if bill_id:
+                    seen.add(bill_id)
+                ts = int(r.get("ts", 0) or 0)
+                if ts and ts < start_ms:
+                    continue
+                typ = str(r.get("type", ""))
+                # 统一带毫秒时间戳：重置账户后 server 要按「重置时刻」重新起算当日盈亏
+                if typ == "2":   # 交易：已实现盈亏 + 手续费
+                    pnl = float(r.get("pnl", 0.0) or 0.0)
+                    fee = float(r.get("fee", 0.0) or 0.0)
+                    if pnl:
+                        out.append({"income": pnl, "incomeType": "REALIZED_PNL", "time": ts})
+                    if fee:
+                        out.append({"income": fee, "incomeType": "COMMISSION", "time": ts})
+                elif typ == "8":  # 资金费（Funding rate）
+                    out.append({"income": float(r.get("balChg", 0.0) or 0.0),
+                                "incomeType": "FUNDING_FEE", "time": ts})
+                # 其它类型（划转 1 / 保证金划转 6 / 利息 7 / 强平 5 等）忽略，不计盈亏
+            if len(rows) < 100:
+                break
+            oldest = str(rows[-1].get("billId") or "")
+            if not oldest or oldest == after:
+                break
+            after = oldest
         return out
 
     # -- 精度 ---------------------------------------------------------
