@@ -201,11 +201,12 @@ PROFILES: dict[str, dict[str, Any]] = {
             "max_drawdown_pct": 0.30,
             "max_portfolio_notional_pct": 5.0,
             "correlated_exposure_pct": 4.0,
-            # 进取档：单笔风险大，必须用更高的盈亏比与更宽的止损来兜住；
-            # 辩论权重略高，避免单一公式在大仓位上放大错误。
-            "min_risk_reward": 1.5,
-            "min_stop_atr_mult": 0.7,
-            "debate_score_weight": 0.35,
+            # 进取档：这三项取「服务器当前实际运行值」，避免把正在生效的
+            # 质量闸一起改掉（新增参数时若直接收紧，会让在线策略突然少成交，
+            # 且页面从「当前：进取」变成「自定义组合」）。要更严格请显式调整。
+            "min_risk_reward": 1.3,
+            "min_stop_atr_mult": 0.6,
+            "debate_score_weight": 0.3,
         },
         "position": {
             "enabled": True,
