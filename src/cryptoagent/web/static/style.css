@@ -2075,7 +2075,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 .evo-foot { margin-top: auto; }
 
 /* 复盘归因：一条堆叠分布条 + 五格图例，比五个孤立数字更快看出比例 */
-.evo-dist { margin: 0 0 16px; }
+.evo-dist { margin: 0 0 6px; }
 .evo-dist-bar {
   display: flex; height: 10px; border-radius: 99px; overflow: hidden;
   background: var(--surface-3); margin-bottom: 12px;
@@ -2158,11 +2158,12 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 卡头在窄屏改为上下排：说明独占整行，状态回到左对齐，避免右侧被压窄 */
   .evo-head { flex-wrap: wrap; gap: 8px; }
   .evo-meta-text { width: 100%; padding-top: 0; text-align: left; white-space: normal; }
-  .evo-dist-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* 图例沿用 3 列（5 项排成 3+2），比 2 列（2+2+1）少一行、不留孤项 */
   .evo-kpi b { font-size: 17px; }
 }
 @media (max-width: 370px) {
-  .evo-kpis, .evo-dist-legend { grid-template-columns: 1fr; }
+  .evo-kpis { grid-template-columns: 1fr; }
+  .evo-dist-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
