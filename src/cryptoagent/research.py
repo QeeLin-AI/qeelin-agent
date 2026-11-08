@@ -14,6 +14,7 @@ import json
 import math
 import time
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -215,12 +216,139 @@ FEW_SHOT = '''可参考的因子家族与写法（df 含 open/high/low/close/vol
 '''
 
 
-class LLMProposer:
-    """让 LLM 根据历史回测结果提出新因子；输出不合规时自动退回模板。"""
+def _parse_dt(s: Any):
+    try:
+        return datetime.strptime(str(s), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
 
-    def __init__(self, client, fallback: "TemplateProposer | None" = None) -> None:
+
+def build_live_evidence(rows: list[dict], factor_acc: dict | None = None,
+                        symbol: str | None = None, min_samples: int = 8,
+                        max_factor_rows: int = 8) -> str:
+    """把真实平仓回合压成一段「实战反馈」，供 LLM 提议因子时参考方向。
+
+    只用 `position_history` 已有的字段（pnl / realized_r / mfe_r / rule / side /
+    持有时间），不依赖任何新埋点，历史数据同样生效。
+
+    协议边界（很重要）：这段文字**只影响「往哪个方向找因子」**，不参与评分。
+    因子能否晋级仍由 IS/OOS/留出集三道闸门决定，不能因为「实盘亏了」就降低标准。
+    样本不足 `min_samples` 时返回空串——少量样本只会教模型过拟合。
+    """
+    all_rows = [r for r in (rows or []) if isinstance(r, dict)]
+    need = max(3, int(min_samples))
+    if len(all_rows) < need:
+        return ""
+    rows = all_rows
+    scope_note = ""
+    if symbol:
+        same = [r for r in all_rows
+                if str(r.get("symbol") or "").upper() == str(symbol).upper()]
+        if len(same) >= need:
+            rows = same
+        else:
+            scope_note = (f"（{symbol} 自身样本仅 {len(same)} 笔，以下为当前账户跨品种汇总，"
+                          "不要把某个品种的特性当成通用规律。）")
+
+    def _num(v):
+        try:
+            f = float(v)
+            return f if math.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+
+    n = len(rows)
+    rs = [x for x in (_num(r.get("realized_r")) for r in rows) if x is not None]
+    wins = sum(1 for r in rows if (_num(r.get("pnl")) or 0.0) > 0)
+    head = f"样本 {n} 笔平仓回合（胜率 {wins / n * 100:.0f}%"
+    if rs:
+        head += f"，平均 {sum(rs) / len(rs):+.2f}R"
+    lines = [head + "）"]
+
+    # 浮盈回吐：区分「入场就错」和「看对了但没拿住」
+    pairs = [(_num(r.get("mfe_r")), _num(r.get("realized_r"))) for r in rows]
+    pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
+    if pairs:
+        avg_mfe = sum(a for a, _ in pairs) / len(pairs)
+        avg_real = sum(b for _, b in pairs) / len(pairs)
+        if avg_mfe > 0:
+            lines.append(
+                f"平均最高浮盈 {avg_mfe:+.2f}R，实际落袋 {avg_real:+.2f}R，"
+                f"回吐 {avg_mfe - avg_real:.2f}R（落差大 = 退出偏早）"
+            )
+
+    # 按退出规则分组：哪类退出在赚钱、哪类在亏钱
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        key = str(r.get("rule") or r.get("reason") or "").strip() or "未标注"
+        groups.setdefault(key, []).append(r)
+    if len(groups) > 1:
+        chunks = []
+        for key, grp in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:5]:
+            gr = [x for x in (_num(g.get("realized_r")) for g in grp) if x is not None]
+            win = sum(1 for g in grp if (_num(g.get("pnl")) or 0.0) > 0) / len(grp) * 100
+            seg = f"{key}: {len(grp)} 笔 胜率 {win:.0f}%"
+            if gr:
+                seg += f" 平均 {sum(gr) / len(gr):+.2f}R"
+            chunks.append(seg)
+        lines.append("按退出方式：" + "；".join(chunks))
+
+    # 按方向（只做多/只做空时没信息量，跳过）
+    sides = {str(r.get("side") or "").upper()[:1] for r in rows}
+    if len(sides) > 1:
+        segs = []
+        for label, prefix in (("多", "L"), ("空", "S")):
+            grp = [r for r in rows if str(r.get("side") or "").upper().startswith(prefix)]
+            if not grp:
+                continue
+            gr = [x for x in (_num(g.get("realized_r")) for g in grp) if x is not None]
+            win = sum(1 for g in grp if (_num(g.get("pnl")) or 0.0) > 0) / len(grp) * 100
+            seg = f"{label} {len(grp)} 笔 胜率 {win:.0f}%"
+            if gr:
+                seg += f" 平均 {sum(gr) / len(gr):+.2f}R"
+            segs.append(seg)
+        if segs:
+            lines.append("按方向：" + "；".join(segs))
+
+    # 持有时间：能区分「入场时机」与「持有耐心」
+    holds = []
+    for r in rows:
+        a, b = _parse_dt(r.get("opened_at")), _parse_dt(r.get("closed_at"))
+        if a and b and b > a:
+            holds.append((b - a).total_seconds() / 60.0)
+    if holds:
+        holds.sort()
+        lines.append(f"持有时间：中位 {holds[len(holds) // 2]:.0f} 分钟"
+                     f"（最短 {holds[0]:.0f}，最长 {holds[-1]:.0f}）")
+
+    # 因子方向命中率：开仓时该因子的方向 vs 之后市场实际走向（不是这笔仓的盈亏）
+    fac_rows = []
+    for name, st in (factor_acc or {}).items():
+        try:
+            k = int((st or {}).get("n") or 0)
+            h = int((st or {}).get("hit") or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if k >= 3:
+            fac_rows.append((k, h, str(name)))
+    if fac_rows:
+        fac_rows.sort(reverse=True)
+        lines.append("因子方向命中率（历史累计，开仓时该因子方向 vs 之后市场实际走向）：" + "；".join(
+            f"{nm} {k} 次 {h / k * 100:.0f}%" for k, h, nm in fac_rows[:max_factor_rows]
+        ))
+    if scope_note:
+        lines.append(scope_note)
+    return "\n".join(lines)
+
+
+class LLMProposer:
+    """让 LLM 根据历史回测结果 + 真实交易反馈提出新因子；输出不合规时退回模板。"""
+
+    def __init__(self, client, fallback: "TemplateProposer | None" = None,
+                 live_evidence: str = "") -> None:
         self.client = client
         self.fallback = fallback or TemplateProposer(seed=7)
+        self.live_evidence = str(live_evidence or "")
 
     def propose(self, history: list[Evaluation], round_idx: int) -> Proposal:
         recent = [e for e in history if e.ok][-6:]
@@ -231,9 +359,20 @@ class LLMProposer:
                 f"OOS夏普 {e.valid['sharpe']:.2f}, 是否通过 {e.accepted}"
             )
         tried = "\n".join(lines) or "（暂无）"
+        # 真实交易反馈：只作「往哪个方向找」的参考，不能替代回测闸门
+        ev = ""
+        if self.live_evidence:
+            ev = (
+                "\n真实交易反馈（来自实际平仓回合，样本有限）：\n"
+                f"{self.live_evidence}\n"
+                "用法：只用来判断下一步该往哪个方向找因子（例如回吐大 → 找择时/止盈类因子，"
+                "某类退出持续亏 → 找能提前识别该类行情的因子）。"
+                "不要为了迎合这份反馈反复提同一类因子，也不要把它当拟合目标。\n"
+            )
         prompt = (
             f"数据：{FEW_SHOT}\n\n"
-            f"已尝试的因子及结果：\n{tried}\n\n"
+            f"已尝试的因子及结果：\n{tried}\n"
+            f"{ev}\n"
             f"这是第 {round_idx + 1} 轮。请提出一个与上面都不同的新因子，"
             "优先解释为什么它在加密永续合约上可能有效（资金费率、拥挤度、波动率聚集等）。"
         )
@@ -261,7 +400,8 @@ class LLMProposer:
         return proposal
 
 
-def build_proposer(cfg: AppConfig, llm, verbose: bool = True) -> Proposer:
+def build_proposer(cfg: AppConfig, llm, verbose: bool = True,
+                   live_evidence: str = "") -> Proposer:
     provider = getattr(llm, "provider", cfg.llm.provider).lower()
     if provider == "mock":
         return TemplateProposer()
@@ -271,8 +411,9 @@ def build_proposer(cfg: AppConfig, llm, verbose: bool = True) -> Proposer:
             print("[research] 峰时：改用模板提议器（谷时再调用 LLM，省一半费用）")
         return TemplateProposer()
     if verbose:
-        print(f"[research] 使用 LLM 提议因子：{provider}/{cfg.llm.model}")
-    return LLMProposer(llm)
+        note = "（含真实交易反馈）" if live_evidence else ""
+        print(f"[research] 使用 LLM 提议因子：{provider}/{cfg.llm.model}{note}")
+    return LLMProposer(llm, live_evidence=live_evidence)
 
 
 # --------------------------------------------------------------------------

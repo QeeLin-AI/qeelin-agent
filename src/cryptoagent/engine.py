@@ -1205,7 +1205,8 @@ class TradingEngine:
     # ------------------------------------------------------------------
     def _paper_open(self, side: str, qty: float, price: float, lev: float,
                     stop: float, tp: float, reason: str, plan_price: float | None = None,
-                    stances: list[float] | None = None) -> dict:
+                    stances: list[float] | None = None,
+                    factor_snapshot: dict | None = None) -> dict:
         slip = self.cfg.backtest.costs.slippage_bps / 10_000.0
         fill = price * (1 + slip) if side == "LONG" else price * (1 - slip)
         fee = qty * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
@@ -1226,6 +1227,8 @@ class TradingEngine:
             "initial_r_pct": abs(fill - stop) / fill if fill > 0 else 0.0,
             "symbol": sym,
             "analyst_stances": list(stances or []),
+            # 开仓时的因子方向快照：平仓时用它把真实价格走向归因回因子
+            "factor_snapshot": dict(factor_snapshot or {}),
             "mode": "paper",
         })
         # A4：记录计划价与滑点，便于事后审计「计划 vs 成交」偏差
@@ -1265,6 +1268,35 @@ class TradingEngine:
             market_dir = 1.0 if float(exit_price) > entry else -1.0
             stats = self.state.setdefault("analyst_accuracy", {})
             record_accuracy(stats, stances, market_dir)
+
+        # 因子归因：同样用「市场实际方向」评判因子当时的方向，而不是这笔仓的盈亏。
+        # 一个仓位里多个因子共线，用 P&L 归因会把功劳/责任算到错的因子上；方向
+        # 命中率没有这个问题。这份统计会被注入因子研究的提议器（见
+        # research.build_live_evidence），构成「因子库 → 决策 → 真实成交 → 研究」闭环。
+        frec = pos.get("factor_snapshot") or {}
+        if frec and entry > 0 and exit_price > 0 and abs(float(exit_price) - entry) > 1e-12:
+            market_dir = 1.0 if float(exit_price) > entry else -1.0
+            fstats = self.state.setdefault("factor_accuracy", {})
+            entries = [("__composite__", frec.get("composite"))]
+            entries += [(i.get("name"), i.get("target")) for i in (frec.get("items") or [])]
+            for name, val in entries:
+                try:
+                    name = str(name or "")
+                    tgt = float(val or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if not name or abs(tgt) < 0.05:
+                    continue
+                cur = fstats.get(name) or {"n": 0, "hit": 0}
+                cur["n"] = int(cur.get("n") or 0) + 1
+                if (tgt > 0) == (market_dir > 0):
+                    cur["hit"] = int(cur.get("hit") or 0) + 1
+                fstats[name] = cur
+            # 因子库最多几十个；超了按样本量裁到 60，避免 state 无限膨胀
+            if len(fstats) > 60:
+                self.state["factor_accuracy"] = dict(
+                    sorted(fstats.items(), key=lambda kv: -int(kv[1].get("n") or 0))[:60]
+                )
 
         hist = self.state.setdefault("position_history", [])
         # R 口径与持仓管理员一致：开仓时的初始风险是分母，止损后来被移动也不改分母。
@@ -2521,13 +2553,25 @@ class TradingEngine:
                     return float(r.get("composite") or 0.0)
                 except (TypeError, ValueError):
                     return None
+        detail = self._factor_detail(symbol)
+        if detail is None:
+            return None
+        return float(detail.get("composite") or 0.0)
+
+    def _factor_detail(self, symbol: str) -> dict | None:
+        """该品种当前的因子明细 {"composite": float, "signals": [...]}（90 秒缓存）。
+
+        算一次 `compute_factor_signal` 要起子进程（~1.25s），所以必须缓存。开仓时
+        用它固化「各因子当时的方向」，平仓时才能把真实价格走向归因回因子。
+        与 `_opportunity_composite` 共用同一份缓存，不额外付出计算成本。
+        """
         cache = getattr(self, "_composite_cache", None)
         if cache is None:
             cache = self._composite_cache = {}
         now = time.time()
         hit = cache.get(symbol)
-        if hit and now - float(hit[0]) < 90.0:
-            return float(hit[1])
+        if hit and now - float(hit[0]) < 90.0 and isinstance(hit[1], dict):
+            return hit[1]
         # 必须用「这个品种自己的行情」：self.df 是当前活跃品种，多品种持仓时
         # 拿它算另一个品种的 composite，会按错误的因子值触发反向退出平仓。
         df = self._frame_for(symbol)
@@ -2536,14 +2580,69 @@ class TradingEngine:
         try:
             from .factors.signal import compute_factor_signal
 
-            val = float(
-                compute_factor_signal(self.cfg.research.factor_library, df)
-                .get("composite", 0.0) or 0.0
-            )
+            raw = compute_factor_signal(self.cfg.research.factor_library, df)
         except Exception:  # noqa: BLE001 - 因子算不出来就退回纯价格规则
             return None
-        cache[symbol] = (now, val)
-        return val
+        detail = {
+            "composite": float(raw.get("composite") or 0.0),
+            "signals": [
+                {
+                    "name": str(s.get("name") or ""),
+                    "target": float(s.get("target") or 0.0),
+                    "weight": float(s.get("weight") or 0.0),
+                    "kind": str(s.get("kind") or ""),
+                }
+                for s in (raw.get("signals") or [])
+                if s.get("name")
+            ],
+        }
+        cache[symbol] = (now, detail)
+        return detail
+
+    def _factor_record(self, symbol: str) -> dict:
+        """开仓时固化因子快照：合成值 + 各因子方向（最多 12 个，控制体积）。
+
+        平仓时用「市场实际方向」评判每个因子当时的方向，而不是用这笔仓的盈亏——
+        一个仓位里多个因子共线，用 P&L 归因会把功劳/责任算到错的因子上。
+        """
+        try:
+            detail = self._factor_detail(symbol)
+        except Exception:  # noqa: BLE001 - 快照失败绝不能影响开仓
+            return {}
+        if not detail:
+            return {}
+        items = []
+        for s in detail.get("signals") or []:
+            tgt = float(s.get("target") or 0.0)
+            if abs(tgt) < 0.05:      # 微弱信号不参与归因，避免噪音
+                continue
+            items.append({
+                "name": s["name"],
+                "target": round(tgt, 4),
+                "weight": round(float(s.get("weight") or 0.0), 4),
+                "kind": s.get("kind") or "",
+            })
+        items.sort(key=lambda x: -abs(x["target"]) * max(x["weight"], 1e-9))
+        return {
+            "composite": round(float(detail.get("composite") or 0.0), 4),
+            "items": items[:12],
+        }
+
+    def _attach_factor_snapshot(self, symbol: str) -> None:
+        """开仓成交后补因子快照（必须在成交之后算，绝不拖慢下单）。
+
+        因子计算要起子进程（~1.25s，命中 90 秒缓存则零成本）。失败或拿不到行情
+        就当作没有快照：平仓时只是少统计一笔，不影响任何交易逻辑。
+        """
+        try:
+            pos = self._get_position(symbol)
+            if pos is None:
+                return
+            rec = self._factor_record(symbol)
+            if rec:
+                pos["factor_snapshot"] = rec
+        except Exception:  # noqa: BLE001 - 快照失败不影响持仓
+            pass
 
     def _sync_live_stops(self, pos: dict, new_stop: float) -> bool:
         """实盘按新止损重挂条件单。
@@ -3328,6 +3427,9 @@ class TradingEngine:
                         "mode": "live",
                         "order_id": res.order_id,
                     })
+                    # 成交之后再补因子快照：因子计算要起子进程（~1.25s），
+                    # 放在下单前会推迟成交、放大滑点，所以绝不能前移。
+                    self._attach_factor_snapshot(sym)
                     self.state["fills"].append(
                         {
                             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -3357,6 +3459,8 @@ class TradingEngine:
                 rec = self._paper_open(side, qty, price, lev, stop, tp, reason,
                                        plan_price=order.get("entry_ref_price"),
                                        stances=stances)
+                # 同上：成交后再补因子快照，不拖慢撮合
+                self._attach_factor_snapshot(str(self.cfg.market.symbol).upper())
                 self._consume_plan()
                 self._save()
                 return {"ok": True, "mode": "paper", "fill": rec}

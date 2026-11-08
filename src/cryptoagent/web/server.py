@@ -25,7 +25,7 @@ from ..data import fetch_24h, fetch_live_price
 from ..engine import TradingEngine
 from .. import __version__
 from ..execution import ExchangeError, account_equity
-from ..research import ResearchLoop, build_proposer
+from ..research import ResearchLoop, build_live_evidence, build_proposer
 from ..agents.llm import LLMClient, is_offpeak, offpeak_info, seconds_until_offpeak
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -734,11 +734,23 @@ class WebApp:
         df = self.engine.df
         if df is None:
             df, _ = self.engine.refresh_data()
+        # 真实交易反哺：把当前账户的平仓回合 + 因子方向命中率压成一段证据，
+        # 注入 LLM 提议器。只影响「提什么因子」的方向，不参与评分——
+        # 能否晋级仍由 IS/OOS/留出集三道闸门决定（样本少不会被当成拟合目标）。
+        evidence = ""
+        try:
+            evidence = build_live_evidence(
+                self.engine._scoped_rows("position_history"),
+                self.engine.state.get("factor_accuracy"),
+                symbol=str(self.cfg.market.symbol).upper(),
+            )
+        except Exception:  # noqa: BLE001 - 证据构造失败绝不能中断研究
+            evidence = ""
         # 让 LLM 真正参与因子提议与优化；LLM 不可用/输出非法时回退到模板提议器
         proposer = None
         try:
             llm = LLMClient(self.cfg.llm)
-            proposer = build_proposer(self.cfg, llm, verbose=False)
+            proposer = build_proposer(self.cfg, llm, verbose=False, live_evidence=evidence)
         except Exception:  # noqa: BLE001 - 研究不能因 LLM 初始化失败而中断
             proposer = None
         loop = ResearchLoop(self.cfg, df, proposer=proposer, verbose=False)
@@ -751,6 +763,11 @@ class WebApp:
             "best": report["best"]["proposal"] if report.get("best") else None,
             "holdout": report.get("holdout"),
             "rows": rows,
+            # 让「这轮研究看了多少实战证据」可审计，而不是黑箱注入
+            "live_evidence": {
+                "chars": len(evidence),
+                "preview": evidence[:800],
+            },
             "report_path": str((Path(self.cfg.research.out_dir) / "report.md").resolve()),
         }
         self._record_live_performance(report)
