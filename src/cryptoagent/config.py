@@ -139,6 +139,16 @@ class RiskConfig:
     daily_loss_limit_pct: float = 0.04
     max_drawdown_pct: float = 0.18
     min_confidence: float = 0.50
+    # —— 交易质量闸（交付前发现的两个真实缺口）——
+    # 盈亏比下限：止盈必须至少是止损的这么多倍。执行成本闸只管「成本占止盈」，
+    # 从不管「赢一点点、亏一大截」；没有这道闸，R:R=1.0 的单也能过。
+    min_risk_reward: float = 1.3
+    # 止损宽度下限（相对 ATR）：止损比 N×ATR 还近时，正常波动就会把仓位扫掉，
+    # 属于「数学上必亏」的设置。0 = 不检查。
+    min_stop_atr_mult: float = 0.6
+    # 辩论裁判在综合评分中的权重：0 = 辩论不影响分数（旧行为），
+    # 0.3 = 分析师加权占 70%、辩论裁判占 30%。
+    debate_score_weight: float = 0.3
     kill_switch_file: str = "runs/TRADING_HALT"
     # —— 组合层风控（A3）——
     # 关键不变量：max_portfolio_notional_pct 与 correlated_exposure_pct 都必须 ≥

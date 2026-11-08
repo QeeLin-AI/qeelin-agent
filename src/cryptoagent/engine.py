@@ -1913,7 +1913,8 @@ class TradingEngine:
         held = set(self._positions_map().keys())
         thr = float(getattr(self.cfg.market, "rotate_min_score", 0.0) or 0.0)
         ranked: list[tuple[float, str]] = []
-        okx_only = self._okx_swap_symbols() if self.state.get("exchange") == "okx" else None
+        okx_only = self._okx_swap_symbols() if str(
+            (getattr(self, "state", None) or {}).get("exchange") or "") == "okx" else None
         for r in rows:
             if r.get("error"):
                 continue
@@ -1952,7 +1953,8 @@ class TradingEngine:
         held = set(self._positions_map().keys())
         rows_all = rows
         # okx 下只保留交易所确实支持的永续品种，从源头避开 51001
-        okx_only = self._okx_swap_symbols() if self.state.get("exchange") == "okx" else None
+        okx_only = self._okx_swap_symbols() if str(
+            (getattr(self, "state", None) or {}).get("exchange") or "") == "okx" else None
         rows = [
             r for r in rows
             if str(r.get("symbol", "")).upper() not in held

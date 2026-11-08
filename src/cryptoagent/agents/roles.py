@@ -21,6 +21,7 @@ from ..sentiment import SentimentResult
 from .llm import (
     LLMClient,
     SYSTEM_ANALYST,
+    SYSTEM_JUDGE,
     SYSTEM_RESEARCHER,
     SYSTEM_RISK,
     SYSTEM_TRADER,
@@ -55,6 +56,9 @@ class MarketSnapshot:
     dd_from_high: float
     high_30d: float
     low_30d: float
+    # 资金费率数据是否真实存在：整列为 0 时这位分析师没有任何信息量，
+    # 必须把它的权重让出去，而不是给一个 0 立场白白稀释综合分。
+    funding_valid: bool = True
     # 短周期多空帧（15m/5m）：注入到分析师视野，实现「1h 定方向、短周期定时机」的共振。
     # 由 pipeline 在决策时实时拉短周期 K 线填充，from_df 默认留空；离线/合成数据下为空。
     short_frames: dict = field(default_factory=dict)
@@ -99,11 +103,22 @@ class MarketSnapshot:
 
         fr = df["funding_rate"].fillna(0.0) if "funding_rate" in df else pd.Series(0.0, index=df.index)
         nonzero = fr[fr != 0]
-        funding_last = float(nonzero.iloc[-1]) if len(nonzero) else 0.0
+        # 整列都是 0 = 数据源没有资金费率（OKX 部分品种就是），标记出来让权重让位
+        funding_valid = bool(len(nonzero))
+        funding_last = float(nonzero.iloc[-1]) if funding_valid else 0.0
         funding_24h = float(fr.iloc[-24:].sum())
-        hist = fr.iloc[-720:]
-        f_mean, f_std = float(hist.mean()), float(hist.std(ddof=1)) or EPS
-        funding_z = float((funding_24h - f_mean) / f_std)
+        # z-score 必须同量纲：分子是「24 根累计」，分母也必须是「24 根累计」的历史分布。
+        # 旧实现拿单根标准差去除 24 根之和（差 sqrt(24)~24 倍），z 恒在 10~14，
+        # 经 tanh 后饱和成 ±1——资金费率分析师退化成常数，30% 权重变成系统性偏置。
+        roll24 = fr.rolling(24, min_periods=12).sum()
+        hist24 = roll24.iloc[-720:].dropna()
+        if len(hist24) >= 30:
+            f_mean, f_std = float(hist24.mean()), float(hist24.std(ddof=1))
+        else:
+            f_mean, f_std = 0.0, 0.0
+        funding_z = float((funding_24h - f_mean) / f_std) if f_std > EPS else 0.0
+        # 封顶：分布退化时也不让单个分析师把综合分打满
+        funding_z = float(max(-6.0, min(6.0, funding_z)))
 
         hi = float(close.iloc[-720:].max())
         lo = float(close.iloc[-720:].min())
@@ -132,9 +147,16 @@ class MarketSnapshot:
             dd_from_high=price / hi - 1.0,
             high_30d=hi,
             low_30d=lo,
+            funding_valid=funding_valid,
         )
 
     def to_prompt(self) -> str:
+        funding_line = (
+            "资金费率: 数据缺失（整列为 0，本项不参与评分）"
+            if not self.funding_valid
+            else f"资金费率: 最近结算 {self.funding_last:+.4%}，"
+                 f"24h 累计 {self.funding_24h:+.4%}，z-score {self.funding_z:+.2f}"
+        )
         base = (
             f"标的: {self.symbol} ({self.interval})   时间: {self.ts}\n"
             f"最新价: {self.price:,.1f}\n"
@@ -142,8 +164,7 @@ class MarketSnapshot:
             f"波动率: 年化 {self.vol_annual:.1%}，处于近 720 根的 {self.vol_percentile:.0%} 分位\n"
             f"RSI(14): {self.rsi_14:.1f}   ATR: {self.atr_pct:.2%}\n"
             f"均线: SMA24 {self.sma_24:,.1f} | SMA72 {self.sma_72:,.1f} | SMA168 {self.sma_168:,.1f}\n"
-            f"资金费率: 最近结算 {self.funding_last:+.4%}，24h 累计 {self.funding_24h:+.4%}，"
-            f"z-score {self.funding_z:+.2f}\n"
+            f"{funding_line}\n"
             f"距 30 日高点: {self.dd_from_high:+.2%}（高点 {self.high_30d:,.1f} / 低点 {self.low_30d:,.1f}）"
         )
         # 短周期多空帧：让分析师/研究员/交易员在同一份数据里做多周期权衡
@@ -199,6 +220,10 @@ def _sentiment_score(s: MarketSnapshot) -> float:
     return float(np.tanh(0.5 * short))
 
 
+ANALYST_SCHEMA = """stance: -1.0 到 1.0 的小数（负=看空，正=看多，绝对值表示把握）
+summary: 120 字以内的中文分析，结论必须与 stance 一致"""
+
+
 def run_analysts(
     llm: LLMClient, snap: MarketSnapshot, sentiment: "SentimentResult | None" = None
 ) -> list[AnalystReport]:
@@ -247,11 +272,30 @@ def run_analysts(
 
     def _run_one(spec):
         role, score, mock, flag = spec
-        resp = llm.text(SYSTEM_ANALYST, f"数据：\n{snap.to_prompt()}\n\n请以{role}身份分析。", mock)
+        data, resp = llm.json(
+            SYSTEM_ANALYST,
+            f"数据：\n{snap.to_prompt()}\n\n请以{role}身份分析，给出立场分数与对应的分析。",
+            ANALYST_SCHEMA,
+            # 兜底值必须与公式逐位相等（不能 round）：mock/降级时合并后要还原成原值
+            {"stance": float(score), "summary": mock},
+        )
+        try:
+            llm_stance = float(data.get("stance", score))
+        except (TypeError, ValueError):
+            llm_stance = float(score)
+        llm_stance = float(np.clip(llm_stance, -1.0, 1.0))
+        # 公式为主（60%）、LLM 判断为辅（40%）：模型只能修正公式，不能主导。
+        # mock/降级时兜底答案就是 score，两者相等 -> 立场与旧行为完全一致。
+        # 这一步解决的是「summary 说超卖别追空、stance 却是负数」的自相矛盾：
+        # 现在 LLM 看到的形态细节能真正进入评分，但最多改动 0.4。
+        stance = float(np.clip(0.6 * float(score) + 0.4 * llm_stance, -1.0, 1.0))
+        summary = str(data.get("summary") or mock)
         flags = [flag]
+        if abs(llm_stance - float(score)) > 0.02:
+            flags.append(f"LLM 立场 {llm_stance:+.2f}（公式 {float(score):+.2f}）")
         if resp.degraded:
             flags.append(f"LLM 降级: {resp.reason}")
-        return AnalystReport(role=role, stance=score, summary=resp.content, data_flags=flags)
+        return AnalystReport(role=role, stance=stance, summary=summary, data_flags=flags)
 
     # 分析师团队并发工作：接真 LLM 时能把等待时间压到 1/3
     with ThreadPoolExecutor(max_workers=len(specs)) as pool:
@@ -272,6 +316,10 @@ class Debate:
     # 辩论环节的 LLM 降级也要能被上层看到：之前只汇总分析师/交易员/风控官，
     # 辩论降级时报告仍显示「全链正常」。
     degraded: bool = False
+    # 辩论裁判给出的原始分（None = 未启用/未跑）。score 是混合后的最终分，
+    # 两者都留存，报告里才能审计「辩论到底改了多少」。
+    debate_score: float | None = None
+    judge: dict = field(default_factory=dict)
 
 
 def run_debate(
@@ -281,9 +329,15 @@ def run_debate(
     rounds: int = 2,
     weights: list[float] | None = None,
     calibrated: bool = False,
+    funding_valid: bool = True,
 ) -> Debate:
     # 权重默认仍是经验值；接入事后校准后由 engine 传入校准过的权重
     w = list(weights) if weights and len(weights) == 3 else [0.50, 0.30, 0.20]
+    if not funding_valid:
+        # 资金费率整列缺失：这位分析师没有信息量，权重按原比例让给技术与情绪，
+        # 否则一个必然为 0 的立场会白白稀释综合分（等于给全体降权）。
+        rest = w[0] + w[2]
+        w = [w[0] / rest, 0.0, w[2] / rest] if rest > 0 else [0.7, 0.0, 0.3]
     debate_degraded = False
     score = sum(w[i] * reports[i].stance for i in range(min(3, len(reports))))
     positives = [r for r in reports if r.stance > 0.1]
@@ -356,13 +410,72 @@ def run_debate(
     else:
         stance = "中性"
     thesis = (
-        f"综合评分 {score:+.2f}（技术 {w[0]:.2f} / 资金费率 {w[1]:.2f} / 情绪 {w[2]:.2f} 加权"
+        f"分析师加权 {score:+.2f}（技术 {w[0]:.2f} / 资金费率 {w[1]:.2f} / 情绪 {w[2]:.2f} 加权"
         f"{'，权重已按历史命中率校准' if calibrated else ''}），结论{stance}。"
         f"多头核心：{positives[0].role if positives else '无'}；"
         f"空头核心：{negatives[0].role if negatives else '无'}。"
     )
     return Debate(rounds=history, bull_case=bull_case, bear_case=bear_case,
                   thesis=thesis, score=score, degraded=debate_degraded)
+
+
+# --------------------------------------------------------------------------
+# 辩论裁判：把「谁辩赢了」变成可打分的量
+# --------------------------------------------------------------------------
+JUDGE_SCHEMA = """score: -1.0 到 1.0 的小数（负=空头论证更强，正=多头更强）
+reason: 哪一方的哪条论据决定胜负、以及为什么（80 字以内）"""
+
+
+def judge_debate(
+    llm: LLMClient,
+    snap: MarketSnapshot,
+    debate: Debate,
+    analyst_score: float,
+    weight: float = 0.3,
+) -> tuple[float, float | None, dict]:
+    """把辩论胜负量化成 -1~+1，再按 weight 混入分析师加权分。
+
+    之前 `Debate.score` 恒等于分析师加权，辩 N 轮也不改变决策——辩论只是写给
+    交易员看的材料。这里补上裁判角色，让辩论真正进入评分，但默认只占 30%：
+    分析师（带历史校准权重）仍是主体，裁判只做方向修正，防止一段雄辩翻转决策。
+
+    返回 (混合后分数, 裁判原始分, 裁判说明)。mock/降级时原样返回 analyst_score。
+    """
+    if weight <= 0 or not debate.rounds:
+        return float(analyst_score), None, {}
+    transcript = "\n".join(
+        f"{h.get('side')}：{h.get('text')}" for h in debate.rounds[-6:]
+    )
+    mock = {
+        # 同上：兜底值不与加权分做任何取整，保证 mock/降级时综合分与旧版完全一致
+        "score": float(analyst_score),
+        "decisive": "无（降级：沿用分析师加权）",
+        "reason": "LLM 不可用，辩论结论回退为分析师加权分数",
+    }
+    data, resp = llm.json(
+        SYSTEM_JUDGE,
+        f"{snap.to_prompt()}\n\n分析师加权评分：{float(analyst_score):+.2f}\n\n"
+        f"辩论记录：\n{transcript}\n\n"
+        "请判断哪一方的论证更有说服力，给出 -1~+1 的分数（正=偏多）。",
+        JUDGE_SCHEMA,
+        mock,
+    )
+    try:
+        raw = float(data.get("score", analyst_score))
+    except (TypeError, ValueError):
+        raw = float(analyst_score)
+    raw = float(np.clip(raw, -1.0, 1.0))
+    w = float(np.clip(weight, 0.0, 0.5))
+    mixed = float(np.clip((1.0 - w) * float(analyst_score) + w * raw, -1.0, 1.0))
+    info = {
+        "score": round(raw, 4),
+        "decisive": str(data.get("decisive") or "")[:200],
+        "reason": str(data.get("reason") or "")[:200],
+        "weight": round(w, 3),
+        "analyst_score": round(float(analyst_score), 4),
+        "degraded": bool(resp.degraded),
+    }
+    return mixed, raw, info
 
 
 # --------------------------------------------------------------------------
@@ -374,7 +487,8 @@ STOP_MIN, STOP_MAX = 0.002, 0.10
 TP_MIN, TP_MAX = 0.004, 0.20
 
 
-def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30) -> str:
+def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30,
+                  min_risk_reward: float = 1.3) -> str:
     """交易员的输出 schema。上下限跟着风控配置走。
 
     这里以前硬编码 `leverage: 1.0 到 3.0`，模型很听话地永远给 2x——真正的杠杆瓶颈
@@ -382,13 +496,16 @@ def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30) -> 
     """
     lev_cap = max(1.0, float(max_leverage or 3.0))
     pos_cap = min(max(float(max_position_pct or 0.30), 0.01), 1.0)
+    rr = max(1.0, float(min_risk_reward or 1.3))
     return (
         "action: long 或 short 或 flat\n"
         f"size_pct: 0.0 到 {pos_cap:.2f} 之间的小数（保证金占账户权益的比例）\n"
         f"leverage: 1.0 到 {lev_cap:.0f}（止损越近可以给越高；杠杆只改变保证金占用，"
         "单笔风险由 仓位×杠杆×止损 决定）\n"
-        f"stop_loss_pct: {STOP_MIN} 到 {STOP_MAX}\n"
-        f"take_profit_pct: {TP_MIN} 到 {TP_MAX}\n"
+        f"stop_loss_pct: {STOP_MIN} 到 {STOP_MAX}"
+        "（不要比 0.6×ATR 还近，否则正常波动就会扫损）\n"
+        f"take_profit_pct: {TP_MIN} 到 {TP_MAX}"
+        f"（必须 ≥ stop_loss_pct 的 {rr:.1f} 倍，否则会被风控直接拒绝）\n"
         "confidence: 0.0 到 1.0\n"
         "rationale: 一句话理由"
     )
@@ -443,15 +560,17 @@ def propose_trade(
     caps = caps or {}
     lev_cap = float(caps.get("max_leverage") or 3.0)
     pos_cap = float(caps.get("max_position_pct") or 0.30)
+    min_rr = max(1.0, float(caps.get("min_risk_reward") or 1.3))
     mock = _fallback_proposal(snap, debate, caps)
     context = "\n".join(f"[{r.role}] {r.summary}" for r in reports)
     user = (
         f"{snap.to_prompt()}\n\n分析师报告：\n{context}\n\n"
         f"研究结论：{debate.thesis}\n多头：{debate.bull_case}\n空头：{debate.bear_case}\n\n"
         "请给出交易提案。若信号不足请输出 flat。\n"
-        f"本账户参数：杠杆上限 {lev_cap:.0f}x，单笔保证金上限 {pos_cap:.0%} 权益。"
+        f"本账户参数：杠杆上限 {lev_cap:.0f}x，单笔保证金上限 {pos_cap:.0%} 权益，"
+        f"止盈必须 ≥ 止损的 {min_rr:.1f} 倍（盈亏比下限，硬性要求）。"
     )
-    data, resp = llm.json(SYSTEM_TRADER, user, trader_schema(lev_cap, pos_cap), mock)
+    data, resp = llm.json(SYSTEM_TRADER, user, trader_schema(lev_cap, pos_cap, min_rr), mock)
     proposal = _sanitize_proposal(data, mock, caps)
     return proposal, resp.degraded
 

@@ -46,6 +46,7 @@ from .roles import (
     AnalystReport,
     Debate,
     MarketSnapshot,
+    judge_debate,
     propose_trade,
     risk_review,
     run_analysts,
@@ -207,12 +208,29 @@ class TradingPipeline:
         debate: Debate = run_debate(
             self.llm, snap, reports, rounds=debate_rounds,
             weights=analyst_weights, calibrated=analyst_calibrated,
+            funding_valid=snap.funding_valid,
         )
+        # 辩论裁判：把「谁辩赢了」量化后按权重混入评分。之前 score 恒等于分析师
+        # 加权，辩几轮都不改变决策；现在裁判最多能改动 30%（权重可配置，0=关闭）。
+        analyst_score = debate.score
+        mixed, raw_judge, judge_info = judge_debate(
+            self.llm, snap, debate, analyst_score,
+            weight=float(getattr(self.cfg.risk, "debate_score_weight", 0.3) or 0.0),
+        )
+        debate.score = mixed
+        debate.debate_score = raw_judge
+        debate.judge = judge_info or {}
+        if raw_judge is not None:
+            debate.thesis = (
+                f"{debate.thesis}｜辩论裁判 {raw_judge:+.2f}"
+                f"（权重 {float(judge_info.get('weight') or 0):.0%}）→ 综合 {mixed:+.2f}"
+            )
         proposal, deg_trader = propose_trade(
             self.llm, snap, reports, debate,
             caps={
                 "max_leverage": self.cfg.risk.max_leverage,
                 "max_position_pct": self.cfg.risk.max_position_pct,
+                "min_risk_reward": self.cfg.risk.min_risk_reward,
             },
         )
         proposal["symbol"] = snap.symbol
@@ -350,6 +368,12 @@ class TradingPipeline:
             debate={
                 "thesis": debate.thesis,
                 "score": round(debate.score, 4),
+                # 分析师加权 vs 辩论裁判 vs 综合：三个数都留痕，才能审计辩论改了多少
+                "analyst_score": (round(float(debate.judge["analyst_score"]), 4)
+                                  if debate.judge.get("analyst_score") is not None else None),
+                "debate_score": (round(float(debate.debate_score), 4)
+                                 if debate.debate_score is not None else None),
+                "judge": debate.judge,
                 "bull_case": debate.bull_case,
                 "bear_case": debate.bear_case,
                 "rounds": debate.rounds,
@@ -405,6 +429,15 @@ def render_markdown(d: Decision) -> str:
         f"**空头**：{d.debate['bear_case']}",
         "",
         f"**结论**：{d.debate['thesis']}",
+    ]
+    if d.debate.get("debate_score") is not None:
+        lines += [
+            "",
+            f"**辩论裁判**：{float(d.debate['debate_score']):+.2f}"
+            f"（分析师加权 {float(d.debate.get('analyst_score') or 0):+.2f}"
+            f" → 综合 {float(d.debate['score']):+.2f}）",
+        ]
+    lines += [
         "",
         "## 3. 交易员提案",
         "",

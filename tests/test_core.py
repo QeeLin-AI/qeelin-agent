@@ -207,7 +207,7 @@ class TestRisk(unittest.TestCase):
     def test_per_trade_risk_cap(self):
         d = self.engine.check(
             {"action": "long", "size_pct": 0.30, "leverage": 3, "stop_loss_pct": 0.09,
-             "confidence": 0.9},
+             "take_profit_pct": 0.20, "confidence": 0.9},
             self.state,
         )
         self.assertTrue(d.approved)
@@ -899,7 +899,8 @@ class TestLeverageOverride(unittest.TestCase):
         from cryptoagent.config import RiskConfig
         from cryptoagent.risk import RiskEngine
 
-        prop = self._proposal(size_pct=0.3, stop_loss_pct=0.03)   # 3% × 0.3 × 2 = 1.8% 已超限
+        # 盈亏比也要合规（3% 止损配 6% 止盈），否则会被交易质量闸先拒掉
+        prop = self._proposal(size_pct=0.3, stop_loss_pct=0.03, take_profit_pct=0.06)
         d2 = RiskEngine(RiskConfig(leverage_override=2, max_leverage=3)).check(prop, self._state(), 0.01, 0.5)
         d5 = RiskEngine(RiskConfig(leverage_override=5, max_leverage=5)).check(prop, self._state(), 0.01, 0.5)
         risk2 = d2.size_pct * d2.leverage * prop["stop_loss_pct"]
@@ -1065,8 +1066,9 @@ class TestRiskBudgetSizing(unittest.TestCase):
 
         cfg = self._cfg(sizing_mode="risk", max_loss_per_trade_pct=0.05,
                         max_position_pct=0.5, max_leverage=20)
+        # ATR 用 0.4%：止损 0.5% 才落在「≥0.6×ATR」的合理区间（否则被止损宽度闸拒）
         d = RiskEngine(cfg).check(self._prop(lev=2.0, stop=0.005), self._state(),
-                                  0.01, 0.5, exchange_max_leverage=20)
+                                  0.004, 0.5, exchange_max_leverage=20)
         self.assertTrue(d.approved)
         self.assertLessEqual(d.leverage, 2.0)                      # 杠杆没被抬高
         self.assertAlmostEqual(d.size_pct, cfg.max_position_pct, places=4)  # 仓位被保证金上限压住

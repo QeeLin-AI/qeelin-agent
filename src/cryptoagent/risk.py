@@ -178,6 +178,40 @@ class RiskEngine:
                             f"止损 {stop:.2%}，要求 0.2%~10%"):
             return RiskDecision(False, "flat", 0.0, 0.0, reasons + ["止损缺失或不在合理区间"], checks)
 
+        # 8b. 盈亏比：止盈必须至少是止损的 N 倍。
+        # 执行成本闸只比较「成本 vs 止盈」，从不看「赢多少 / 亏多少」——没有这道闸，
+        # R:R=1.0 甚至更差的单也能通过（历史里真的出现过）。赢面不足的单长期必亏。
+        tp_pct = float(proposal.get("take_profit_pct", 0.0) or 0.0)
+        if tp_pct <= 0:
+            # 与 _build_order 的默认止盈保持一致：老计划/简化调用可能没带止盈，
+            # 不能因此跳过盈亏比校验——那会留下一个静默豁免口子。
+            tp_pct = 0.04
+        rr = (tp_pct / stop) if (stop > 0 and tp_pct > 0) else 0.0
+        min_rr = float(getattr(cfg, "min_risk_reward", 0.0) or 0.0)
+        if min_rr > 0 and not self._record(
+                checks, "risk_reward", rr >= min_rr,
+                f"盈亏比 {rr:.2f}（止盈 {tp_pct:.2%} / 止损 {stop:.2%}），要求 ≥ {min_rr:.2f}"):
+            return RiskDecision(
+                False, "flat", 0.0, 0.0,
+                reasons + [f"盈亏比 {rr:.2f} 低于下限 {min_rr:.2f}："
+                           "赢面不足以覆盖亏损，本次不开仓"],
+                checks)
+
+        # 8c. 止损宽度必须与波动匹配：比 N×ATR 还近的止损，正常波动就会扫掉，
+        # 属于「数学上必亏」的设置。之前只在 schema 里 clip 到 0.2%~10%，
+        # 不管品种实际波动，ATR 1.2% 的品种给 0.3% 止损也照放。
+        mult = float(getattr(cfg, "min_stop_atr_mult", 0.0) or 0.0)
+        if mult > 0 and atr_pct and atr_pct > 0:
+            floor = mult * float(atr_pct)
+            if not self._record(
+                    checks, "stop_vs_atr", stop >= floor,
+                    f"止损 {stop:.2%} / ATR {atr_pct:.2%}，下限 {floor:.2%}（{mult:.1f}×ATR）"):
+                return RiskDecision(
+                    False, "flat", 0.0, 0.0,
+                    reasons + [f"止损 {stop:.2%} 比 {mult:.1f}×ATR（{floor:.2%}）还近，"
+                               "正常波动就会扫损，本次不开仓"],
+                    checks)
+
         # 9. 单笔最大亏损 = 仓位 × 杠杆 × 止损，不得超过权益的 max_loss_per_trade
         loss_pct = size * lev * stop
         if loss_pct > cfg.max_loss_per_trade_pct * 1.001:

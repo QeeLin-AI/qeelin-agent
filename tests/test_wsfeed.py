@@ -6,7 +6,7 @@ import socket
 from cryptoagent.wsfeed import (
     WsClient,
     parse_binance_trade,
-    parse_okx_ticker,
+    parse_okx_trade,
 )
 
 
@@ -94,18 +94,27 @@ def test_parse_binance_trade_bad():
     assert parse_binance_trade('{"data":{}}') is None
 
 
-def test_parse_okx_ticker_ok():
-    raw = ('{"arg":{"channel":"tickers","instId":"BTC-USDT-SWAP"},'
-           '"data":[{"instId":"BTC-USDT-SWAP","last":"75000.1","ts":"1700000000000"}]}')
+def test_parse_okx_trade_ok():
+    # trades 频道（逐笔成交）：价格在 data[].px，取最近一笔
+    raw = ('{"arg":{"channel":"trades","instId":"BTC-USDT-SWAP"},'
+           '"data":[{"instId":"BTC-USDT-SWAP","tradeId":"1","px":"75000.1",'
+           '"sz":"1","side":"buy","ts":"1700000000000"}]}')
     mapping = {"BTC-USDT-SWAP": "BTCUSDT"}
-    assert parse_okx_ticker(raw, mapping) == ("BTCUSDT", 75000.1)
+    assert parse_okx_trade(raw, mapping) == ("BTCUSDT", 75000.1)
 
 
-def test_parse_okx_ticker_unknown_inst():
-    raw = '{"arg":{"channel":"tickers","instId":"ETH-USDT-SWAP"},"data":[{"last":"3000.0"}]}'
-    assert parse_okx_ticker(raw, {"BTC-USDT-SWAP": "BTCUSDT"}) is None
+def test_parse_okx_trade_takes_latest():
+    raw = ('{"arg":{"channel":"trades","instId":"BTC-USDT-SWAP"},'
+           '"data":[{"px":"75000.1"},{"px":"75001.5"}]}')
+    mapping = {"BTC-USDT-SWAP": "BTCUSDT"}
+    assert parse_okx_trade(raw, mapping) == ("BTCUSDT", 75001.5)
+
+
+def test_parse_okx_trade_unknown_inst():
+    raw = '{"arg":{"channel":"trades","instId":"ETH-USDT-SWAP"},"data":[{"px":"3000.0"}]}'
+    assert parse_okx_trade(raw, {"BTC-USDT-SWAP": "BTCUSDT"}) is None
 
 
 def test_parse_okx_subscribe_ack_ignored():
-    raw = '{"event":"subscribe","arg":{"channel":"tickers","instId":"BTC-USDT-SWAP"}}'
-    assert parse_okx_ticker(raw, {"BTC-USDT-SWAP": "BTCUSDT"}) is None
+    raw = '{"event":"subscribe","arg":{"channel":"trades","instId":"BTC-USDT-SWAP"}}'
+    assert parse_okx_trade(raw, {"BTC-USDT-SWAP": "BTCUSDT"}) is None
