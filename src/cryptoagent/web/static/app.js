@@ -2461,6 +2461,8 @@ document.addEventListener('click', (e) => {
 
 // 决策被跳过（当前品种有持仓 / 持仓已满）时给一条常驻说明。
 // 后端在跑 LLM 之前就直接返回，所以是「瞬间完成」——不是模型没调用或功能失效。
+// 后端 reason 形如「BNBUSDT 已有持仓，等平仓完成后再做开仓决策」，取首句即可
+const skipHead = (d) => String((d && d.reason) || '').split(/[，,。]/)[0].trim();
 function renderDecisionSkip(d) {
   const box = $('decisionSkipNote');
   if (!box) return;
@@ -2469,9 +2471,7 @@ function renderDecisionSkip(d) {
     box.innerHTML = '';
     return;
   }
-  // 后端 reason 形如「BNBUSDT 已有持仓，等平仓完成后再做开仓决策」，首句足够说明原因
-  const head = String(d.reason || '').split(/[，,。]/)[0].trim();
-  box.innerHTML = `<b>未运行决策</b>：${esc(head)}。`
+  box.innerHTML = `<b>未运行决策</b>：${esc(skipHead(d))}。`
     + '<span class="ds-sub">持仓期间不重复开仓（节省 LLM 调用），平仓后可再次运行。</span>';
   box.classList.remove('hidden');
 }
@@ -2577,7 +2577,7 @@ $('runDecision').addEventListener('click', async () => {
     if (data && data.skipped) {
       // 跳过不等于失败：说明原因，别弹「决策完成」让用户以为瞬间跑完了整条 LLM 链
       renderDecisionSkip(data);
-      toast(`未运行决策：${data.reason}`, 'err');
+      toast(`未运行决策：${skipHead(data)}。`, 'err');
       return;
     }
     renderDecision(data);
