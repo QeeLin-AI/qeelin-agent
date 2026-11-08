@@ -3698,3 +3698,20 @@ $('themeBtn').addEventListener('click', () => {
   // 这里再无条件赋值会造成两个 rAF 循环并行（且旧句柄丢失、无法停止）。
   if (!_uptimeRAF) _uptimeRAF = requestAnimationFrame(_renderUptimeFrame);
 })();
+/* TEMP-DIAG: 定位移动端横向溢出元素（用完即删） */
+setTimeout(() => {
+  try {
+    const vw = document.documentElement.clientWidth;
+    const bad = [...document.querySelectorAll('body *')]
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.right > vw + 1;
+      })
+      .slice(0, 8)
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        return `${el.tagName.toLowerCase()}.${String(el.className || '').split(' ')[0] || '-'}:${Math.round(r.width)}@${Math.round(r.right)}`;
+      });
+    document.title = `VW${vw}/SW${document.documentElement.scrollWidth}/${bad.join(' | ')}`;
+  } catch (e) { document.title = 'DIAGERR'; }
+}, 2500);
