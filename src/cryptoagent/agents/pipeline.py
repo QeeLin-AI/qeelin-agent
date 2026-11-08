@@ -231,6 +231,12 @@ class TradingPipeline:
                 "max_leverage": self.cfg.risk.max_leverage,
                 "max_position_pct": self.cfg.risk.max_position_pct,
                 "min_risk_reward": self.cfg.risk.min_risk_reward,
+                # 止损 ATR 下限也传给交易员：提示词若写死 0.6×ATR，
+                # 而本档要求 0.8×ATR，模型会给出必被风控拒的止损
+                "min_stop_atr_mult": self.cfg.risk.min_stop_atr_mult,
+                # 杠杆下限于同一理由：进取档托底 3x，提示词若写 1.0 起，
+                # 模型会一路给低杠杆，白让「高杠杆」这个定位落空
+                "min_leverage": self.cfg.risk.min_leverage,
             },
         )
         proposal["symbol"] = snap.symbol

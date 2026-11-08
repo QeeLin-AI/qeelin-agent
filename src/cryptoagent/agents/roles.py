@@ -488,24 +488,37 @@ TP_MIN, TP_MAX = 0.004, 0.20
 
 
 def trader_schema(max_leverage: float = 3.0, max_position_pct: float = 0.30,
-                  min_risk_reward: float = 1.3) -> str:
+                  min_risk_reward: float = 1.3, min_stop_atr_mult: float = 0.6,
+                  min_leverage: float = 1.0) -> str:
     """交易员的输出 schema。上下限跟着风控配置走。
 
     这里以前硬编码 `leverage: 1.0 到 3.0`，模型很听话地永远给 2x——真正的杠杆瓶颈
     在提示词，不在风控。改成按配置生成，并说明「杠杆只影响保证金占用，不改单笔风险」。
+
+    盈亏比提示分两种：低盈亏比档只要求「不低于下限」；高盈亏比档（趋势跟踪）
+    必须把目标放到更远处，否则固定止盈会在趋势刚起步时截断，移动止损没机会接管。
     """
     lev_cap = max(1.0, float(max_leverage or 3.0))
+    lev_floor = min(max(1.0, float(min_leverage or 1.0)), lev_cap)
     pos_cap = min(max(float(max_position_pct or 0.30), 0.01), 1.0)
     rr = max(1.0, float(min_risk_reward or 1.3))
+    atr_floor = max(0.0, float(min_stop_atr_mult or 0.0))
+    if rr >= 2.0:
+        tp_hint = (
+            f"（必须 ≥ stop_loss_pct 的 {rr:.1f} 倍。本档靠趋势盈利：建议给到 "
+            f"{rr * 1.4:.1f}~{rr * 2.5:.1f} 倍，把主要退出交给移动止损，"
+            "不要在小目标就挂止盈——否则利润跑不起来，还占用一次开仓机会）"
+        )
+    else:
+        tp_hint = f"（必须 ≥ stop_loss_pct 的 {rr:.1f} 倍，否则会被风控直接拒绝）"
     return (
         "action: long 或 short 或 flat\n"
         f"size_pct: 0.0 到 {pos_cap:.2f} 之间的小数（保证金占账户权益的比例）\n"
-        f"leverage: 1.0 到 {lev_cap:.0f}（止损越近可以给越高；杠杆只改变保证金占用，"
-        "单笔风险由 仓位×杠杆×止损 决定）\n"
+        f"leverage: {lev_floor:.1f} 到 {lev_cap:.1f}（止损越近可以给越高；杠杆只改变"
+        "保证金占用，单笔风险由 仓位×杠杆×止损 决定）\n"
         f"stop_loss_pct: {STOP_MIN} 到 {STOP_MAX}"
-        "（不要比 0.6×ATR 还近，否则正常波动就会扫损）\n"
-        f"take_profit_pct: {TP_MIN} 到 {TP_MAX}"
-        f"（必须 ≥ stop_loss_pct 的 {rr:.1f} 倍，否则会被风控直接拒绝）\n"
+        f"（不要比 {atr_floor:.1f}×ATR 还近，否则正常波动就会扫损）\n"
+        f"take_profit_pct: {TP_MIN} 到 {TP_MAX}{tp_hint}\n"
         "confidence: 0.0 到 1.0\n"
         "rationale: 一句话理由"
     )
@@ -518,7 +531,13 @@ reasons: 字符串数组"""
 def _fallback_proposal(snap: MarketSnapshot, debate: Debate, caps: dict | None = None) -> dict:
     caps = caps or {}
     lev_cap = max(1.0, float(caps.get("max_leverage") or 3.0))
+    # 杠杆下限也读配置：进取档托底 3x 时，降级路径不该再给 1x 让风控多做一次修正
+    lev_floor = min(max(1.0, float(caps.get("min_leverage") or 1.0)), lev_cap)
     pos_cap = min(max(float(caps.get("max_position_pct") or 0.30), 0.02), 1.0)
+    # 降级路径的止盈必须跟着本档的盈亏比下限走：
+    # 写死 2.0 时，高盈亏比档（2.2）用降级提案会被风控直接拒掉——
+    # 表现为「LLM 一降级就永远不开仓」，很难看出根因
+    min_rr = max(1.0, float(caps.get("min_risk_reward") or 1.3))
     score = debate.score
     if abs(score) < 0.15:
         return {
@@ -526,7 +545,7 @@ def _fallback_proposal(snap: MarketSnapshot, debate: Debate, caps: dict | None =
             "size_pct": 0.0,
             "leverage": 1.0,
             "stop_loss_pct": 0.02,
-            "take_profit_pct": 0.04,
+            "take_profit_pct": round(0.02 * min_rr, 4),
             "confidence": 0.5,
             "rationale": f"综合评分 {score:+.2f} 未达到开仓阈值 0.15，空仓等待。",
         }
@@ -534,14 +553,15 @@ def _fallback_proposal(snap: MarketSnapshot, debate: Debate, caps: dict | None =
     confidence = float(np.clip(0.5 + abs(score) * 0.55, 0.5, 0.92))
     size = float(np.clip((confidence - 0.45) * 0.6, 0.02, max(0.02, pos_cap)))
     stop = float(np.clip(1.5 * snap.atr_pct, 0.006, 0.03))
-    # 杠杆不再写死 2x：止损越近给越高（同样风险下，高杠杆只是少占保证金）
-    lev = float(np.clip(0.06 / max(stop, 0.002), 1.0, lev_cap))
+    # 杠杆不再写死 2x：止损越近给越高（同样风险下，高杠杆只是少占保证金）。
+    # 下限跟着配置走，避免降级路径每次都触发一次「按杠杆下限托底」的多余修正
+    lev = float(np.clip(0.06 / max(stop, 0.002), lev_floor, lev_cap))
     return {
         "action": direction,
         "size_pct": round(size, 4),
         "leverage": round(lev, 2),
         "stop_loss_pct": round(stop, 4),
-        "take_profit_pct": round(stop * 2.0, 4),
+        "take_profit_pct": round(min(stop * max(2.0, min_rr), TP_MAX), 4),
         "confidence": round(confidence, 3),
         "rationale": (
             f"综合评分 {score:+.2f}，ATR {snap.atr_pct:.2%} 决定止损 {stop:.2%}，"
@@ -561,6 +581,8 @@ def propose_trade(
     lev_cap = float(caps.get("max_leverage") or 3.0)
     pos_cap = float(caps.get("max_position_pct") or 0.30)
     min_rr = max(1.0, float(caps.get("min_risk_reward") or 1.3))
+    atr_floor = max(0.0, float(caps.get("min_stop_atr_mult") or 0.6))
+    lev_floor = max(1.0, float(caps.get("min_leverage") or 1.0))
     mock = _fallback_proposal(snap, debate, caps)
     context = "\n".join(f"[{r.role}] {r.summary}" for r in reports)
     user = (
@@ -570,7 +592,8 @@ def propose_trade(
         f"本账户参数：杠杆上限 {lev_cap:.0f}x，单笔保证金上限 {pos_cap:.0%} 权益，"
         f"止盈必须 ≥ 止损的 {min_rr:.1f} 倍（盈亏比下限，硬性要求）。"
     )
-    data, resp = llm.json(SYSTEM_TRADER, user, trader_schema(lev_cap, pos_cap, min_rr), mock)
+    data, resp = llm.json(SYSTEM_TRADER, user,
+                          trader_schema(lev_cap, pos_cap, min_rr, atr_floor, lev_floor), mock)
     proposal = _sanitize_proposal(data, mock, caps)
     return proposal, resp.degraded
 
