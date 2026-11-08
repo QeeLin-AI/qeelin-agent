@@ -415,21 +415,24 @@ html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139
 }
 /* 主按钮：连接到所选交易所（切换）—— 视觉层级最高、操作最直接 */
 /* 可连接态：与另外三个按钮（.btn-sub）同色，仅以「整行置顶 + 更高」保持焦点 */
-/* 可连接态（默认/ready）：实心景泰蓝，整行主 CTA */
+/* 可连接态（默认/ready）：与次级三按钮同色，仅以整行置顶 + 略粗字重作为焦点 */
 #testnetBox .btn-switch {
   width: 100%; height: 40px; padding: 0 16px;
-  border: 1px solid #2775b6; border-radius: var(--radius-sm);
-  background: #2775b6; color: #fff;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-2);
   font: 650 13.5px/1 var(--font); letter-spacing: .01em;
-  box-shadow: 0 4px 14px rgba(39, 117, 182, .26);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
 }
 #testnetBox .btn-switch:hover:not(:disabled) {
-  background: #2f86cf; border-color: #2f86cf; color: #fff;
-  box-shadow: 0 6px 18px rgba(39, 117, 182, .34);
+  background: var(--surface-2); border-color: var(--accent-line); color: var(--text);
 }
 #testnetBox .btn-switch:active:not(:disabled) {
-  transform: translateY(1px); box-shadow: 0 2px 8px rgba(39, 117, 182, .26);
+  transform: translateY(1px);
+}
+/* 连接标识：文字前的链接图标，跟随文字颜色（currentColor） */
+#testnetBox .btn-switch:not(.is-connected):not(:disabled) .btn-switch-ico {
+  width: 15px; height: 15px; flex: 0 0 auto; color: var(--accent);
 }
 /* 禁用态：未配 Key 保持中性灰，不抢视觉 */
 #testnetBox .btn-switch:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }

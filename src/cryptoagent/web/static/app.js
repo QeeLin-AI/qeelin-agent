@@ -2758,7 +2758,8 @@ function renderExchangePanel(scope) {
   if (isConnectedExchange(ex, scope)) {
     btn.textContent = `已连${exCn(ex)}`; btn.disabled = true; btn.classList.add('is-connected');
   } else if (ready) {
-    btn.textContent = `切换到${exCn(ex)}`; btn.disabled = false; btn.classList.remove('is-connected');
+    btn.innerHTML = '<svg class="btn-switch-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>连接';
+    btn.disabled = false; btn.classList.remove('is-connected');
   } else {
     btn.textContent = `先填${exCn(ex)}的 Key`; btn.disabled = true; btn.classList.remove('is-connected');
   }
@@ -2847,7 +2848,6 @@ $('tnSwitchBtn').addEventListener('click', async () => {
   if (blockIfAutoRunning('切换交易所')) return;
   const btn = $('tnSwitchBtn');
   const ex = currentExchange('testnet');
-  const prev = btn.textContent;
   btn.disabled = true; btn.textContent = '连接中…'; btn.classList.add('is-loading');
   try {
     const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
@@ -2857,7 +2857,7 @@ $('tnSwitchBtn').addEventListener('click', async () => {
     poll();
   } catch (e) {
     toast(`切换失败：${e.message}`, 'err');
-    btn.disabled = false; btn.textContent = prev; btn.classList.remove('is-loading');
+    btn.classList.remove('is-loading'); renderExchangePanel('testnet');
   }
 });
 
