@@ -226,6 +226,7 @@ function showTab(name, push = true) {
   if (name === 'overview') { renderPnl(); }
   if (name === 'decision') { requestAnimationFrame(fitScanReasons); requestAnimationFrame(syncFactorMoreVisibility); }
   if (name === 'settings') { loadLlmSettings(); loadSentimentSettings(); loadNotifySettings(); loadPositionLlmSettings(); loadProfiles(); loadEvolveState(); }
+  if (name === 'evolution') { loadEvolution(); }
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -286,6 +287,220 @@ document.getElementById('posCard')?.addEventListener('click', () => {
   });
 });
 
+/* ---------------- 进化页 ---------------- */
+const EVO_VERDICT_CN = { good: '好交易', bad_entry: '入场错', bad_exit: '退出早', gave_back: '浮盈回吐', neutral: '中性' };
+const EVO_MISTAKE_CN = {
+  entry_immediately_wrong: '入场即反向',
+  entry_wrong_side: '方向做反',
+  exit_too_early: '退出过早',
+  gave_back_profit: '浮盈回吐',
+  stop_too_tight: '止损过紧',
+};
+const EVO_STATUS_CN = {
+  proposed: '待审', applied: '已应用', confirmed: '已证实',
+  degraded: '变差', rejected: '已拒绝', rolled_back: '已回滚',
+};
+const EVO_KIND_CN = { config: '参数', rule: '规则', factor: '因子' };
+
+const evoSigned = (v) => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '--';
+  const n = Number(v);
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
+};
+// 参数值的可读化：5.0000 → 5、1.3000 → 1.3，避免表格里出现一长串零
+const evoVal = (v) => {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'number') return Number(v).toFixed(4).replace(/\.?0+$/, '');
+  return String(v);
+};
+
+async function loadEvolution() {
+  // 绩效数据随 status 轮询已有；这里只补「方案」与「账本」两个接口
+  if (!lastStatus) {
+    try { lastStatus = await api('/api/status'); } catch (e) { /* 用空数据渲染 */ }
+  }
+  renderEvoPerf((lastStatus && lastStatus.performance) || {});
+  renderEvoLessons();
+  renderEvoProfile();
+  try {
+    const d = await api('/api/evolution/changes', 'POST', { limit: 30 });
+    renderEvoChanges(d || {});
+  } catch (e) {
+    const tb = $('evoChangesTable')?.querySelector('tbody');
+    if (tb) tb.innerHTML = `<tr><td colspan="6" class="muted center">读取失败：${esc(e.message)}</td></tr>`;
+  }
+}
+
+async function renderEvoProfile() {
+  const badge = $('evoProfileBadge');
+  const summary = $('evoProfileSummary');
+  const meta = $('evoProfileMeta');
+  if (!badge) return;
+  try {
+    const d = await api('/api/settings/profiles');
+    const cur = d.current || '';
+    const list = d.profiles || [];
+    const prof = list.find((p) => p.name === cur);
+    if (cur && prof) {
+      badge.textContent = prof.label || cur;
+      badge.className = 'badge on';
+      summary.textContent = prof.summary || '';
+      meta.innerHTML = '<span>当前参数与方案完全一致，差异 <b>0</b> 项</span>';
+      return;
+    }
+    // 不匹配任何方案时给出「最接近的那一套」，比只写「自定义」更有用
+    badge.textContent = '自定义组合';
+    badge.className = 'badge';
+    summary.textContent = '当前参数不匹配任何预设方案，属于自定义组合。';
+    const nearest = list.slice().sort((a, b) => (a.diff || []).length - (b.diff || []).length)[0];
+    meta.innerHTML = nearest
+      ? `<span>最接近 <b>${esc(nearest.label)}</b>，差异 <b>${(nearest.diff || []).length}</b> 项</span>`
+      : '';
+  } catch (e) {
+    badge.textContent = '读取失败';
+    badge.className = 'badge';
+    summary.textContent = e.message || '无法读取配置方案';
+  }
+}
+
+function renderEvoPerf(p) {
+  p = p || {};
+  const o = p.overall || {};
+  const n = Number(o.n_with_r || 0);
+  const need = Number(p.min_trades_for_verdict || 100);
+
+  const fill = $('evoProgressFill');
+  if (fill) fill.style.width = `${need > 0 ? Math.min(100, (n / need) * 100) : 0}%`;
+  const ptext = $('evoProgressText');
+  if (ptext) ptext.textContent = `${n} / ${need} 笔平仓`;
+
+  const st = $('evoSampleState');
+  if (st) {
+    if (p.verdict_ready) { st.textContent = '可评估'; st.className = 'badge on'; }
+    else if (p.sample_ok) { st.textContent = '样本可用'; st.className = 'badge paper'; }
+    else { st.textContent = '观察期'; st.className = 'badge'; }
+  }
+
+  const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? '--' : Number(v).toFixed(d);
+  const kpis = [
+    ['期望值', o.expectancy_r == null ? '--' : `${evoSigned(o.expectancy_r)}R`, '每笔平均 R'],
+    ['按笔夏普', num(o.r_sharpe), '均值 / 波动'],
+    ['最大回撤', o.max_dd_r == null ? '--' : `${evoSigned(o.max_dd_r)}R`, '累计 R 曲线'],
+    ['胜率', o.win_rate == null ? '--' : `${(Number(o.win_rate) * 100).toFixed(0)}%`, `${n} 笔样本`],
+  ];
+  const kp = $('evoKpis');
+  if (kp) {
+    kp.innerHTML = kpis.map(([k, v, s]) =>
+      `<div class="evo-kpi"><label>${k}</label><b>${v}</b><small>${s}</small></div>`).join('');
+  }
+
+  const rs = p.review_summary || {};
+  const total = Number(rs.n || 0);
+  const order = ['good', 'bad_entry', 'bad_exit', 'gave_back', 'neutral'];
+  const vd = $('evoVerdicts');
+  if (vd) {
+    vd.innerHTML = order.map((k) => {
+      const c = Number((rs.by_verdict || {})[k] || 0);
+      const share = total ? Math.round((c / total) * 100) : 0;
+      return `<div class="evo-verdict"><label>${EVO_VERDICT_CN[k]}</label>`
+        + `<b>${c}<span>${total ? share + '%' : '—'}</span></b></div>`;
+    }).join('');
+  }
+  const mis = Object.entries(rs.by_mistake || {}).slice(0, 6);
+  const mc = $('evoMistakes');
+  if (mc) {
+    mc.innerHTML = mis.length
+      ? mis.map(([k, v]) => `<span class="evo-chip bad">${esc(EVO_MISTAKE_CN[k] || k)} ×${v}</span>`).join('')
+      : '<span class="muted">暂无错误标签</span>';
+  }
+  const rm = $('evoReviewMeta');
+  if (rm) {
+    rm.textContent = total
+      ? `${total} 笔已复盘 · 好交易占比 ${(Number(rs.good_ratio || 0) * 100).toFixed(0)}%`
+      : '产生了平仓后自动生成';
+  }
+  renderEvoBench(p, o);
+}
+
+function renderEvoBench(p, o) {
+  const tb = $('evoBenchTable')?.querySelector('tbody');
+  if (!tb) return;
+  const b = p.benchmarks || {};
+  const rows = [
+    ['期望值 (R/笔)', 'expectancy_r', 2],
+    ['按笔夏普', 'r_sharpe', 2],
+    ['最大回撤 (R)', 'max_dd_r', 1],
+  ];
+  tb.innerHTML = rows.map(([label, key, d]) => {
+    const cell = (v) => (v === null || v === undefined || Number.isNaN(Number(v)))
+      ? '—' : Number(v).toFixed(d);
+    return `<tr><td>${label}</td><td><b>${cell(o[key])}</b></td>`
+      + `<td class="muted">${cell((b.pass || {})[key])}</td>`
+      + `<td class="muted">${cell((b.near_human || {})[key])}</td>`
+      + `<td class="muted">${cell((b.beyond || {})[key])}</td></tr>`;
+  }).join('');
+}
+
+function renderEvoChanges(d) {
+  const tb = $('evoChangesTable')?.querySelector('tbody');
+  if (!tb) return;
+  const items = (d && d.items) || [];
+  const meta = $('evoChangesMeta');
+  if (meta) {
+    const s = (d && d.summary) || {};
+    const bs = s.by_status || {};
+    meta.textContent = items.length
+      ? `共 ${s.total || items.length} 条 · 已证实 ${bs.confirmed || 0} · 变差 ${bs.degraded || 0}`
+      : '';
+  }
+  if (!items.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="muted center">还没有自动改动。L1 参数校准需 20 笔平仓样本，因子研究需先通过三闸。</td></tr>';
+    return;
+  }
+  tb.innerHTML = items.map((it) => {
+    const st = EVO_STATUS_CN[it.status] || it.status || '';
+    const cls = it.status === 'degraded' ? 'bad'
+      : it.status === 'confirmed' ? 'ok'
+        : it.status === 'rejected' ? 'warn'
+          : it.status === 'rolled_back' ? 'muted' : '';
+    const a = it.attribution || {};
+    let att = '观察中';
+    if (a.ready) {
+      const dl = evoSigned(a.delta_expectancy_r);
+      att = a.verdict === 'improved' ? `改善 ${dl}R`
+        : a.verdict === 'degraded' ? `变差 ${dl}R`
+          : `无明显变化 ${dl}R`;
+    } else if (a.need) {
+      att = `${a.have || 0}/${a.need} 笔`;
+    }
+    const ts = String(it.applied_at || it.created_at || '');
+    return `<tr>
+      <td class="muted">${esc(ts.slice(5, 16))}</td>
+      <td>${esc(EVO_KIND_CN[it.kind] || it.kind || '')}</td>
+      <td>${esc(it.target || '')}</td>
+      <td>${esc(evoVal(it.before))} → ${esc(evoVal(it.after))}</td>
+      <td><span class="evo-state ${cls}">${esc(st)}</span></td>
+      <td class="muted">${esc(att)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderEvoLessons() {
+  const el = $('evoLessons');
+  if (!el) return;
+  const hist = (lastStatus && Array.isArray(lastStatus.position_history)) ? lastStatus.position_history : [];
+  const rows = hist.filter((h) => h && h.review && h.review.lesson).slice(0, 5);
+  if (!rows.length) {
+    el.innerHTML = '<div class="evo-empty">暂无复盘记录。平仓后复盘官会给出「赚在哪、亏在哪」的结构化结论。</div>';
+    return;
+  }
+  el.innerHTML = rows.map((h) => {
+    const v = (h.review && h.review.verdict) || '';
+    const cls = v === 'good' ? 'good' : (v === 'gave_back' || v === 'bad_exit') ? 'warn' : 'bad';
+    return `<div class="evo-lesson ${cls}">${esc(h.symbol || '')} ${esc(h.review.lesson)}</div>`;
+  }).join('');
+}
+
 /* ---------------- 状态轮询 ---------------- */
 async function poll() {
   try {
@@ -305,6 +520,15 @@ async function poll() {
     renderNotifications();
   } catch (e) {
     console.error(e);
+  }
+  // 进化页可见时就地刷新绩效与复盘（数据来自 lastStatus，不再发额外请求）
+  if ($('tab-evolution')?.classList.contains('active') && lastStatus) {
+    try {
+      renderEvoPerf(lastStatus.performance || {});
+      renderEvoLessons();
+    } catch (e) {
+      console.error(e);
+    }
   }
 }
 
@@ -3449,7 +3673,7 @@ $('themeBtn').addEventListener('click', () => {
 (async function init() {
   await loadSymbols();
   const hash = location.hash.replace('#', '');
-  if (['overview', 'decision', 'research', 'trading', 'settings'].includes(hash)) showTab(hash, false);
+  if (['overview', 'decision', 'research', 'evolution', 'trading', 'settings'].includes(hash)) showTab(hash, false);
   await poll();
   // 字体加载完字宽会变（盈亏卡可能换行），右栏高度要再校一次
   if (document.fonts && document.fonts.ready) {

@@ -47,6 +47,7 @@
       <nav class="tabs">
       <button class="tab" data-tab="decision"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h4V6h4M12 12v6h4"/></svg><span>决策</span></button>
       <button class="tab" data-tab="research" title="因子研究"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19h16"/><path d="M7 16v-5M12 16V5M17 16v-8"/><circle cx="7" cy="8" r="1"/><circle cx="12" cy="4" r="1"/><circle cx="17" cy="6" r="1"/></svg><span><span class="lbl-long">因子研究</span><span class="lbl-short">因子</span></span></button>
+      <button class="tab" data-tab="evolution" title="进化治理"><svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4v4.2h-4.2"/><circle cx="12" cy="12" r="2.4"/></svg><span>进化</span></button>
       </nav>
     </div>
     <div class="nav-group">
@@ -285,6 +286,63 @@
       <div class="card-head"><h2>冠军因子</h2><span id="bestMeta" class="muted"></span></div>
       <p id="bestHypo" class="muted"></p>
       <pre id="bestCode" class="code"></pre>
+    </div>
+  </section>
+
+  <!-- ============ 进化 ============ -->
+  <section id="tab-evolution" class="panel">
+    <div class="page-head">
+      <div class="page-head-main">
+        <span class="eyebrow">EVOLUTION / 进化</span>
+        <h1>进化</h1>
+        <p class="page-sub">配置方案、自动改动账本与能力评估。所有改动都在这里留痕，可按条回滚。</p>
+      </div>
+    </div>
+
+    <div class="evo-top">
+      <div class="card">
+        <div class="card-head"><h2>当前配置方案</h2><span id="evoProfileBadge" class="badge">读取中</span></div>
+        <p id="evoProfileSummary" class="muted">正在读取方案…</p>
+        <div class="evo-meta" id="evoProfileMeta"></div>
+        <div class="actions">
+          <a href="#settings" class="btn" id="evoToSettings">去设置调整</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>能力进度</h2><span id="evoSampleState" class="badge">观察期</span></div>
+        <div class="evo-progress">
+          <div class="evo-progress-bar"><i id="evoProgressFill"></i></div>
+          <span id="evoProgressText" class="muted">0 / 100 笔</span>
+        </div>
+        <div class="evo-kpis" id="evoKpis"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>复盘归因</h2><span id="evoReviewMeta" class="muted"></span></div>
+      <div class="evo-verdicts" id="evoVerdicts"></div>
+      <div class="evo-chips" id="evoMistakes"></div>
+      <div class="evo-lessons" id="evoLessons"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>进化账本</h2><span id="evoChangesMeta" class="muted"></span></div>
+      <div class="table-scroll">
+        <table class="table" id="evoChangesTable">
+          <thead><tr><th>时间</th><th>类型</th><th>目标</th><th>改动</th><th>状态</th><th>应用后归因</th></tr></thead>
+          <tbody><tr><td colspan="6" class="muted center">读取中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>真人对照门槛</h2><span class="muted">≥ 100 笔平仓后才有统计意义</span></div>
+      <div class="table-scroll">
+        <table class="table" id="evoBenchTable">
+          <thead><tr><th>指标</th><th>当前</th><th>及格</th><th>接近真人</th><th>超越</th></tr></thead>
+          <tbody><tr><td colspan="5" class="muted center">读取中…</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
