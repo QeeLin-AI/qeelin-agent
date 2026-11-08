@@ -414,33 +414,38 @@ html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139
   gap: 10px; margin-top: 14px; margin-left: 0;
 }
 /* 主按钮：连接到所选交易所（切换）—— 视觉层级最高、操作最直接 */
+/* 可连接态（默认/ready）：绿色描边，醒目但不抢「已连接」的填充层级 */
 #testnetBox .btn-switch {
   width: 100%; height: 40px; padding: 0 16px;
-  border: 1px solid var(--accent); border-radius: var(--radius-sm);
-  background: var(--accent); color: #fff;
+  border: 1px solid var(--ok); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ok);
   font: 650 13.5px/1 var(--font); letter-spacing: .01em;
-  box-shadow: 0 4px 14px rgba(10, 186, 181, .26);
+  box-shadow: 0 0 0 1px rgba(47, 192, 138, .22), 0 4px 14px rgba(47, 192, 138, .16);
   transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
 }
 #testnetBox .btn-switch:hover:not(:disabled) {
-  background: var(--accent-hover); border-color: var(--accent-hover); color: #fff;
-  box-shadow: 0 6px 18px rgba(10, 186, 181, .34);
+  background: rgba(47, 192, 138, .12); border-color: var(--ok); color: var(--ok);
+  box-shadow: 0 0 0 1px rgba(47, 192, 138, .35), 0 6px 18px rgba(47, 192, 138, .24);
 }
 #testnetBox .btn-switch:active:not(:disabled) {
-  transform: translateY(1px); box-shadow: 0 2px 8px rgba(10, 186, 181, .26);
+  transform: translateY(1px); box-shadow: 0 0 0 1px rgba(47, 192, 138, .22);
 }
+/* 禁用态默认降对比；未配 Key 的禁用态保持中性灰，不显绿（避免误读为「可连接」） */
 #testnetBox .btn-switch:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
-/* 已连接态：明确的成功反馈（绿点 + 青色描边，区别于普通禁用） */
+#testnetBox .btn-switch:disabled:not(.is-connected) {
+  border-color: var(--border); color: var(--muted); background: var(--surface);
+}
+/* 已连接态：青色描边 + 绿点，区别于「可连接」的纯绿描边 */
 #testnetBox .btn-switch.is-connected {
   background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
   box-shadow: none; opacity: 1;
 }
 #testnetBox .btn-switch.is-connected::before { content: '● '; color: var(--ok); }
-/* 连接中态：保留高亮、加旋转指示，避免被当成「禁用」 */
-#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: rgba(255, 255, 255, .82); }
+/* 连接中态：保留绿色高亮 + 旋转指示，避免被当成「禁用」 */
+#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: var(--ok); }
 #testnetBox .btn-switch.is-loading::after {
   content: ''; width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, .45); border-top-color: #fff;
+  border: 2px solid rgba(47, 192, 138, .4); border-top-color: var(--ok);
   animation: btn-spin .6s linear infinite;
 }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
