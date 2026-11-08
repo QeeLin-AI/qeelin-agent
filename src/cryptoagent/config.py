@@ -133,10 +133,12 @@ class RiskConfig:
     # 默认 70%：0.30×2=0.60 ≤ 0.70，留 30% 缓冲应对浮亏与资金费。
     max_margin_usage_pct: float = 0.70
     # —— 仓位怎么定 ——
-    # llm  = 用交易员给的 size_pct（模型保守时仓位会很小）
+    # llm  = 用交易员给的 size_pct（模型保守时仓位会很小，参数表上的单笔风险只是上限）
     # risk = 按单笔风险上限反推：名义敞口 = max_loss_per_trade_pct / 止损幅度
     #        （原「按风险预算反推」已废弃：预算字段删除，统一用风险上限做输入）
-    sizing_mode: str = "llm"
+    # 默认 risk：与「均衡」档一致，让 max_loss_per_trade_pct 成为可预期的真实风险，
+    # 而不是一个交易员随时可以远低于它的上限。
+    sizing_mode: str = "risk"
     # 杠杆下限：模型长期只给 2x 时可托底（1.0 = 不干预）
     min_leverage: float = 1.0
     daily_loss_limit_pct: float = 0.04

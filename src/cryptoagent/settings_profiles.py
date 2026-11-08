@@ -84,12 +84,16 @@ PROFILES: dict[str, dict[str, Any]] = {
         },
     },
     "balanced": {
-        "label": "稳健（默认）",
+        "label": "均衡（默认）",
         "summary": "单笔 1%、最多 2 仓、杠杆 1~5x、置信 0.50、盈亏比 1.4、回撤 18%。"
                    "胜率与盈亏比都不偏科：一半的单赚 1.4R、一半亏 1R 时期望值仍为正。"
-                   "多数人的起点；与 AppConfig 默认值逐项一致。",
+                   "仓位按风险上限反推，参数表上的 1% 就是真实单笔风险；"
+                   "多数人的起点，与 AppConfig 默认值逐项一致。",
         "risk": {
-            "sizing_mode": "llm",
+            # llm→risk：llm 模式下「单笔 1%」只是上限，交易员给多少算多少，
+            # 参数表上的数字和实际风险对不上。risk 模式按「单笔风险/止损」反推
+            # 名义敞口，1% 才是可预期的真实风险。
+            "sizing_mode": "risk",
             "max_loss_per_trade_pct": 0.010,
             "max_position_pct": 0.30,
             # 1→2 仓：均衡档需要一定分散度（同向相关性由 correlated 上限兜住），
@@ -120,6 +124,15 @@ PROFILES: dict[str, dict[str, Any]] = {
             "bars_from_index": True,
             "peak_drawdown_exit_enabled": False,
             "peak_drawdown_r": 1.0,
+            # 退出参数必须写全：方案只覆盖它声明过的字段，缺一项就会沿用
+            # 上一档的值（从训练档切回来会残留 24 根 / 0.8R 的快节奏）。
+            # 48 根 = 2 天，配 1.0R 启动、2.0×ATR 跟踪 = 「中速持有」，
+            # 比训练(24/0.8/1.8)慢、比保守(48/1.2/2.5)紧。
+            "max_hold_bars": 48,
+            "trail_activate_r": 1.0,
+            "trail_atr_mult": 2.0,
+            "min_progress_r": 0.3,
+            "reversal_composite": 0.7,
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 900,
@@ -232,9 +245,11 @@ PROFILES: dict[str, dict[str, Any]] = {
             # 2.5→3.0：加密品种高度相关，放宽到"允许两仓同组满额"，
             # 第三仓必须换组（否则等于把风险叠在一个方向上）
             "correlated_exposure_pct": 3.0,
-            # 1.8→1.5：激进档的核心是「敢开 + 仓位重」，不是「等一笔大行情」。
-            # 盈亏比要求越高，通过率越低；本档要的是次数 × 仓位，让胜率贡献收益
-            "min_risk_reward": 1.5,
+            # 1.8→1.6：激进档的核心是「敢开 + 仓位重」，不是「等一笔大行情」。
+            # 盈亏比要求越高，通过率越低；本档要的是次数 × 仓位，让胜率贡献收益。
+            # 取 1.6 而非 1.5：1.5 与保守档完全相同，会让「盈亏比」这一维失去区分度；
+            # 改后梯度为 高频1.15 / 训练1.25 / 均衡1.40 / 保守1.50 / 进取1.60，五档各不同。
+            "min_risk_reward": 1.6,
             "min_stop_atr_mult": 0.6,
             "debate_score_weight": 0.3,
         },
@@ -335,27 +350,29 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "evolution": {
         "label": "AI 进化（L3）",
-        "summary": "L3 完全主导：LLM 可提议退出参数、甚至改变动作方向，也允许放宽阈值。"
-                   "底座刻意压小（单笔 0.8%、2 仓、回撤 20%），把调整空间留给进化。"
+        "summary": "均衡底座 + AI 接管：风险参数与「均衡」逐项相同，差别只在 L3 权限全开。"
+                   "LLM 可提议退出参数、甚至改变动作方向，也允许放宽阈值。"
                    "⚠️ 应用需 L2 反事实回放已通过，否则会被安全门拒绝（这是设计，不是故障）。",
         "risk": {
-            # 底座压小：L3 会改动参数，留足安全边际；单笔 0.8% 让一次误判只亏 0.8%
+            # 与 balanced 逐项相同：本档的差异只在「谁来调参」，不在「承担多少风险」。
+            # 之前把底座整体乘 0.8，会让用户切档时困惑「我要的是 AI 接管，
+            # 为什么仓位先缩水了」——那是重复而不是独立定位。
             "sizing_mode": "risk",
-            "max_loss_per_trade_pct": 0.008,
-            "max_position_pct": 0.20,
+            "max_loss_per_trade_pct": 0.010,
+            "max_position_pct": 0.30,
             "max_concurrent_positions": 2,
-            "max_margin_usage_pct": 0.50,          # 0.20×2=0.40 ≤ 0.50
-            "min_confidence": 0.45,
+            "max_margin_usage_pct": 0.70,
+            "min_confidence": 0.50,
             "max_leverage": 5.0,
             "min_leverage": 1.0,
             "leverage_override": 0.0,
-            "daily_loss_limit_pct": 0.05,
-            "max_drawdown_pct": 0.20,
-            "max_portfolio_notional_pct": 1.5,     # 0.20×5=1.0 ≤ 1.5
-            "correlated_exposure_pct": 1.0,
+            "daily_loss_limit_pct": 0.04,
+            "max_drawdown_pct": 0.18,
+            "max_portfolio_notional_pct": 2.0,
+            "correlated_exposure_pct": 1.5,
             "min_risk_reward": 1.4,
             "min_stop_atr_mult": 0.6,
-            # 最信任模型的档位：辩论裁判权重 0.4（硬上限 0.5）
+            # 唯一保留的差异：最信任模型的档位，辩论裁判权重 0.4（硬上限 0.5）
             "debate_score_weight": 0.4,
         },
         "position": {
