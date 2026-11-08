@@ -1389,7 +1389,11 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
     flex: 1 1 auto; min-width: 0; line-height: 1.6; overflow-wrap: anywhere;
   }
   .sidebar { position: static; width: auto; flex-direction: row; align-items: center; gap: 12px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
-  .side-brand { padding: 0 12px 0 0; border-bottom: 0; border-right: 1px solid var(--border-soft); }
+  .side-brand { padding: 0 10px 0 0; border-bottom: 0; border-right: 1px solid var(--border-soft); }
+  /* 手机端顶部横条寸土寸金：品牌名与版本号让位给主导航，只保留麒麟徽记。
+     徽记仍是 .side-brand 的唯一子元素，点击回总览的交互不受影响。 */
+  .side-brand .side-brand-text { display: none; }
+  .side-brand .brand-mark { width: 32px; height: 32px; }
   .side-scroll { display: flex; gap: 10px; padding: 0; overflow-x: auto; flex: 1; min-height: 0; }
   .nav-group { display: flex; align-items: center; gap: 10px; margin: 0 !important; flex: none; }
   .nav-label { display: none; }
@@ -1782,14 +1786,10 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .settings-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
   .settings-tabs::-webkit-scrollbar { display: none; }
   .set-tab { flex: none; min-height: 36px; }
-  /* 手机竖屏：品牌保留「LOGO + 名称」（版本号让位给导航），图标叠到文字上方，
-     宽度由文字决定，5 个带图标的入口仍能一屏放完 */
-  .side-brand { gap: 6px; padding-right: 6px; }
-  .side-brand .brand-name { font-size: 12.5px; }
-  .side-brand .ver { display: none; }
+  /* 手机竖屏：徽记再收小一档，宽度继续让给 5 个带图标的入口 */
+  .side-brand { padding-right: 6px; }
   .side-brand .brand-mark { width: 30px; height: 30px; border-radius: 8px; }
   .side-brand .brand-mark svg { width: 27px; height: 27px; }
-  .side-brand .ver { display: none; }
   .side-scroll { gap: 10px; }
   .tab {
     flex-direction: column; gap: 2px; width: auto;
