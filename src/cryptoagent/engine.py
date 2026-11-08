@@ -3508,13 +3508,15 @@ class TradingEngine:
                 if not self.armed or self.live_client is None:
                     return {"ok": False, "error": "实盘未解锁"}
                 try:
-                    self.live_client.set_leverage(self.cfg.market.symbol, int(round(lev)))
-                    # 先清掉这个品种的残留条件单：closePosition 的止损单一个方向只能有一张，
-                    # 上一次执行留下的孤儿单会让新止损直接报 -4130
+                    # 顺序不能反：OKX 在该品种还有未成交的条件单（止盈/止损/追踪）时
+                    # 会拒绝调整杠杆（59669），先 set_leverage 会让整个执行直接失败。
+                    # 而且 closePosition 的止损单一个方向只能有一张，上一次执行留下的
+                    # 孤儿单会让新止损报 -4130，所以两个交易所都先撤干净再设杠杆。
                     try:
                         self.live_client.cancel_all(self.cfg.market.symbol)
                     except Exception:  # noqa: BLE001 - 没有旧单时会报错，忽略
                         pass
+                    self.live_client.set_leverage(self.cfg.market.symbol, int(round(lev)))
                     res = self.live_client.place_market(
                         self.cfg.market.symbol, "BUY" if side == "LONG" else "SELL", qty
                     )
