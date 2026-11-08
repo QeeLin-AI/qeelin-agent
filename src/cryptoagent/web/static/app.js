@@ -2755,9 +2755,13 @@ function renderExchangePanel(scope) {
   if (!btn) return;
   const ex = currentExchange(scope);
   const ready = hasKeys(ex, mode);
-  if (isConnectedExchange(ex, scope)) { btn.textContent = `已连${exCn(ex)}`; btn.disabled = true; }
-  else if (ready) { btn.textContent = `切换到${exCn(ex)}`; btn.disabled = false; }
-  else { btn.textContent = `先填${exCn(ex)}的 Key`; btn.disabled = true; }
+  if (isConnectedExchange(ex, scope)) {
+    btn.textContent = `已连${exCn(ex)}`; btn.disabled = true; btn.classList.add('is-connected');
+  } else if (ready) {
+    btn.textContent = `切换到${exCn(ex)}`; btn.disabled = false; btn.classList.remove('is-connected');
+  } else {
+    btn.textContent = `先填${exCn(ex)}的 Key`; btn.disabled = true; btn.classList.remove('is-connected');
+  }
 }
 // 交易所分段控件：单选高亮 + 同步 Passphrase 行 + 刷新状态行
 document.querySelectorAll('.ex-choice').forEach((choice) => {
@@ -2844,15 +2848,16 @@ $('tnSwitchBtn').addEventListener('click', async () => {
   const btn = $('tnSwitchBtn');
   const ex = currentExchange('testnet');
   const prev = btn.textContent;
-  btn.disabled = true; btn.textContent = '连接中…';
+  btn.disabled = true; btn.textContent = '连接中…'; btn.classList.add('is-loading');
   try {
     const res = await api('/api/trading/arm', 'POST', { mode: 'testnet', exchange: ex });
     toast(`已切到${exCn(ex)}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
+    btn.classList.remove('is-loading');
     closeModePanels();
     poll();
   } catch (e) {
     toast(`切换失败：${e.message}`, 'err');
-    btn.disabled = false; btn.textContent = prev;
+    btn.disabled = false; btn.textContent = prev; btn.classList.remove('is-loading');
   }
 });
 

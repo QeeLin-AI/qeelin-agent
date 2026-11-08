@@ -430,10 +430,12 @@
         <label class="set-row" id="tnPassRow"><span class="row-label">Passphrase</span><input id="tnPass" type="password" placeholder="OKX 开户时设置的 Passphrase" autocomplete="new-password" /></label>
       </div>
       <div class="actions">
-        <button id="tnSaveBtn" class="btn primary">保存到 .env 并连接</button>
-        <button id="tnTestBtn" class="btn ghost">连接自检</button>
-        <button id="tnSwitchBtn" class="btn ghost">连接到所选交易所</button>
-        <button id="tnDisarmBtn" class="btn ghost">断开（回到本地模拟）</button>
+        <button id="tnSwitchBtn" class="btn btn-switch">连接到所选交易所</button>
+        <div class="tn-secondary">
+          <button id="tnSaveBtn" class="btn btn-sub">保存到 .env 并连接</button>
+          <button id="tnTestBtn" class="btn btn-sub">连接自检</button>
+          <button id="tnDisarmBtn" class="btn btn-sub">断开（回到本地模拟）</button>
+        </div>
       </div>
       <p id="tnStatus" class="muted"></p>
       <div class="set-switch-list">

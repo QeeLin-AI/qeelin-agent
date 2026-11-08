@@ -406,6 +406,63 @@ main { max-width: 1380px; margin: 0 auto; padding: 30px 32px 90px; }
 .btn.cyan { background: var(--accent); border-color: var(--accent); color: #fff; }
 html[data-theme="light"] .btn.start.active { color: #fff; }
 html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139, .20); }
+
+/* ---- 模拟盘凭据区操作按钮（局部重设计：切换主按钮突出，其余三个统一）---- */
+/* 容器：主按钮独占一行置顶，次级三按钮等宽栅格在下，间距与页面 8/10 网格统一 */
+#testnetBox .actions {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 10px; margin-top: 14px; margin-left: 0;
+}
+/* 主按钮：连接到所选交易所（切换）—— 视觉层级最高、操作最直接 */
+#testnetBox .btn-switch {
+  width: 100%; height: 40px; padding: 0 16px;
+  border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent); color: #fff;
+  font: 650 13.5px/1 var(--font); letter-spacing: .01em;
+  box-shadow: 0 4px 14px rgba(10, 186, 181, .26);
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
+}
+#testnetBox .btn-switch:hover:not(:disabled) {
+  background: var(--accent-hover); border-color: var(--accent-hover); color: #fff;
+  box-shadow: 0 6px 18px rgba(10, 186, 181, .34);
+}
+#testnetBox .btn-switch:active:not(:disabled) {
+  transform: translateY(1px); box-shadow: 0 2px 8px rgba(10, 186, 181, .26);
+}
+#testnetBox .btn-switch:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* 已连接态：明确的成功反馈（绿点 + 青色描边，区别于普通禁用） */
+#testnetBox .btn-switch.is-connected {
+  background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
+  box-shadow: none; opacity: 1;
+}
+#testnetBox .btn-switch.is-connected::before { content: '● '; color: var(--ok); }
+/* 连接中态：保留高亮、加旋转指示，避免被当成「禁用」 */
+#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: rgba(255, 255, 255, .82); }
+#testnetBox .btn-switch.is-loading::after {
+  content: ''; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .45); border-top-color: #fff;
+  animation: btn-spin .6s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+#testnetBox .btn-switch:focus-visible, #testnetBox .btn-sub:focus-visible {
+  outline: 2px solid var(--accent-line); outline-offset: 2px;
+}
+/* 其余三个：统一次级按钮，等宽栅格、统一描边/圆角/字号/交互 */
+#testnetBox .tn-secondary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#testnetBox .btn-sub {
+  width: 100%; height: 34px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-2);
+  font: 550 12.5px/1.25 var(--font); text-align: center; white-space: normal;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
+}
+#testnetBox .btn-sub:hover:not(:disabled) {
+  background: var(--surface-2); border-color: var(--accent-line); color: var(--text);
+}
+#testnetBox .btn-sub:active:not(:disabled) { transform: translateY(1px); }
+#testnetBox .btn-sub:disabled { opacity: .45; cursor: not-allowed; border-color: var(--border); color: var(--muted); }
+/* 窄屏：次级三按钮改为纵向堆叠，保持可读与点击区域 */
+@media (max-width: 720px) { #testnetBox .tn-secondary { grid-template-columns: 1fr; } }
 /* 亮色主题下顶栏与侧栏同为纯白 surface，靠清晰分隔线 + 柔和投影与浅灰页面拉开层次 */
 html[data-theme="light"] .topbar {
   background: var(--surface);
