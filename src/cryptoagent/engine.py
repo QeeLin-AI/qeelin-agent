@@ -1717,6 +1717,12 @@ class TradingEngine:
             return
         if not self._positions_map():
             return
+        # 资金费 8 小时才结算一次，而守护线程 30 秒一轮。不节流的话一天要拉
+        # 2880 次 income（币安该接口权重不低），纯浪费额度还可能触发限流。
+        now_ts = time.time()
+        if now_ts - float(getattr(self, "_funding_sync_at", 0.0)) < 300.0:
+            return
+        self._funding_sync_at = now_ts
         # 去重下界：已同步锚点 → 账户重置锚点 → 最近 24h（首次不灌全量历史）
         floor = int(self.state.get("funding_synced_until_ms") or 0)
         if not floor:

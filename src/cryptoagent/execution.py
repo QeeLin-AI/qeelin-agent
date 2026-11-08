@@ -48,6 +48,20 @@ def from_okx_inst(inst: str) -> str:
     return inst
 
 
+def _limit_wait(exc: urllib.error.HTTPError, default: float = 5.0,
+                cap: float = 120.0) -> float:
+    """限流后该冷却多久：优先用交易所返回的 Retry-After，否则默认 5 秒，上限 120 秒。
+
+    没有这个冷却时，遇到 429 会「失败→下一轮立刻重试→封禁时间被延长」，
+    长期运行比一次性失败更糟。
+    """
+    try:
+        wait = float(exc.headers.get("Retry-After") or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        wait = 0.0
+    return min(max(wait, default), cap)
+
+
 def _round_price(price: float, tick: float = 0.1) -> float:
     """按最小变动价位取整价格（两个交易所共用）。"""
     return round(round(price / tick) * tick, 8)
@@ -188,12 +202,18 @@ class BinanceFuturesClient:
         # CRYPTOAGENT_FAPI_BASE 可整体覆盖（自建反代 / 换网络环境时用）
         self.base = base_url or os.getenv("CRYPTOAGENT_FAPI_BASE") or self.ENVS[self.env]
         self._last_call = 0.0
+        # 限流冷却截止时间（epoch 秒）：429/418 后进入冷却，期间所有请求快速失败，
+        # 避免「失败 → 立刻重试 → 封禁时间被延长」的恶性循环
+        self._cooldown_until = 0.0
         # symbol -> (tick_size, step_size, min_notional)，首次下单前拉一次 exchangeInfo
         self._filters: dict[str, tuple[float, float, float]] = {}
 
     # -- 内部 ---------------------------------------------------------
     def _throttle(self) -> None:
-        delta = time.time() - self._last_call
+        now = time.time()
+        if now < self._cooldown_until:
+            raise ExchangeError(f"交易所限流冷却中，剩余 {self._cooldown_until - now:.0f}s")
+        delta = now - self._last_call
         if delta < 0.05:
             time.sleep(0.05 - delta)
         self._last_call = time.time()
@@ -244,6 +264,12 @@ class BinanceFuturesClient:
                 code = f"[{payload.get('code')}] {payload.get('msg')}"
             except Exception:  # noqa: BLE001
                 code = detail[:200]
+            if exc.code in (418, 429):
+                wait = _limit_wait(exc)
+                self._cooldown_until = time.time() + wait
+                raise ExchangeError(
+                    f"交易所限流（HTTP {exc.code}），暂停 {wait:.0f}s 后再试"
+                ) from exc
             raise ExchangeError(f"HTTP {exc.code} {code}") from exc
         except urllib.error.URLError as exc:
             raise ExchangeError(
@@ -507,10 +533,15 @@ class OKXClient:
         # 首次用到时各拉一次。OKX 永续下单单位是「张」，必须靠 ctVal 换算。
         self._inst_cache: dict[str, dict] = {}
         self._pos_mode_cache = ""
+        # 限流冷却（与币安同构）：429 后一段时间内所有请求快速失败
+        self._cooldown_until = 0.0
 
     # -- 内部 ---------------------------------------------------------
     def _throttle(self) -> None:
-        delta = time.time() - self._last_call
+        now = time.time()
+        if now < self._cooldown_until:
+            raise ExchangeError(f"交易所限流冷却中，剩余 {self._cooldown_until - now:.0f}s")
+        delta = now - self._last_call
         if delta < 0.05:
             time.sleep(0.05 - delta)
         self._last_call = time.time()
@@ -591,6 +622,12 @@ class OKXClient:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")
+            if exc.code in (418, 429):
+                wait = _limit_wait(exc)
+                self._cooldown_until = time.time() + wait
+                raise ExchangeError(
+                    f"OKX 限流（HTTP {exc.code}），暂停 {wait:.0f}s 后再试"
+                ) from exc
             raise ExchangeError(f"HTTP {exc.code} {detail[:300]}") from exc
         except urllib.error.URLError as exc:
             raise ExchangeError(

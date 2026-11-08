@@ -720,8 +720,9 @@ class TestLiveOrderCleanup(unittest.TestCase):
             res = eng.execute(price=78000.0, reason="test")
             self.assertTrue(res["ok"], res)
 
-        # 顺序必须是：先撤单，再市价，再挂止损，最后挂止盈
-        self.assertEqual(calls[:2], ["set_leverage", "cancel_all"])
+        # 顺序必须是：先撤残留条件单、再设杠杆、再市价、再止损、最后止盈。
+        # 撤单必须在设杠杆之前：OKX 在该品种还有未成交条件单时会拒绝调整杠杆（59669）。
+        self.assertEqual(calls[:2], ["cancel_all", "set_leverage"])
         self.assertIn("market:BUY", calls)
         self.assertIn("STOP_MARKET", calls)
         self.assertIn("TAKE_PROFIT_MARKET", calls)
