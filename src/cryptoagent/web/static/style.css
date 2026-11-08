@@ -2161,10 +2161,17 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 图例沿用 3 列（5 项排成 3+2），比 2 列（2+2+1）少一行、不留孤项 */
   .evo-kpi b { font-size: 17px; }
   /* 账本表在 486 下仍会把 factor_library.xxx 挤成两行：归因列只是「0/20 笔」
-     这类进度信息（桌面端可查），隐掉它把宽度让给目标与改动。 */
+     这类进度信息（桌面端可查），隐掉它把宽度让给目标与改动；再用固定布局
+     给各列定宽，避免浏览器按内容反复挤压。 */
   #evoChangesTable th:nth-child(6),
   #evoChangesTable td:nth-child(6) { display: none; }
-  #evoChangesTable td:nth-child(4) { white-space: nowrap; }
+  #evoChangesTable { table-layout: fixed; }
+  #evoChangesTable th, #evoChangesTable td { padding: 8px 6px; }
+  #evoChangesTable th:nth-child(1), #evoChangesTable td:nth-child(1) { width: 70px; }
+  #evoChangesTable th:nth-child(4), #evoChangesTable td:nth-child(4) { width: 92px; }
+  #evoChangesTable th:nth-child(5), #evoChangesTable td:nth-child(5) { width: 54px; }
+  #evoChangesTable td:nth-child(4),
+  #evoChangesTable td:nth-child(5) { white-space: nowrap; }
 }
 @media (max-width: 370px) {
   .evo-kpis { grid-template-columns: 1fr; }

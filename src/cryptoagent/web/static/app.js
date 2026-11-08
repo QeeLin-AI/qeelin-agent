@@ -490,12 +490,17 @@ function renderEvoChanges(d) {
     } else if (a.need) {
       att = `${a.have || 0}/${a.need} 笔`;
     }
+    // 新建类改动没有「之前的值」，直接显示结果，避免「— → 新建因子文件」这种冗余
+    const hasBefore = it.before !== null && it.before !== undefined && it.before !== '';
+    const change = hasBefore
+      ? `${evoVal(it.before)} → ${evoVal(it.after)}`
+      : evoVal(it.after);
     const ts = String(it.applied_at || it.created_at || '');
     return `<tr>
       <td class="muted">${esc(ts.slice(5, 16))}</td>
       <td>${esc(EVO_KIND_CN[it.kind] || it.kind || '')}</td>
       <td>${esc(it.target || '')}</td>
-      <td>${esc(evoVal(it.before))} → ${esc(evoVal(it.after))}</td>
+      <td>${esc(change)}</td>
       <td><span class="evo-state ${cls}">${esc(st)}</span></td>
       <td class="muted">${esc(att)}</td>
     </tr>`;
