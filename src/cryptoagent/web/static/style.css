@@ -415,38 +415,43 @@ html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139
 }
 /* 主按钮：连接到所选交易所（切换）—— 视觉层级最高、操作最直接 */
 /* 可连接态：与另外三个按钮（.btn-sub）同色，仅以「整行置顶 + 更高」保持焦点 */
+/* 可连接态（默认/ready）：实心景泰蓝，整行主 CTA */
 #testnetBox .btn-switch {
   width: 100%; height: 40px; padding: 0 16px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--surface); color: var(--text-2);
+  border: 1px solid #2775b6; border-radius: var(--radius-sm);
+  background: #2775b6; color: #fff;
   font: 650 13.5px/1 var(--font); letter-spacing: .01em;
-  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
+  box-shadow: 0 4px 14px rgba(39, 117, 182, .26);
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
 }
 #testnetBox .btn-switch:hover:not(:disabled) {
-  background: var(--surface-2); border-color: var(--accent-line); color: var(--text);
+  background: #2f86cf; border-color: #2f86cf; color: #fff;
+  box-shadow: 0 6px 18px rgba(39, 117, 182, .34);
 }
-#testnetBox .btn-switch:active:not(:disabled) { transform: translateY(1px); }
+#testnetBox .btn-switch:active:not(:disabled) {
+  transform: translateY(1px); box-shadow: 0 2px 8px rgba(39, 117, 182, .26);
+}
 /* 禁用态：未配 Key 保持中性灰，不抢视觉 */
-#testnetBox .btn-switch:disabled { opacity: .45; cursor: not-allowed; }
+#testnetBox .btn-switch:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 #testnetBox .btn-switch:disabled:not(.is-connected) {
   border-color: var(--border); color: var(--muted); background: var(--surface);
 }
-/* 已连接态：绿点 + 青色描边，作为「当前所在账户」的明确反馈（区别于可连接的中性描边） */
+/* 已连接态：景泰蓝描边 + 绿点，作为「当前所在账户」的明确反馈（区别于可连接的实心态） */
 #testnetBox .btn-switch.is-connected {
-  background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
-  opacity: 1;
+  background: rgba(39, 117, 182, .10); border-color: #2775b6; color: #2775b6;
+  opacity: 1; box-shadow: none;
 }
 #testnetBox .btn-switch.is-connected::before { content: '● '; color: var(--ok); }
-/* 连接中态：旋转指示，避免被当成「禁用」 */
-#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: var(--text-2); }
+/* 连接中态：保留景泰蓝高亮 + 旋转指示，避免被当成「禁用」 */
+#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: #fff; }
 #testnetBox .btn-switch.is-loading::after {
   content: ''; width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid rgba(10, 186, 181, .4); border-top-color: var(--accent);
+  border: 2px solid rgba(255, 255, 255, .45); border-top-color: #fff;
   animation: btn-spin .6s linear infinite;
 }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
 #testnetBox .btn-switch:focus-visible, #testnetBox .btn-sub:focus-visible {
-  outline: 2px solid var(--accent-line); outline-offset: 2px;
+  outline: 2px solid #2775b6; outline-offset: 2px;
 }
 /* 其余三个：统一次级按钮，等宽栅格、统一描边/圆角/字号/交互 */
 #testnetBox .tn-secondary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
