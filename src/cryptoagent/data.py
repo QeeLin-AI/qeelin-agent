@@ -389,7 +389,7 @@ def _fetch_okx_funding(inst: str, since_ms: int) -> list[dict]:
         if before:
             params["before"] = before
         try:
-            batch = _get(f"{OKX}/api/v5/public/funding-rate", params, timeout=10).get("data") or []
+            batch = _get(f"{OKX}/api/v5/public/funding-rate-history", params, timeout=10).get("data") or []
         except Exception:  # noqa: BLE001 - funding 是增强数据，拉不到就停下
             break
         if not batch:
