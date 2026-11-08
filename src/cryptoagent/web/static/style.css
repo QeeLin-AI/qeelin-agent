@@ -1687,6 +1687,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* min-height 撑到 32 后，若 .tag 仍是行内块，文字会贴顶（多出来的高度掉到下方）；
      改成 inline-flex 才能真正垂直居中 */
   .top-right .tag { display: inline-flex; }
+  /* 手机端隐藏「缓存 …」数据源胶囊：诊断信息，窄屏优先让位给 LLM / 已运行 / 熔断 */
+  .top-right #dataSource { display: none; }
   .top-right .uptime.m-only { display: inline-flex; }
   .top-right .uptime.pc-only { display: none; }
   /* 盈亏区：横向排列时统计卡只剩 98px（还被 minmax 撑破），改为上下两段、卡片占满整行 */
