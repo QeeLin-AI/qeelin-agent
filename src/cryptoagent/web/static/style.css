@@ -300,6 +300,9 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
 .symbol-select:hover, .symbol-select:focus { border-color: var(--border); background-color: var(--surface-2); }
 .symbol-select option { background: var(--surface); color: var(--text); }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 强制刷新：桌面端显示文字，手机端断点切到纯图标（同一个按钮，
+   id / title / aria-label / 点击事件全部不变，app.js 无需改动）。 */
+.tb-clear-icon { display: none; }
 .tb-sep { width: 1px; height: 20px; background: var(--border); margin: 0 3px; }
 .tag {
   font-size: 11px; color: var(--muted); border: 1px solid var(--border-soft);
@@ -1172,9 +1175,28 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 }
 @media (max-width: 860px) {
   body { padding-left: 0; }
-  /* 手机端顶栏只保留关键状态与操作：数据源 / 模型两个胶囊让位；
-     熔断按钮回到与「强制刷新」相同的 .btn.ghost.sm 样式，不再单独放大。 */
-  #dataSource, #llmTag { display: none; }
+  /* 手机端顶栏：强制刷新收成刷新图标，移到「品种选择」所在行的最右端；
+     数据源 / LLM 两个状态标签恢复显示（DOM 顺序本就在熔断按钮左侧）；
+     熔断按钮完全不动——位置、文案、selected 状态与点击逻辑均保持原样。 */
+  #clearCacheBtn {
+    position: absolute; top: 9px; right: 18px; z-index: 3;
+    width: 32px; height: 32px; min-height: 32px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .tb-clear-text { display: none; }
+  /* 状态组整体换到第二行：图标独占「品种选择」行的右端，两者不抢同一块区域。
+     520px 以上同样生效，避免平板宽度下 top-right 与右上角图标相撞。 */
+  .top-right { flex: 1 1 100%; margin-left: 0; justify-content: flex-start; }
+  .tb-clear-icon { display: block; width: 15px; height: 15px; flex: none; }
+  /* 第二行的行情时间戳常比品种选择长（如 binance · 02:49:42），会把
+     max-content 第一列撑宽、把价格数字推向右侧与右上角图标相撞。
+     让该行元信息不参与列宽计算：第一列回到品种选择宽度，价格数字与
+     胶囊的列对齐关系不变，过长的时间戳在自身宽度内省略。 */
+  .price-meta-info { min-width: 0; contain: inline-size; }
+  .price-meta-info #liveTs {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .order-dock-body { max-height: min(34vh, 210px); }
   /* 窄屏 3 列放不下「1,820.16 USDT」，订单字段回退 2 列 3 行 */
   .order-dock-body .df-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1592,9 +1614,10 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 指标卡列数统一由 860px 主断点定义，此处不再重复声明 */
   .tb-context, .tb-sep { display: none; }
   .price { font-size: 17px; }
-  /* 数据源 / 模型是判断「当前跑的是什么」的关键信息，窄屏不再隐藏：
-     状态组整体换到第二行、左对齐排布，用截断上限防溢出。 */
-  .top-right { flex: 1 1 100%; justify-content: flex-start; gap: 6px 8px; }
+  /* 数据源 / LLM 恢复显示后，状态行整体换到第二行、左对齐；
+     间距与胶囊内边距略收紧，避免四个元素折行过多。 */
+  .top-right { flex: 1 1 100%; justify-content: flex-start; gap: 5px 6px; }
+  .top-right .tag, .top-right .uptime { padding: 4px 8px; }
   .top-right .btn.sm { min-height: 32px; }
   /* 设置页 5 个分区改横向滚动，不再折成两行占用高度 */
   .settings-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
@@ -1749,6 +1772,12 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 /* 极窄屏兜底：320–370px 下三列每列不足 100px，回退两列；持仓卡仍独占整行。
    放在所有 860px 补丁之后，确保列数规则生效。 */
 @media (max-width: 370px) {
+  /* 320–360px：右上角刷新图标与价格数字共享第一行，价格区轻微收紧让出间距；
+     金融数值仍是完整显示（不省略、不截断），只调字号与间隙。 */
+  .price-block { column-gap: 5px; }
+  .price-values { gap: 3px; }
+  .price { font-size: 14px; }
+  .pct { font-size: 10.5px; }
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stat-row > .stat:not(#posCard) b { font-size: clamp(16px, 5vw, 19px); }
   .top-right .tag { max-width: 110px; }
