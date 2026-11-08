@@ -1264,7 +1264,9 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .side-scroll.nav-more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent 100%); mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent 100%); }
   .side-scroll.nav-prev { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 22px); mask-image: linear-gradient(to right, transparent 0, #000 22px); }
   .side-scroll.nav-more.nav-prev { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%); }
-  .side-foot { padding: 0 0 0 10px; border: 0; border-left: 1px solid var(--border-soft); }
+  /* 手机端顶栏：主题按钮前的竖线彻底去掉——.sidebar 本身有 12px gap 做留白，
+     再保留 10px 左内边距只会把按钮往右推、白占顶栏宽度。 */
+  .side-foot { padding: 0; border: 0; }
   .side-foot-note { display: none; }
   .side-foot .btn { width: auto; }
   /* 手机端顶部横向导航寸土寸金：主题按钮只留日月图标，把宽度还给主菜单 */
@@ -1658,8 +1660,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .tab .nav-ico { display: block; width: 15px; height: 15px; }
   .tab .lbl-long { display: none; }
   .tab .lbl-short { display: inline; }
-  /* 主题按钮与左侧分割线留出呼吸位：原来只留 2px，32px 的按钮像是贴在线上。
-     这里取 8px，并把侧栏右内边距 12→8 补回来，导航可用宽度基本不变。 */
+  /* 主题按钮与左侧导航留 8px 呼吸位（竖线已去掉，这里只做间距）；
+     同时把侧栏右内边距 12→8 补回来，导航可用宽度基本不变。 */
   .side-foot { padding-left: 8px; }
   .sidebar { padding-right: 8px; }
   /* —— 顶栏（≤520）三处对齐修正 ——
