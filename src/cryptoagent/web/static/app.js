@@ -322,6 +322,14 @@ const evoVal = (v) => {
   if (typeof v === 'number') return Number(v).toFixed(4).replace(/\.?0+$/, '');
   return String(v);
 };
+// 账本 target 是「回滚时要定位的对象路径」（factor_library.momentum_168 /
+// position.trail_atr_mult），数据层必须保留完整值；表格只显示末段名字，
+// 完整路径挂 title。缩写只发生在展示层，回滚用的仍是原始 target。
+const evoShortTarget = (t) => {
+  const s = String(t || '');
+  const i = s.lastIndexOf('.');
+  return i >= 0 ? s.slice(i + 1) : s;
+};
 
 async function loadEvolution() {
   // 绩效数据随 status 轮询已有；这里只补「方案」与「账本」两个接口
@@ -499,7 +507,7 @@ function renderEvoChanges(d) {
     return `<tr>
       <td class="muted">${esc(ts.slice(5, 16))}</td>
       <td>${esc(EVO_KIND_CN[it.kind] || it.kind || '')}</td>
-      <td>${esc(it.target || '')}</td>
+      <td title="${esc(it.target || '')}">${esc(evoShortTarget(it.target))}</td>
       <td>${esc(change)}</td>
       <td><span class="evo-state ${cls}">${esc(st)}</span></td>
       <td class="muted">${esc(att)}</td>

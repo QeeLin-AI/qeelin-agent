@@ -2167,11 +2167,17 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   #evoChangesTable td:nth-child(6) { display: none; }
   #evoChangesTable { table-layout: fixed; }
   #evoChangesTable th, #evoChangesTable td { padding: 8px 6px; }
-  #evoChangesTable th:nth-child(1), #evoChangesTable td:nth-child(1) { width: 70px; }
+  /* 时间列 70px 装不下 11 个字符的「11-09 03:02」（约 73px）：固定布局下
+     单元格默认 overflow:visible，溢出部分会直接压到目标列上形成重叠。
+     给足 84px 并把字号降到 11.5px，同时统一裁切兜底。 */
+  #evoChangesTable th:nth-child(1), #evoChangesTable td:nth-child(1) { width: 84px; font-size: 11.5px; }
+  /* 「新建因子文件」6 个汉字约 75px，改动列给足 92px（内容区 80px）才不触发省略号 */
   #evoChangesTable th:nth-child(4), #evoChangesTable td:nth-child(4) { width: 92px; }
-  #evoChangesTable th:nth-child(5), #evoChangesTable td:nth-child(5) { width: 54px; }
+  #evoChangesTable th:nth-child(5), #evoChangesTable td:nth-child(5) { width: 52px; }
+  #evoChangesTable td:nth-child(1),
   #evoChangesTable td:nth-child(4),
   #evoChangesTable td:nth-child(5) { white-space: nowrap; }
+  #evoChangesTable td { overflow: hidden; text-overflow: ellipsis; }
 }
 @media (max-width: 370px) {
   .evo-kpis { grid-template-columns: 1fr; }
