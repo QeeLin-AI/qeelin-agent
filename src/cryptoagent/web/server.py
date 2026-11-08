@@ -92,6 +92,11 @@ class WebApp:
         self.cfg = cfg
         self.engine = TradingEngine(cfg)
         self.research_lock = threading.Lock()
+        # 手动研究改为后台异步跑：状态供前端轮询，避免 6 轮研究（实测 ~2 分钟）
+        # 同步阻塞 HTTP 线程、前端 180s 超时后报「响应不是 JSON」。
+        self._research_state: dict = {
+            "running": False, "started_at": None, "finished_at": None, "error": "",
+        }
         # 配置写锁：ThreadingHTTPServer 的多个请求线程 + 自动 evolve 线程共享
         # 同一个 AppConfig。逐字段 mutate 后全量 save 必须串行，否则会观察到
         # 「仓位上限已改、保证金上限没改」的中间态，回滚也会抹掉并发写入。
@@ -383,6 +388,7 @@ class WebApp:
         st["auto_arm"] = self.auto_arm_state
         st["auto_resume"] = self.auto_resume_state
         st["research_auto"] = self.research_auto_state
+        st["research_state"] = dict(self._research_state)
         st["risk"] = self.risk_config()
         st["account_view"] = "local"
         st["account_error"] = ""
@@ -695,12 +701,33 @@ class WebApp:
         return rows
 
     def research(self, iterations: int = 6) -> dict:
-        if not self.research_lock.acquire(blocking=False):
+        """后台异步跑一轮研究，立即返回；结果由前端轮询 latest / status.research_state。
+
+        6 轮研究要跑约 2 分钟（LLM 提议 + 三段回测），同步阻塞 HTTP 线程会让前端
+        180s 超时、拿到不完整响应报「响应不是 JSON」。改成后台线程后，接口秒回，
+        前端按 research_state.running 轮询直到完成。
+        """
+        state = self._research_state
+        if state.get("running"):
             raise ApiError("上一轮研究还在跑，请稍候", 409)
-        try:
-            return self._run_research_once(iterations)
-        finally:
-            self.research_lock.release()
+        state["running"] = True
+        state["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        state["finished_at"] = None
+        state["error"] = ""
+
+        def _worker() -> None:
+            try:
+                # 阻塞等锁：自动研究正占锁时就排队，而不是让用户再点一次 409。
+                with self.research_lock:
+                    self._run_research_once(iterations)
+            except Exception as exc:  # noqa: BLE001 - 记进状态，前端能看到
+                state["error"] = f"{type(exc).__name__}: {exc}"[:200]
+            finally:
+                state["running"] = False
+                state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        threading.Thread(target=_worker, daemon=True, name="manual-research").start()
+        return {"started": True, "state": dict(state)}
 
     def _run_research_once(self, iterations: int = 6) -> dict:
         """跑一轮研究并更新 last_research（调用方需已持有 research_lock）。"""

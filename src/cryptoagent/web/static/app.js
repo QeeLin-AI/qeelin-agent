@@ -2658,13 +2658,31 @@ function renderResearch(r, announce = false) {
   }
 }
 
+// 研究已在后端异步跑，这里轮询 status.research_state 直到完成。
+async function waitResearchDone(timeoutSec = 900) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutSec * 1000) {
+    const s = await api('/api/status');
+    const rs = s.research_state || {};
+    if (rs.error) throw new Error(rs.error);
+    if (!rs.running) return;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error('研究超时，请稍后在研究页刷新查看结果');
+}
+
 $('runResearch').addEventListener('click', async () => {
   const btn = $('runResearch');
   btn.disabled = true; btn.textContent = '挖掘中…';
   try {
-    const data = await api('/api/research', 'POST', { iterations: Number($('iterations').value) || 6 });
-    renderResearch(data, true);
-    toast(`研究完成，通过 ${data.accepted} 个`, 'ok');
+    const started = await api('/api/research', 'POST', { iterations: Number($('iterations').value) || 6 });
+    if (!started || !started.started) throw new Error('研究未启动');
+    await waitResearchDone();
+    const r = await api('/api/research/latest');
+    if (r) {
+      renderResearch(r, true);
+      toast(`研究完成，通过 ${r.accepted} 个`, 'ok');
+    }
   } catch (e) {
     toast(`研究失败：${e.message}`, 'err');
   } finally {

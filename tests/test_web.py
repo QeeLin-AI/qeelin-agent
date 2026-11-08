@@ -372,9 +372,18 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(status, 200)
 
     def test_research_endpoint_small(self):
+        import time
+
         status, body = self._post("/api/research", {"iterations": 2})
         self.assertEqual(status, 200)
-        data = body["data"]
+        self.assertTrue(body["data"].get("started"))
+        # 研究已改为后台异步，轮询状态直到完成
+        deadline = time.time() + 120
+        while time.time() < deadline and self.app._research_state.get("running"):
+            time.sleep(0.2)
+        self.assertFalse(self.app._research_state.get("running"), self.app._research_state.get("error"))
+        self.assertIsNotNone(self.app.last_research)
+        data = self.app.last_research
         self.assertEqual(len(data["rows"]), 2)
         self.assertIn("accepted", data)
 
@@ -409,7 +418,7 @@ class TestWebApi(unittest.TestCase):
 
     def test_latest_research_rebuilds_rows(self):
         """排行榜从 leaderboard.json 的 history 重建，不能是空表。"""
-        self._post("/api/research", {"iterations": 2})
+        self.app._run_research_once(2)
         self.app.last_research = None          # 模拟进程重启
         status, body = self._get("/api/research/latest")
         self.assertEqual(status, 200)
