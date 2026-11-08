@@ -414,38 +414,34 @@ html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139
   gap: 10px; margin-top: 14px; margin-left: 0;
 }
 /* 主按钮：连接到所选交易所（切换）—— 视觉层级最高、操作最直接 */
-/* 可连接态（默认/ready）：绿色描边，醒目但不抢「已连接」的填充层级 */
+/* 可连接态：与另外三个按钮（.btn-sub）同色，仅以「整行置顶 + 更高」保持焦点 */
 #testnetBox .btn-switch {
   width: 100%; height: 40px; padding: 0 16px;
-  border: 1px solid var(--ok); border-radius: var(--radius-sm);
-  background: var(--surface); color: var(--ok);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-2);
   font: 650 13.5px/1 var(--font); letter-spacing: .01em;
-  box-shadow: 0 0 0 1px rgba(47, 192, 138, .22), 0 4px 14px rgba(47, 192, 138, .16);
-  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
+  transition: background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
 }
 #testnetBox .btn-switch:hover:not(:disabled) {
-  background: rgba(47, 192, 138, .12); border-color: var(--ok); color: var(--ok);
-  box-shadow: 0 0 0 1px rgba(47, 192, 138, .35), 0 6px 18px rgba(47, 192, 138, .24);
+  background: var(--surface-2); border-color: var(--accent-line); color: var(--text);
 }
-#testnetBox .btn-switch:active:not(:disabled) {
-  transform: translateY(1px); box-shadow: 0 0 0 1px rgba(47, 192, 138, .22);
-}
-/* 禁用态默认降对比；未配 Key 的禁用态保持中性灰，不显绿（避免误读为「可连接」） */
-#testnetBox .btn-switch:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+#testnetBox .btn-switch:active:not(:disabled) { transform: translateY(1px); }
+/* 禁用态：未配 Key 保持中性灰，不抢视觉 */
+#testnetBox .btn-switch:disabled { opacity: .45; cursor: not-allowed; }
 #testnetBox .btn-switch:disabled:not(.is-connected) {
   border-color: var(--border); color: var(--muted); background: var(--surface);
 }
-/* 已连接态：青色描边 + 绿点，区别于「可连接」的纯绿描边 */
+/* 已连接态：绿点 + 青色描边，作为「当前所在账户」的明确反馈（区别于可连接的中性描边） */
 #testnetBox .btn-switch.is-connected {
   background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
-  box-shadow: none; opacity: 1;
+  opacity: 1;
 }
 #testnetBox .btn-switch.is-connected::before { content: '● '; color: var(--ok); }
-/* 连接中态：保留绿色高亮 + 旋转指示，避免被当成「禁用」 */
-#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: var(--ok); }
+/* 连接中态：旋转指示，避免被当成「禁用」 */
+#testnetBox .btn-switch.is-loading { opacity: 1; cursor: progress; color: var(--text-2); }
 #testnetBox .btn-switch.is-loading::after {
   content: ''; width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid rgba(47, 192, 138, .4); border-top-color: var(--ok);
+  border: 2px solid rgba(10, 186, 181, .4); border-top-color: var(--accent);
   animation: btn-spin .6s linear infinite;
 }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
@@ -468,6 +464,69 @@ html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139
 #testnetBox .btn-sub:disabled { opacity: .45; cursor: not-allowed; border-color: var(--border); color: var(--muted); }
 /* 窄屏：次级三按钮改为纵向堆叠，保持可读与点击区域 */
 @media (max-width: 720px) { #testnetBox .tn-secondary { grid-template-columns: 1fr; } }
+
+/* ---- 切换交易账户弹层（交易页 / 设置页「切换交易所」共用）---- */
+.acct-menu {
+  position: fixed; z-index: 60; min-width: 264px; max-width: 320px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 8px; color: var(--text);
+  font: 550 13px/1.4 var(--font);
+}
+.acct-menu[hidden] { display: none; }
+.acct-menu-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 6px 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--faint);
+  border-bottom: 1px solid var(--border-soft); margin-bottom: 6px;
+}
+.acct-menu-close {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.acct-menu-close:hover { color: var(--text); background: var(--surface-3); }
+.acct-sec-label {
+  padding: 8px 8px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint);
+}
+.acct-item { display: block; }
+.acct-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 10px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-2); text-align: left; cursor: pointer;
+  font: 550 13px/1.3 var(--font);
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.acct-head:hover { background: var(--surface-3); color: var(--text); border-color: var(--border); }
+.acct-item.is-current > .acct-head {
+  color: var(--text); border-color: var(--accent-line); background: var(--accent-soft);
+}
+.acct-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex: none; }
+.acct-item.is-current > .acct-head .acct-dot { background: var(--ok); box-shadow: 0 0 0 3px var(--accent-soft); }
+.acct-item.local > .acct-head .acct-dot { background: var(--faint); }
+.acct-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acct-tag { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.acct-check { font-size: 11px; font-weight: 700; color: var(--ok); white-space: nowrap; }
+.acct-live > .acct-confirm {
+  display: none; flex-direction: column; gap: 8px;
+  padding: 8px 10px 6px; margin: 2px 0; border-top: 1px dashed var(--border-soft);
+}
+.acct-live.open > .acct-confirm { display: flex; }
+.acct-confirm-input {
+  width: 100%; height: 32px; box-sizing: border-box; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font: 500 12.5px/1 var(--font);
+}
+.acct-confirm-input:focus { outline: none; border-color: var(--accent-line); }
+.acct-confirm-btn {
+  align-self: flex-end; height: 30px; padding: 0 14px;
+  border: 1px solid var(--up); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--up); font: 600 12.5px/1 var(--font); cursor: pointer;
+}
+.acct-confirm-btn:hover { background: var(--surface-3); }
+.acct-confirm-btn:disabled { opacity: .6; cursor: progress; }
+.acct-menu-foot { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-soft); }
+.acct-menu-foot .acct-head { color: var(--muted); }
+.acct-menu-foot .acct-head:hover { color: var(--text); }
 /* 亮色主题下顶栏与侧栏同为纯白 surface，靠清晰分隔线 + 柔和投影与浅灰页面拉开层次 */
 html[data-theme="light"] .topbar {
   background: var(--surface);

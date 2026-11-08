@@ -2876,17 +2876,147 @@ $('tnSwitchBtn').addEventListener('click', async () => {
   });
 });
 
-// 状态条上的「切换交易所」：直接展开当前模式对应的面板
-$('connSwitchBtn').addEventListener('click', () => {
-  // 交易所/API 设置已挪到「设置」页：先切页再展开对应面板
-  showTab('settings');
-  const scope = (lastStatus && lastStatus.mode === 'live' && !lastStatus.testnet) ? 'live' : 'testnet';
+// 状态条上的「切换交易所」：弹出已保存凭据的账户列表，直接点选切换
+(function () {
+  const menu = document.createElement('div');
+  menu.id = 'acctMenu'; menu.className = 'acct-menu'; menu.hidden = true;
+  document.body.appendChild(menu);
+})();
+
+const ACCT_EX_CN = { binance: '币安', okx: 'OKX' };
+const ACCT_ENV_CN = { demo: '模拟盘', live: '主网实盘' };
+
+function acctCurrentScope() {
+  if (lastStatus && lastStatus.mode === 'live' && lastStatus.armed)
+    return `${lastStatus.exchange}:${lastStatus.testnet ? 'demo' : 'live'}`;
+  return 'local';
+}
+function acctItemHtml(type, scope, name, tag, isCur, ex, env) {
+  const right = isCur
+    ? '<span class="acct-check">✓ 当前</span>'
+    : `<span class="acct-tag">${tag}</span>`;
+  const cls = `acct-item${isCur ? ' is-current' : ''}${type === 'live' ? ' acct-live' : ''}`;
+  let inner = `<button class="acct-head" data-type="${type}" data-scope="${scope}"${ex ? ` data-ex="${ex}"` : ''}${env ? ` data-env="${env}"` : ''}><span class="acct-dot"></span><span class="acct-name">${name}</span>${right}</button>`;
+  if (type === 'live') {
+    inner += `<div class="acct-confirm"><input class="acct-confirm-input" type="text" placeholder="输入：我确认使用真实资金" autocomplete="off" onpaste="return false" /><button class="acct-confirm-btn" data-ex="${ex}" data-env="${env}">确认切换</button></div>`;
+  }
+  return `<div class="${cls}">${inner}</div>`;
+}
+function acctBuildMenu() {
+  const menu = $('acctMenu');
+  const cur = acctCurrentScope();
+  const keys = (lastStatus && lastStatus.keys) || {};
+  let html = `<div class="acct-menu-head"><span>切换交易账户</span><button class="acct-menu-close" id="acctMenuClose" title="关闭">×</button></div>`;
+  html += acctItemHtml('local', 'local', '本地模拟', '本地撮合 · 不联网', cur === 'local');
+  const saved = [];
+  for (const ex of ['binance', 'okx']) for (const env of ['demo', 'live']) {
+    if (keys[ex] && keys[ex][env]) saved.push({ ex, env });
+  }
+  if (saved.length) {
+    html += `<div class="acct-sec-label">已保存凭据</div>`;
+    for (const { ex, env } of saved) {
+      const scope = `${ex}:${env}`;
+      html += acctItemHtml(env === 'live' ? 'live' : 'demo', scope,
+        `${ACCT_EX_CN[ex]} · ${ACCT_ENV_CN[env]}`, env === 'live' ? '真钱 · 需确认' : '假钱',
+        cur === scope, ex, env);
+    }
+  } else {
+    html += `<div class="acct-sec-label">还没有已保存的凭据</div>`;
+  }
+  html += `<div class="acct-menu-foot"><button class="acct-head acct-manage" data-action="manage"><span class="acct-name">＋ 管理 / 添加凭据</span></button></div>`;
+  menu.innerHTML = html;
+  menu.querySelectorAll('.acct-head[data-scope]').forEach((b) => {
+    b.addEventListener('click', () => acctOnPick(b.dataset.type, b.dataset.scope, b));
+  });
+  menu.querySelectorAll('.acct-confirm-btn').forEach((b) => {
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); acctLiveConfirm(b); });
+  });
+  const mg = menu.querySelector('.acct-manage');
+  if (mg) mg.addEventListener('click', () => { acctCloseMenu(); acctOpenPanel('testnet'); });
+  const close = $('acctMenuClose'); if (close) close.addEventListener('click', acctCloseMenu);
+}
+function acctOpenMenu(anchor) {
+  acctBuildMenu();
+  const menu = $('acctMenu');
+  menu.hidden = false; menu._anchor = anchor;
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let top = r.bottom + 8;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 8);
+  let left = r.left;
+  if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+  menu.style.top = top + 'px'; menu.style.left = left + 'px';
+}
+function acctCloseMenu() { const m = $('acctMenu'); if (m) { m.hidden = true; m._anchor = null; } }
+function acctOpenPanel(scope) {
   const boxId = scope === 'live' ? 'liveBox' : 'testnetBox';
+  showTab('settings');
   openPanel(boxId, scope === 'live' ? 'liveBtn' : 'testnetBtn');
   selectExchange(scope, (lastStatus && lastStatus.exchange) || 'binance');
   renderExchangePanel(scope);
   $(boxId).scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+async function acctOnPick(type, scope, headBtn) {
+  if (type === 'local') {
+    acctCloseMenu();
+    if (blockIfAutoRunning('断开连接')) return;
+    try { await api('/api/trading/disarm', 'POST', {}); toast('已回到本地模拟', 'ok'); poll(); }
+    catch (e) { toast(e.message, 'err'); }
+    return;
+  }
+  if (type === 'demo') {
+    const ex = scope.split(':')[0];
+    acctCloseMenu();
+    if (blockIfAutoRunning('切换交易所')) return;
+    const prev = headBtn.textContent;
+    headBtn.disabled = true; headBtn.textContent = '连接中…';
+    try {
+      const res = await armAccount({ mode: 'testnet', exchange: ex });
+      toast(`已切到${exCn(ex)}模拟盘（Demo），余额 ${fmt(res.balance)} USDT（假钱）`, 'ok');
+      closeModePanels(); poll();
+    } catch (e) { toast(`切换失败：${e.message}`, 'err'); headBtn.disabled = false; headBtn.textContent = prev; }
+    return;
+  }
+  if (type === 'live') {
+    const item = headBtn.closest('.acct-item');
+    $('acctMenu').querySelectorAll('.acct-live.open').forEach((o) => { if (o !== item) o.classList.remove('open'); });
+    item.classList.toggle('open');
+    const inp = item.querySelector('.acct-confirm-input');
+    if (inp) inp.focus();
+  }
+}
+async function acctLiveConfirm(btn) {
+  if (blockIfAutoRunning('切换交易所')) return;
+  const ex = btn.dataset.ex, env = btn.dataset.env;
+  const input = btn.previousElementSibling;
+  const phrase = input.value.trim();
+  btn.disabled = true; btn.textContent = '切换中…';
+  try {
+    const res = await armAccount({ mode: 'live', exchange: ex, testnet: false, confirm: phrase });
+    toast(`${exCn(ex)}主网实盘已解锁`, 'ok');
+    acctCloseMenu(); poll();
+  } catch (e) {
+    toast(`解锁失败：${e.message}`, 'err');
+    btn.disabled = false; btn.textContent = '确认切换';
+  }
+}
+function acctSwitchClick(anchor) {
+  const m = $('acctMenu');
+  if (!m.hidden && m._anchor === anchor) { acctCloseMenu(); return; }
+  acctOpenMenu(anchor);
+}
+const _acctCs = $('connSwitchBtn');
+if (_acctCs) _acctCs.addEventListener('click', (e) => { e.stopPropagation(); acctSwitchClick(_acctCs); });
+const _acctSs = $('setConnSwitch');
+if (_acctSs) _acctSs.addEventListener('click', (e) => { e.stopPropagation(); acctSwitchClick(_acctSs); });
+document.addEventListener('click', (e) => {
+  const m = $('acctMenu');
+  if (!m || m.hidden) return;
+  if (m.contains(e.target)) return;
+  if (e.target.closest && e.target.closest('#connSwitchBtn, #setConnSwitch')) return;
+  acctCloseMenu();
 });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') acctCloseMenu(); });
 
 // 交易页那行「已移到设置页」的链接
 const goSettings = $('goSettings');
@@ -2908,18 +3038,7 @@ $('connDisarmBtn').addEventListener('click', async () => {
   } catch (e) { toast(e.message, 'err'); }
 });
 
-// 设置页连接状态卡：切换交易所 = 展开当前模式的凭据面板
-const setConnSwitch = $('setConnSwitch');
-if (setConnSwitch) {
-  setConnSwitch.addEventListener('click', () => {
-    const scope = (lastStatus && lastStatus.mode === 'live' && !lastStatus.testnet) ? 'live' : 'testnet';
-    const boxId = scope === 'live' ? 'liveBox' : 'testnetBox';
-    openPanel(boxId, scope === 'live' ? 'liveBtn' : 'testnetBtn');
-    selectExchange(scope, (lastStatus && lastStatus.exchange) || 'binance');
-    renderExchangePanel(scope);
-    $(boxId).scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
-}
+// 设置页连接状态卡：切换交易所 = 弹出账户列表（见上方 acctSwitchClick）
 
 // 设置页连接状态卡：断开
 const setConnDisarm = $('setConnDisarm');
