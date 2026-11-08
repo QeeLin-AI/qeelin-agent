@@ -1769,6 +1769,11 @@ class TradingEngine:
             raise ValueError("品种不能为空")
         if symbol == self.cfg.market.symbol:
             return {"symbol": symbol, "changed": False}
+        # 切到当前环境不存在的合约，后续下单必然失败（OKX 模拟盘尤甚）。在这里
+        # 就拒绝，并把「当前环境能交易的品种」一并给出，避免切过去再撞 51001。
+        verdict = self.symbol_tradable(symbol)
+        if not verdict["ok"]:
+            raise ValueError(verdict["reason"])
         # 先与交易所核对，清理幽灵仓位（本地记着、但交易所实际已平）
         self._reconcile_position_with_exchange()
         with self.lock:
@@ -1818,37 +1823,92 @@ class TradingEngine:
         self._save()
         return {"mode": "paper", "armed": False}
 
-    def _okx_swap_symbols(self) -> set[str]:
-        """OKX 永续（SWAP）品种白名单（内部 symbol 集合），懒加载并缓存。
+    def _okx_demo_env(self) -> bool:
+        """当前 OKX 连接是模拟盘还是主网。
 
-        auto_rotate 在 okx 下只从这里面选品种，从源头避开 OKX 51001
-        「Instrument ID doesn't exist」——某些币安有永续、OKX 却没有的币种，
-        若不拦截会在切换 / 下单时才撞错。拉取失败则缓存空集合，调用方据此
-        退回「不过滤」的原行为，绝不因网络问题阻断轮动。
+        客户端自己的 testnet 标记最可信；未连接交易所时退回账户作用域
+        （okx:demo / okx:live）。OKX 用请求头 `x-simulated-trading: 1` 区分
+        模拟盘，且**品种清单与主网不是同一份**，必须按环境判断。
         """
-        cached = getattr(self, "_okx_swap_set", None)
-        if cached is not None:
-            return cached
+        client = getattr(self, "live_client", None)
+        if client is not None and hasattr(client, "testnet"):
+            try:
+                return bool(client.testnet)
+            except Exception:  # noqa: BLE001 - 读不到就按作用域推导
+                pass
+        try:
+            return self._scope().endswith(":demo")
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _okx_swap_symbols(self) -> set[str]:
+        """OKX 永续（SWAP）白名单（内部 symbol 集合），**按当前环境**拉取并缓存。
+
+        ⚠️ 必须分环境：OKX 模拟盘的永续清单与主网并不相同（实测主网 543 个、
+        模拟盘仅 191 个，ZEC / HYPE 只在主网）。拿主网清单去校验模拟盘账户，
+        会放行实际不存在的合约，下单时在 set_leverage 处撞
+        51001「Instrument ID doesn't exist」——这正是手动执行决策报错的根因。
+
+        缓存按 demo / live 分键，切换账户后不会串用另一套清单。拉取失败缓存
+        空集合，调用方据此退回「不过滤」，绝不因网络问题阻断轮动。
+        """
+        demo = self._okx_demo_env()
+        cache = getattr(self, "_okx_swap_cache", None)
+        if cache is None:
+            cache = self._okx_swap_cache = {}
+        hit = cache.get(demo)
+        if hit is not None:
+            return hit
         out: set[str] = set()
         try:
             import json
             import urllib.request
             from .netutil import ssl_context
+            headers = {"User-Agent": "cryptoagent"}
+            if demo:
+                headers["x-simulated-trading"] = "1"
             req = urllib.request.Request(
                 "https://www.okx.com/api/v5/public/instruments?instType=SWAP",
-                headers={"User-Agent": "cryptoagent"},
+                headers=headers,
             )
             with urllib.request.urlopen(req, timeout=10, context=ssl_context()) as resp:
                 js = json.loads(resp.read().decode("utf-8"))
             for it in (js.get("data") or []):
+                # 只收正常在交易的合约：suspend / preopen 状态下单同样会被拒
+                if str(it.get("state") or "live").lower() != "live":
+                    continue
                 inst = str(it.get("instId") or "")
                 if inst.endswith("-USDT-SWAP"):
-                    base = inst[: -len("-USDT-SWAP")]
-                    out.add(f"{base}USDT")
+                    out.add(f"{inst[: -len('-USDT-SWAP')]}USDT")
         except Exception:  # noqa: BLE001 - 白名单拉不到就不过滤，不能阻断轮动
             out = set()
-        self._okx_swap_set = out
+        cache[demo] = out
         return out
+
+    def symbol_tradable(self, symbol: str) -> dict:
+        """这个品种在「当前交易所 + 当前环境」能不能交易。
+
+        专门拦 OKX 模拟盘与主网品种清单不一致的情况：让调用方拿到一句能读懂的
+        原因，而不是把交易所的 51001 原样抛给用户。非 OKX，或白名单拉取失败时
+        一律放行——宁可在下单时由交易所报错，也不因公共接口抖动误拒真实下单。
+        """
+        sym = str(symbol or "").strip().upper()
+        if str((getattr(self, "state", None) or {}).get("exchange") or "") != "okx":
+            return {"ok": True, "reason": ""}
+        universe = self._okx_swap_symbols()
+        if not universe:
+            return {"ok": True, "reason": ""}
+        if sym in universe:
+            return {"ok": True, "reason": ""}
+        env = "模拟盘" if self._okx_demo_env() else "主网"
+        alts = [str(s).upper() for s in (self.cfg.market.symbols or [])
+                if str(s).upper() in universe and str(s).upper() != sym]
+        hint = ("；当前环境可交易：" + " / ".join(alts[:6])) if alts else ""
+        return {
+            "ok": False,
+            "reason": f"{sym} 在 OKX {env}没有永续合约{hint}",
+            "code": "symbol_unsupported",
+        }
 
     def _scan_opportunities(self) -> list[dict]:
         """扫全部品种的因子复合信号，返回按机会分降序的 [{symbol, composite, score, active}]。
@@ -3271,6 +3331,17 @@ class TradingEngine:
         # 「决策被风控拦截」。先与交易所对账（实盘），避免交易所侧止损/止盈已成交、
         # 本地缓存还挂着，导致一直等不到「平仓后再决策」。
         # 注意：别的品种持仓不影响本品种决策——组合层敞口由 _positions_for_risk 汇总。
+        # 当前品种在当前环境不可交易时不跑决策：白花一轮 LLM 调用，结论也执行不了。
+        # 典型场景是 OKX 模拟盘（只上线部分永续），主网有的币种模拟盘没有。
+        probe = self.symbol_tradable(str(self.cfg.market.symbol).upper())
+        if not probe["ok"]:
+            return {
+                "skipped": True,
+                "reason": probe["reason"],
+                "symbol": self.cfg.market.symbol,
+                "code": probe.get("code") or "symbol_unsupported",
+                "management": {},
+            }
         self._reconcile_position_with_exchange()
         held = self._get_position()
         if held:
@@ -3380,6 +3451,14 @@ class TradingEngine:
 
         if not decision and not order.get("quantity"):
             return {"ok": False, "error": "当前决策没有订单（风控未通过或策略观望）"}
+
+        # 下单前先确认这个品种在当前环境真的存在：OKX 模拟盘只上线部分永续，
+        # 不在清单里的品种会在 set_leverage 第一步就撞 51001，用户只看到
+        # 「Instrument ID doesn't exist」完全无从下手。这里给一句能读懂的拒绝。
+        verdict = self.symbol_tradable(str(self.cfg.market.symbol).upper())
+        if not verdict["ok"]:
+            return {"ok": False, "error": f"{verdict['reason']}，无法下单",
+                    "code": verdict.get("code") or "symbol_unsupported"}
 
         # 先与交易所核对，清理幽灵仓位，避免误判「已有持仓」而拒绝开仓
         self._reconcile_position_with_exchange()
