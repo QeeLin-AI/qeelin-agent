@@ -3254,7 +3254,8 @@ class TradingEngine:
                     # 回读交易所成交：市价单的 avgPrice 常为 0，手续费也不在订单响应里
                     detail = self._live_fill(self.cfg.market.symbol, res.order_id)
                     fill_px = float(detail["price"]) if detail and detail.get("price") else float(res.price or price)
-                    fee = float(detail["fee"]) if detail else 0.0
+                    # 成交明细可能有索引延迟：拿不到就用下单回执里的手续费（OKX 订单详情已经带回）
+                    fee = float(detail["fee"]) if detail else float(res.fee or 0.0)
                     # 数量必须用交易所回读的成交量：下单量会被 stepSize 量化，
                     # 用未量化的 qty 记账会让本地仓位与交易所长期偏离。
                     fill_qty = float(detail["qty"]) if detail and detail.get("qty") else float(res.qty or qty)
@@ -3360,7 +3361,8 @@ class TradingEngine:
                     gross = (exit_px - float(pos["entry"])) * float(pos["qty"]) * direction
                     if detail is not None:
                         gross = float(detail["pnl"])  # 交易所口径的已实现盈亏（不含手续费）
-                    fee = float(detail["fee"]) if detail else 0.0
+                    # 成交明细可能有索引延迟：拿不到就用下单回执里的手续费（OKX 订单详情已经带回）
+                    fee = float(detail["fee"]) if detail else float(res.fee or 0.0)
                     open_fee = float(pos.get("entry_fee") or 0.0)
                     if open_fee <= 0 and float(pos.get("entry") or 0.0) > 0:
                         open_fee = (

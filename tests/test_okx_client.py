@@ -102,19 +102,22 @@ class TestOKXOrderUnits(unittest.TestCase):
 
         def fake(method, path, params=None, signed=False, body=None):
             calls.append((method, path, params, body))
-            if path == "/api/v5/trade/order":
+            if path == "/api/v5/trade/order" and method == "POST":
                 return {"code": "0", "data": [{"ordId": "42", "sCode": "0"}]}
-            if path == "/api/v5/trade/fills":
-                return {"code": "0", "data": [{"fillPx": "70000"}]}
+            if path == "/api/v5/trade/order":      # 订单详情回读
+                return {"code": "0", "data": [{
+                    "ordId": "42", "avgPx": "70000", "accFillSz": "2", "fee": "-0.07",
+                }]}
             return {"code": "0", "data": []}
 
         c._request = fake
         res = c.place_market("BTCUSDT", "BUY", 0.02)
-        order = next(b for m_, p, _q, b in calls if p == "/api/v5/trade/order")
+        order = next(b for m_, p, _q, b in calls if p == "/api/v5/trade/order" and b)
         self.assertEqual(order["side"], "buy")
         self.assertEqual(order["sz"], "2")            # 0.02 BTC ÷ ctVal 0.01 = 2 张
         self.assertAlmostEqual(res.qty, 0.02)          # 对外仍回报币数
         self.assertAlmostEqual(res.price, 70000.0)
+        self.assertAlmostEqual(res.fee, 0.07)          # 负 fee 取反 → 正=支出
 
     def test_market_order_rejects_below_min_size(self):
         c = _client()

@@ -810,26 +810,29 @@ class OKXClient:
         raw = self._request("POST", "/api/v5/trade/order", body=body, signed=True)
         d = self._data(raw)
         oid = str(d[0].get("ordId", "")) if d else ""
-        # 市价单平均价要再查一次成交回填（接口不直接返回）。
-        # 成交刚落地时 fills 可能还没索引到，短暂重试两次，否则引擎只能拿
-        # 事前价格当成交价、手续费记 0，本地账本第一笔就与交易所偏离。
-        price = 0.0
+        # 成交回读优先用「订单详情」：/trade/fills 有 1~2 秒索引延迟（实测下单后
+        # 立刻查为空），而订单详情当场就有 avgPx / accFillSz / fee（负=扣费），
+        # 一次请求就把成交价、成交量、手续费全拿到。
+        price, filled, fee = 0.0, 0.0, 0.0
         for attempt in range(3):
             try:
-                fills = self._data(self._request(
-                    "GET", "/api/v5/trade/fills",
-                    {"instType": "SWAP", "instId": to_okx_inst(symbol), "ordId": oid, "limit": 1},
-                    signed=True,
+                rows = self._data(self._request(
+                    "GET", "/api/v5/trade/order",
+                    {"instId": to_okx_inst(symbol), "ordId": oid}, signed=True,
                 ))
-                if fills:
-                    price = float(fills[0].get("fillPx", 0.0) or 0.0)
-                    if price > 0:
+                if rows:
+                    row = rows[0]
+                    price = self._f(row.get("avgPx"))
+                    filled = self._f(row.get("accFillSz"))
+                    fee = -self._f(row.get("fee"))     # OKX 负数=扣费 → 正数=支出
+                    if price > 0 and filled > 0:
                         break
             except ExchangeError:
                 pass
             if attempt < 2:
-                time.sleep(0.25)
-        return OrderResult(ok=True, order_id=oid, price=price, qty=round(contracts * ct_val, 10), raw=raw)
+                time.sleep(0.2)
+        qty = round(filled * ct_val, 10) if filled > 0 else round(contracts * ct_val, 10)
+        return OrderResult(ok=True, order_id=oid, price=price, qty=qty, fee=fee, raw=raw)
 
     def place_stop_market(
         self,
