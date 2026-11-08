@@ -76,6 +76,11 @@ def _stats(rows: list[dict]) -> dict:
     }
 
 
+def stats_of(rows: list[dict]) -> dict:
+    """单组统计（供进化归因复用同一口径，避免再造一套算法）。"""
+    return _stats([r for r in (rows or []) if isinstance(r, dict)])
+
+
 def _group(rows: list[dict], key_fn) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for r in rows:

@@ -1758,9 +1758,80 @@ class WebApp:
             "diagnosis": str((prop or {}).get("diagnosis") or "")[:160],
             "prev": prev,
         })
+        # 进化账本：把这次参数改动连同「应用时的基线」一起记账。
+        # 参数类改动没有历史回放能力，所以不做事前闸门，而是等应用后新增
+        # 20 笔平仓再归因：变差会被标 degraded，可按 id 一键回滚。
+        try:
+            from ..evolution import get_governor
+
+            gov = get_governor(self.cfg.runs_dir)
+            perf_snap = self.engine.performance_snapshot(force=True)
+            for c in verdict["changes"]:
+                group, _short, attr = FIELD_ROUTE[c["key"]]
+                gov.record_applied(
+                    kind="config",
+                    target=f"{group}.{attr}",
+                    before=c["from"],
+                    after=c["to"],
+                    source="settings_evolver",
+                    rationale=str((prop or {}).get("diagnosis") or ""),
+                    kpi=perf_snap,
+                )
+        except Exception:  # noqa: BLE001 - 记账失败不影响已生效的配置
+            pass
         out["applied"] = True
         out["risk"] = self.risk_config()
         return out
+
+    def evolution_changes(self, payload: dict | None = None) -> dict:
+        """进化账本：列出全部改动 + 每条的「应用后归因」结论。"""
+        from ..evolution import get_governor
+
+        gov = get_governor(self.cfg.runs_dir)
+        limit = int((payload or {}).get("limit") or 50)
+        rows = self.engine._scoped_rows("position_history")
+        return gov.changes_with_attribution(rows, limit=limit)
+
+    def evolution_rollback(self, payload: dict) -> dict:
+        """按 change_id 回滚到那次改动前的值（可回滚任意历史改动，不只最后一条）。"""
+        from ..config import config_path, save_config
+        from ..evolution import get_governor
+
+        cid = str((payload or {}).get("id") or "").strip()
+        if not cid:
+            raise ApiError("缺少 id", 400)
+        gov = get_governor(self.cfg.runs_dir)
+        rec = gov.ledger.get(cid)
+        if not rec:
+            raise ApiError("找不到该改动记录", 404)
+        if rec.get("status") not in ("applied", "degraded", "confirmed"):
+            raise ApiError(f"该改动状态为 {rec.get('status')}，不可回滚", 400)
+        grp, _, key = str(rec.get("target") or "").partition(".")
+        obj = getattr(self.cfg, grp, None)
+        if obj is None or not hasattr(obj, key):
+            raise ApiError(f"目标 {rec.get('target')} 在当前配置中不存在", 400)
+        snap = self._settings_snapshot()
+        setattr(obj, key, rec.get("before"))
+        # 回滚后仍要满足保证金不等式，否则整体撤销
+        pos = float(self.cfg.risk.max_position_pct)
+        slots = max(1, int(self.cfg.risk.max_concurrent_positions or 1))
+        margin = float(self.cfg.risk.max_margin_usage_pct)
+        if pos * slots > margin + 1e-9:
+            self._settings_restore(snap)
+            raise ApiError(
+                f"回滚后 {pos:.0%}×{slots} 超过保证金上限 {margin:.0%}，已撤销本次回滚", 400
+            )
+        try:
+            save_config(self.cfg, config_path())
+        except OSError:
+            pass
+        gov.rollback(cid)
+        return {
+            "rolled_back": cid,
+            "target": rec.get("target"),
+            "value": rec.get("before"),
+            "risk": self.risk_config(),
+        }
 
     def settings_evolve_state(self) -> dict:
         st = self.engine.state.setdefault("settings_evolve", {})
@@ -2681,6 +2752,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "data": app.settings_evolve(payload)})
         if path == "/api/settings/evolve/auto":
             return self._json({"ok": True, "data": app.set_settings_evolve(payload)})
+        if path == "/api/evolution/changes":
+            return self._json({"ok": True, "data": app.evolution_changes(payload)})
+        if path == "/api/evolution/rollback":
+            return self._json({"ok": True, "data": app.evolution_rollback(payload)})
         if path == "/api/live":
             data = app.start_live() if payload.get("on", True) else app.stop_live()
             return self._json({"ok": True, "data": data})
