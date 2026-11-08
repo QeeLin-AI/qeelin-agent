@@ -380,6 +380,53 @@ def _okx_rows_to_df(rows: list[list]) -> pd.DataFrame:
     return _fill_extra_fields(df)
 
 
+def _fetch_okx_funding(inst: str, since_ms: int) -> list[dict]:
+    """拉 OKX 永续历史资金费率（从最新往回翻到 since_ms 之前）。"""
+    rows: list[dict] = []
+    before = ""
+    for _page in range(200):  # 上限保护，避免翻页死循环
+        params: dict = {"instId": inst, "limit": "100"}
+        if before:
+            params["before"] = before
+        try:
+            batch = _get(f"{OKX}/api/v5/public/funding-rate", params, timeout=10).get("data") or []
+        except Exception:  # noqa: BLE001 - funding 是增强数据，拉不到就停下
+            break
+        if not batch:
+            break
+        rows.extend(batch)
+        oldest = int(batch[-1].get("fundingTime") or 0)
+        if oldest <= since_ms or len(batch) < 100:
+            break
+        before = str(oldest)
+    return rows
+
+
+def _attach_okx_funding(df: pd.DataFrame, inst: str) -> pd.DataFrame:
+    """把 OKX 资金费率对齐到 K 线（8 小时一条，其余 bar 为 0）。
+
+    资金费率拿不到/对齐失败时静默保持 0，绝不阻断行情加载——它只是增强信号。
+    """
+    try:
+        start_ms = int(df.index[0].timestamp() * 1000)
+        fr_rows = _fetch_okx_funding(inst, start_ms)
+        if not fr_rows:
+            return df
+        funding = pd.Series(0.0, index=df.index)
+        for item in fr_rows:
+            ft = int(item.get("fundingTime") or 0)
+            if ft < start_ms:
+                continue
+            ts = pd.to_datetime(ft, unit="ms", utc=True)
+            idx = funding.index.get_indexer([ts], method="nearest")[0]
+            if 0 <= idx < len(funding):
+                funding.iloc[idx] = float(item.get("fundingRate") or 0.0)
+        df["funding_rate"] = funding.values
+    except Exception:  # noqa: BLE001 - 单品种 funding 失败不影响行情
+        pass
+    return df
+
+
 def _fetch_okx(cfg: MarketConfig, need: int) -> pd.DataFrame:
     """OKX U 本位永续历史 K 线（公开接口，100 根/次，用 after 往前翻）。"""
     inst = okx_inst(cfg.symbol)
@@ -410,6 +457,7 @@ def _fetch_okx(cfg: MarketConfig, need: int) -> pd.DataFrame:
     if not rows:
         raise DataError("okx 返回空数据")
     df = _okx_rows_to_df(rows)
+    df = _attach_okx_funding(df, inst)
     # OKX 的 volume 是「张数」，量纲和币安不同，用成交额近似还原成 base 量
     return df.tail(need)
 
