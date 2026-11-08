@@ -1994,7 +1994,9 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 }
 
 /* ============ 进化页 ============ */
-.evo-top { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+/* 两张卡按各自内容高度对齐：配置方案卡内容少，强行等高会在底部留一大块空白 */
+.evo-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; align-items: start; }
+.evo-top > .card { margin-bottom: 0; }
 .evo-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 14px; font-size: 12px; color: var(--muted); }
 .evo-meta b { color: var(--text); font-weight: 600; }
 .evo-progress { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; }
