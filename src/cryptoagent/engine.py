@@ -427,6 +427,8 @@ class TradingEngine:
                 _DEAD_UNTIL.clear()
                 self.refresh_data(force=True)
                 print(f"[data] 行情源已切到 {exchange}：{self.data_source}")
+                if exchange == "okx" and not str(self.data_source).startswith("okx"):
+                    self._retry_okx_source()
             except Exception as exc:  # noqa: BLE001
                 self.last_error = f"切换行情源失败：{type(exc).__name__}: {exc}"
                 print(f"[data] {self.last_error}")
@@ -435,6 +437,33 @@ class TradingEngine:
                 self._reloading = False
 
         threading.Thread(target=_worker, daemon=True, name="reload-market").start()
+
+    def _retry_okx_source(self, max_attempts: int = 4, base_delay: float = 6.0) -> None:
+        """OKX 行情源 fallback 到别家后，后台退避重试直到切回 OKX。
+
+        OKX 历史 K 线要翻页 6000 根（60 页串行），偶发超时会被 fetch_binance
+        标记 dead 10 分钟（DEAD_COOLDOWN）；此后每次刷新都跳过 OKX、一直显示
+        「币安永续」，用户切到 OKX 却看到币安标签会以为没切成功。这里在后台清
+        熔断 + force 重拉，成功即恢复，避免来源标签长期挂错。
+        """
+        if self.state.get("exchange", "binance") != "okx":
+            return
+
+        def _worker() -> None:
+            from .data import OKX, _DEAD_UNTIL
+
+            for i in range(max_attempts):
+                time.sleep(base_delay * (i + 1))
+                try:
+                    _DEAD_UNTIL.pop(OKX, None)
+                    _df, src = self.refresh_data(force=True)
+                    if str(src or "").startswith("okx"):
+                        print(f"[data] 行情源已恢复 okx：{src}")
+                        return
+                except Exception:  # noqa: BLE001 - 单次失败继续下一次重试
+                    pass
+
+        threading.Thread(target=_worker, daemon=True, name="okx-source-retry").start()
 
     def start_data_load(self) -> None:
         """后台线程加载 K 线，不阻塞 Web 服务启动（窗口秒开）。
@@ -1593,6 +1622,8 @@ class TradingEngine:
             self._sync_position_view()
             self._save()
         df, src = self.refresh_data()
+        if self.state.get("exchange", "binance") == "okx" and not str(src or "").startswith("okx"):
+            self._retry_okx_source()
         if df is None or not len(df):
             # 品种已经切过去了，但行情没拿到：宁可 price 返回 None，也不要拿
             # self.df 里的旧品种价格冒充新品种（那是错价下单的源头）。
@@ -1674,20 +1705,35 @@ class TradingEngine:
             self.scan_state["error"] = ""
 
         def _work() -> None:
-            rows: list[dict] = []
-            err = ""
-            try:
-                rows = self._scan_opportunities()
-            except Exception as exc:  # noqa: BLE001 - 扫描失败不影响交易主链路
-                err = f"{type(exc).__name__}: {exc}"[:200]
-            with self.lock:
-                self.opportunities = rows
-                self.scan_state["scanning"] = False
-                self.scan_state["last_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                self.scan_state["error"] = err
+            # 用 dirty 标志循环：品种增删发生在扫描进行中时，扫完旧列表再补扫一次
+            # 基于最新 market.symbols 的结果，避免机会榜一直挂着已删/缺新品种。
+            while True:
+                rows: list[dict] = []
+                err = ""
+                try:
+                    rows = self._scan_opportunities()
+                except Exception as exc:  # noqa: BLE001 - 扫描失败不影响交易主链路
+                    err = f"{type(exc).__name__}: {exc}"[:200]
+                with self.lock:
+                    self.opportunities = rows
+                    self.scan_state["scanning"] = False
+                    self.scan_state["last_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    self.scan_state["error"] = err
+                    if self.scan_state.get("dirty"):
+                        self.scan_state["dirty"] = False
+                        self.scan_state["scanning"] = True
+                        continue
+                    break
 
         threading.Thread(target=_work, name="opportunity-scan", daemon=True).start()
         return dict(self.scan_state)
+
+    def invalidate_scan_cache(self) -> None:
+        """品种增删后失效机会榜缓存；若有扫描在跑，标记脏、扫完自动重扫。"""
+        with self.lock:
+            self.opportunities = []
+            self.scan_state["last_ts"] = 0.0
+            self.scan_state["dirty"] = True
 
     def _top_symbols(self, k: int | None = None) -> list[str]:
         """按机会分返回前 K 个「未持仓且达阈值」的品种，供一轮内依次决策。

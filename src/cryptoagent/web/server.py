@@ -1123,6 +1123,9 @@ class WebApp:
         ex_map[sym] = [exchange]
         self.cfg.market.symbol_exchanges = ex_map
         self._prefetch_error.pop(sym, None)
+        # 机会榜缓存失效 + 后台重扫，否则榜单还挂着旧的品种列表
+        self.engine.invalidate_scan_cache()
+        self.engine.start_scan_async()
         saved = True
         try:
             save_config(self.cfg, config_path())
@@ -1162,6 +1165,9 @@ class WebApp:
         if self.cfg.market.symbol_exchanges:
             self.cfg.market.symbol_exchanges.pop(sym, None)
         self._prefetch_error.pop(sym, None)
+        # 机会榜缓存失效 + 后台重扫，否则榜单还挂着已删的品种
+        self.engine.invalidate_scan_cache()
+        self.engine.start_scan_async()
         saved = True
         try:
             save_config(self.cfg, config_path())
