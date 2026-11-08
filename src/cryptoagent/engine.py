@@ -508,20 +508,51 @@ class TradingEngine:
             if isinstance(r, dict) and self._row_in_scope(r, scope)
         ]
 
+    @classmethod
+    def _counted_fees(cls, fills: list[dict]) -> float:
+        """已发生、且需要单独计入「已实现盈亏」的手续费总额。
+
+        口径（用户 2026-11-08 定）：浮动盈亏与平仓 pnl 都只反映价格变动（毛额），
+        手续费**在发生那一刻**直接计入已实现盈亏——开仓费开仓就扣，平仓费平仓再扣，
+        既不摊进浮盈，也不留到平仓时一次性从平仓盈亏里扣。
+
+        兼容性：`fee_mode="gross"` 是本口径写下的标记。更早的旧流水里
+        `position_history.pnl` 已经扣过平仓费（但**没扣过开仓费**），所以
+        - OPEN 的 fee 一律计入（补上历史一直漏掉的开仓费，不是重复扣）；
+        - 旧 CLOSE 的 fee 不计入（已在旧 pnl 里）；
+        - 新 CLOSE 带 `fee_mode="gross"` 才计入（新 pnl 是毛额）。
+        """
+        return round(sum(float(f.get("fee") or 0.0) for f in cls._fee_rows(fills)), 6)
+
+    @classmethod
+    def _fee_rows(cls, fills: list[dict]):
+        """筛出需要单独计入已实现盈亏的费用流水（累计与日历共用，别各写一套）。"""
+        for f in fills:
+            if isinstance(f, dict) and (
+                str(f.get("action") or "").upper() == "OPEN"
+                or f.get("fee_mode") == "gross"
+            ):
+                yield f
+
     def _pnl_summary(self, scope: str | None = None) -> dict:
-        """当前账户的累计已实现盈亏。
+        """当前账户的累计已实现盈亏 = Σ(平仓毛盈亏) − Σ(已发生手续费)。
 
         必须用全量 `position_history` 聚合，不能拿 `status()` 里那 30 条算：
         页面上写的是「累计」，只加最近 30 笔会随窗口滚动而变小。
+        胜率/笔数仍只按平仓记录统计，手续费不是一笔「交易」。
         """
         scope = self._scope() if scope is None else scope
         rows = self._scoped_rows("position_history", scope)
+        fees_paid = self._counted_fees(self._scoped_rows("fills", scope))
         pnls = [float(r.get("pnl") or 0.0) for r in rows]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
+        gross_pnl = round(sum(pnls), 6)
         return {
             "scope": scope,
-            "realized": round(sum(pnls), 4),
+            "realized": round(gross_pnl - fees_paid, 6),
+            "gross_pnl": gross_pnl,
+            "fees_paid": fees_paid,
             "trades": len(pnls),
             "wins": len(wins),
             "losses": len(losses),
@@ -1151,6 +1182,7 @@ class TradingEngine:
             "plan_price": round_price(plan_price) if plan_price else None,
             "slippage_bps": slip_bps,
             "fee": round(fee, 4),
+            "fee_mode": "gross",   # 本笔手续费单独计入已实现盈亏，不摊进平仓 pnl
             "reason": reason,
             "account_scope": self._scope(),
         }
@@ -1160,7 +1192,11 @@ class TradingEngine:
 
     def _record_close(self, pos: dict, exit_price: float, pnl: float, reason: str, mode: str,
                       rule: str = "") -> None:
-        """把一次平仓写进持仓历史：持仓历史表 + 每日盈亏统计都靠它。"""
+        """把一次平仓写进持仓历史：持仓历史表 + 每日盈亏统计都靠它。
+
+        `pnl` 是**价格变动毛额**，与平仓前的浮盈同口径；手续费由成交流水单独
+        计入累计已实现盈亏，不在这里扣。
+        """
         # 分析师权重校准：用「市场实际方向」而非这笔仓的盈亏评判立场
         # （开仓方向由交易员定，不该算到分析师头上）。
         stances = pos.get("analyst_stances") or []
@@ -1195,7 +1231,7 @@ class TradingEngine:
                 "entry": float(pos.get("entry") or 0),
                 "exit": round_price(float(exit_price or 0)),
                 "pnl": round(float(pnl or 0), 4),
-                # 开仓费单列：pnl 已是「毛盈亏 − 双边费」的净额，审计时靠它对账
+                # 开仓费单列：pnl 是毛额，审计「毛 − 开仓费 − 平仓费」时靠它对账
                 "fee_open": round(float(pos.get("entry_fee") or 0.0), 4),
                 "leverage": pos.get("leverage"),
                 # 自迭代要用的量：没有这三项，事后连「赚了几个 R」都算不出来
@@ -1227,18 +1263,20 @@ class TradingEngine:
         fill = price * (1 - slip) if self._pos_side(pos) == "LONG" else price * (1 + slip)
         pnl = (fill - pos["entry"]) * pos["qty"] * direction
         fee = pos["qty"] * fill * self.cfg.backtest.costs.fee_bps / 10_000.0
-        # 开仓费在 _paper_open 已从账本扣过，这里不能再减一次；但流水/统计的 pnl
-        # 必须是「这笔交易完整净额」（双边费），否则累计盈亏与权益曲线对不上。
+        # 平仓 pnl 只记价格变动（毛额），与平仓前的「浮盈」同口径：
+        # 开仓费开仓时已进已实现，平仓费由本条流水的 fee 单独进已实现，
+        # 两者都不从这笔 pnl 里再扣一次。
         open_fee = float(pos.get("entry_fee") or 0.0)
         if open_fee <= 0 and float(pos.get("entry") or 0.0) > 0:
             open_fee = (
                 float(pos["entry"]) * float(pos["qty"])
                 * self.cfg.backtest.costs.fee_bps / 10_000.0
             )
-        pnl_net = pnl - fee - open_fee
+        # 连亏风控看真实到手，仍按完整净额判断（只是不写进流水）
+        net_for_risk = pnl - fee - open_fee
         self.state["equity"] += pnl - fee
         self.state["consecutive_losses"] = (
-            self.state["consecutive_losses"] + 1 if pnl_net < 0 else 0
+            self.state["consecutive_losses"] + 1 if net_for_risk < 0 else 0
         )
         rec = {
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1249,13 +1287,14 @@ class TradingEngine:
             "price": round_price(fill),
             "fee": round(fee, 4),
             "fee_open": round(open_fee, 4),
-            "pnl": round(pnl_net, 4),
+            "fee_mode": "gross",
+            "pnl": round(pnl, 4),
             "reason": reason,
             "account_scope": self._scope(),
         }
         self.state["fills"].append(rec)
         self.state["fills"] = self.state["fills"][-500:]
-        self._record_close(pos, fill, pnl_net, reason, "paper", rule=rule)
+        self._record_close(pos, fill, pnl, reason, "paper", rule=rule)
         self._drop_position(pos.get("symbol"))
         return rec
 
@@ -1443,7 +1482,10 @@ class TradingEngine:
             # OKX 部分场景 pnl 为空：退回按开仓价自己算价格差
             direction = 1.0 if self._pos_side(pos) == "LONG" else -1.0
             gross = (exit_px - float(pos.get("entry") or 0.0)) * qty * direction
-        pnl = gross - fee
+        # 与主动平仓同口径：pnl 只记价格变动毛额，平仓手续费由本条流水单独
+        # 计入累计已实现盈亏，不在这里扣。
+        pnl = gross
+        net_for_risk = gross - fee
         ts_ms = max(int(r.get("ts_ms") or 0) for r in picked)
         ts = (
             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_ms / 1000))
@@ -1461,6 +1503,7 @@ class TradingEngine:
                     "qty": round(qty, 6),
                     "price": round_price(exit_px),
                     "fee": round(fee, 6),
+                    "fee_mode": "gross",
                     "pnl": round(pnl, 4),
                     "reason": "exchange",
                     "order_id": order_id,
@@ -1471,19 +1514,20 @@ class TradingEngine:
                 }
             )
             self.state["fills"] = self.state["fills"][-500:]
-            self.state["equity"] = float(self.state.get("equity") or 0.0) + pnl
+            self.state["equity"] = float(self.state.get("equity") or 0.0) + net_for_risk
             self.state["consecutive_losses"] = (
                 int(self.state.get("consecutive_losses") or 0) + 1
-                if pnl < 0
+                if net_for_risk < 0
                 else 0
             )
             self._record_close(pos, exit_px, pnl, "exchange", "live", rule="exchange")
             self._save()
         self._log_live("CLOSE", str(pos.get("side")), qty, exit_px, order_id)
         self._notify(
-            "info" if pnl >= 0 else "critical",
+            "info" if net_for_risk >= 0 else "critical",
             f"{pos.get('side')} 已由交易所平仓（补记）",
-            f"成交价 {round_price(exit_px)}，已实现盈亏 {pnl:+,.2f} U（止损/止盈或手动平仓）",
+            f"成交价 {round_price(exit_px)}，价格盈亏 {pnl:+,.2f} U，"
+            f"平仓手续费 {fee:,.2f} U（费用直接计入累计已实现盈亏）",
             {"symbol": symbol, "pnl": round(pnl, 2), "reason": "exchange"},
         )
         return {"qty": qty, "price": exit_px, "fee": fee, "pnl": pnl}
@@ -3021,8 +3065,8 @@ class TradingEngine:
                         "side": side,
                         "qty": fill_qty,
                         "entry": fill_px,
-                        # 开仓手续费随仓固化：平仓时用它算净盈亏，展示层用它算净浮盈。
-                        # 不落这一步，累计盈亏会系统性高估 Σ(开仓费)。
+                        # 开仓手续费随仓固化：供审计与连亏风控使用。费用本身在开仓时
+                        # 已由这条 OPEN 流水单独计入累计已实现盈亏，平仓不再重复扣。
                         "entry_fee": round(fee, 8),
                         "leverage": lev,
                         "stop": stop,
@@ -3047,6 +3091,7 @@ class TradingEngine:
                                 (fill_px - plan_px) / plan_px * 10_000.0, 2
                             ) if plan_px else None,
                             "fee": round(fee, 6),
+                            "fee_mode": "gross",
                             "reason": f"live:{res.order_id}",
                             "account_scope": self._scope(),
                         }
@@ -3117,15 +3162,15 @@ class TradingEngine:
                     if detail is not None:
                         gross = float(detail["pnl"])  # 交易所口径的已实现盈亏（不含手续费）
                     fee = float(detail["fee"]) if detail else 0.0
-                    # 净盈亏 = 毛盈亏 − 平仓费 − 开仓费。历史版本只扣平仓费，
-                    # 导致「累计已实现」比真实权益系统性高估 Σ(开仓费)（每笔 ≈2.5U）。
                     open_fee = float(pos.get("entry_fee") or 0.0)
                     if open_fee <= 0 and float(pos.get("entry") or 0.0) > 0:
                         open_fee = (
                             float(pos["entry"]) * float(pos["qty"])
                             * float(self.cfg.backtest.costs.fee_bps or 0.0) / 10_000.0
                         )
-                    pnl = gross - fee - open_fee
+                    # 平仓 pnl = 价格变动毛额，与平仓前浮盈同口径。开仓费开仓时已入账，
+                    # 平仓费由本条 CLOSE 流水单独入账，都不从 pnl 里扣。
+                    pnl = gross
                     self.state["fills"].append(
                         {
                             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -3136,6 +3181,7 @@ class TradingEngine:
                             "price": round_price(exit_px),
                             "fee": round(fee, 6),
                             "fee_open": round(open_fee, 6),
+                            "fee_mode": "gross",
                             "pnl": round(pnl, 4),
                             "reason": reason,
                             "order_id": res.order_id,
@@ -3156,7 +3202,8 @@ class TradingEngine:
                     env_label = "模拟盘" if self.state.get("testnet", True) else "主网实盘"
                     self._notify("info" if pnl >= 0 else "critical",
                                  f"{pos['side']} 平仓（{env_label}）",
-                                 f"已实现盈亏 {pnl:+,.2f} U（{reason}）",
+                                 f"价格盈亏 {pnl:+,.2f} U，平仓手续费 {fee:,.2f} U"
+                                 f"（费用直接计入累计已实现盈亏；{reason}）",
                                  {"symbol": sym, "pnl": round(pnl, 2), "reason": reason})
                     return {"ok": True, "mode": "live", "order_id": res.order_id}
                 except ExchangeError as exc:
@@ -3168,7 +3215,8 @@ class TradingEngine:
             # A2：平仓后报告已实现盈亏（paper = 本地模拟撮合，不进交易所）
             self._notify("info" if rec["pnl"] >= 0 else "critical",
                          f"{pos['side']} 平仓（本地模拟）",
-                         f"已实现盈亏 {rec['pnl']:+,.2f} U（{reason}）",
+                         f"价格盈亏 {rec['pnl']:+,.2f} U，平仓手续费 {rec['fee']:,.2f} U"
+                         f"（费用直接计入累计已实现盈亏；{reason}）",
                          {"symbol": sym, "pnl": rec["pnl"], "reason": reason})
             return {"ok": True, "mode": "paper", "fill": rec}
 
@@ -3368,11 +3416,13 @@ class TradingEngine:
     # 状态输出
     # ------------------------------------------------------------------
     def _daily_pnl(self, days: int = 120, scope: str | None = None) -> list[dict]:
-        """按平仓日期聚合已实现盈亏，返回最近 N 天（有交易的日子）。
+        """按日期聚合已实现盈亏 = 平仓毛盈亏（按平仓日） − 手续费（按发生日）。
 
-        与累计盈亏、持仓历史共用 `_scoped_rows`：三者口径必须一致，
-        否则会出现「累计 +120 / 日历 -30」这种自相矛盾的页面。
+        与累计盈亏共用 `_fee_rows`：口径必须一致，且 Σdaily 必须等于
+        `_pnl_summary()["realized"]`，否则会出现「累计 +120 / 日历 -30」。
+        开仓当日就会有一条负的费用，这正符合「费用发生即计入已实现」。
         """
+        scope = self._scope() if scope is None else scope
         agg: dict[str, dict] = {}
         for h in self._scoped_rows("position_history", scope):
             day = str(h.get("closed_at") or "")[:10]
@@ -3380,10 +3430,17 @@ class TradingEngine:
                 continue
             row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
             pnl = float(h.get("pnl") or 0.0)
-            row["pnl"] = round(row["pnl"] + pnl, 4)
+            row["pnl"] = round(row["pnl"] + pnl, 6)
             row["trades"] += 1
             if pnl > 0:
                 row["wins"] += 1
+        for f in self._fee_rows(self._scoped_rows("fills", scope)):
+            fee = float(f.get("fee") or 0.0)
+            day = str(f.get("ts") or "")[:10]
+            if not fee or len(day) != 10:
+                continue
+            row = agg.setdefault(day, {"date": day, "pnl": 0.0, "trades": 0, "wins": 0})
+            row["pnl"] = round(row["pnl"] - fee, 6)
         return [agg[k] for k in sorted(agg)][-days:]
 
     def status(self, price_override: float | None = None) -> dict:
@@ -3420,21 +3477,21 @@ class TradingEngine:
                 qty = float(raw.get("qty") or 0.0)
                 direction = 1.0 if raw.get("side") == "LONG" else -1.0
                 gross = (mark - entry) * qty * direction if (mark > 0 and entry > 0) else None
-                # 浮盈亏按**净额**展示：毛盈亏 − 已付开仓费 − 预估平仓费。
-                # 只显示毛值，5000U 名义（单边 ≈2.5U）下 +2U 的浮盈平仓后必然变亏损，
-                # 用户视角就是「明明浮盈却亏了」。毛值仍保留在 unrealized_gross 供审计。
+                # 浮动盈亏**只反映价格变动（毛额）**：手续费不摊进来。
+                # 开仓费在开仓时、平仓费在平仓时各自直接计入「累计已实现盈亏」，
+                # 所以浮盈不会一开仓就是负的双边手续费，平仓 pnl 也是同一个毛额口径。
+                # fees_est 只作为「这笔仓已付 / 将要付多少手续费」的参考，不参与浮盈计算。
                 open_fee = float(raw.get("entry_fee") or 0.0)
                 if open_fee <= 0 and entry > 0 and qty > 0:
                     open_fee = entry * qty * fee_rate
                 close_fee = mark * qty * fee_rate if mark > 0 else 0.0
                 fees_est = open_fee + close_fee
-                unreal = (gross - fees_est) if gross is not None else None
                 positions.append({
                     **raw,
                     "symbol": sym,
                     "mark": round(mark, 8) if mark > 0 else None,
                     "mark_ts": (getattr(self, "_price_ts", None) or {}).get(sym),
-                    "unrealized": round(unreal, 2) if unreal is not None else None,
+                    "unrealized": round(gross, 2) if gross is not None else None,
                     "unrealized_gross": round(gross, 2) if gross is not None else None,
                     "fees_est": round(fees_est, 2) if gross is not None else None,
                     "notional": round(qty * mark, 2) if mark > 0 else None,

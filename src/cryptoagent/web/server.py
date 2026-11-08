@@ -728,8 +728,14 @@ class WebApp:
             data = {}
             if p.exists():
                 data = json.loads(p.read_text(encoding="utf-8"))
-            fills = self.engine.state.get("fills", [])
-            realized = sum(float(f.get("pnl") or 0.0) for f in fills)
+            fills = [f for f in (self.engine.state.get("fills") or []) if isinstance(f, dict)]
+            # 与页面「累计已实现盈亏」同口径：平仓毛盈亏 − 已发生手续费
+            # （开仓费开仓即计，平仓费仅新口径 CLOSE 计入，旧 pnl 已含平仓费）。
+            fees = sum(
+                float(f.get("fee") or 0.0) for f in fills
+                if str(f.get("action") or "").upper() == "OPEN" or f.get("fee_mode") == "gross"
+            )
+            realized = round(sum(float(f.get("pnl") or 0.0) for f in fills) - fees, 4)
             holdout = report.get("holdout") or {}
             rec = {
                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"),

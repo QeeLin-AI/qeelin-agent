@@ -2173,7 +2173,7 @@ function renderStatus(s) {
       <td>${fmtQty(p.qty)}</td><td>${fmtPx(p.entry)}</td><td>${fmtPx(p.mark)}</td>
       <td>${fmt(p.leverage, 1)}x</td>
       <td class="col-2line"><span class="up">${fmtPx(p.stop)}</span><span class="down">${fmtPx(p.tp)}</span></td>
-      <td class="${cls}"${unreal == null ? '' : ` title="毛盈亏 ${p.unrealized_gross != null ? fmt(p.unrealized_gross) : '--'} · 双边手续费预估 ${p.fees_est != null ? fmt(p.fees_est) : '--'} · 净额 ${fmt(unreal)}（与平仓后到手同口径）"`}>${unreal == null ? '--' : fmt(unreal)}</td>
+      <td class="${cls}"${unreal == null ? '' : ` title="浮动盈亏＝价格变动毛额，未扣手续费 · 这笔仓已付开仓费＋预估平仓费合计 ${p.fees_est != null ? fmt(p.fees_est) : '--'} U（手续费在发生时就直接计入累计已实现盈亏）"`}>${unreal == null ? '--' : fmt(unreal)}</td>
       <td><button class="btn ghost danger xs" data-close-pos="${esc(sym)}">平仓</button></td></tr>`;
     }).join('');
   } else {
@@ -2417,13 +2417,21 @@ function renderPnl() {
   // 累计值用后端按账户聚合的全量摘要（不受 status 只回 30 条的窗口限制）。
   // 只有「摘要为空但成交里有 pnl」时才退回前端累加。
   const summary = lastStatus?.pnl || null;
-  const useSummary = !!(summary && (Number(summary.trades) > 0 || !fills.length));
+  // 只有开仓费、还没有任何平仓时也要用后端摘要：否则会退回前端只加 pnl，
+  // 把「开仓即计入已实现」的手续费漏掉，累计盈亏显示成 0。
+  const useSummary = !!(summary && (Number(summary.trades) > 0 || Number(summary.fees_paid) > 0 || !fills.length));
   const trades = useSummary ? Number(summary.trades || 0) : fills.length;
   const total = useSummary
     ? Number(summary.realized || 0)
     : fills.reduce((s, f) => s + (f.pnl || 0), 0);
   totalEl.textContent = `${total >= 0 ? '+' : ''}${fmt(total, 2)} U`;
   totalEl.className = total >= 0 ? 'up' : 'down';
+  if (useSummary) {
+    const gross = Number(summary.gross_pnl || 0);
+    const fees = Number(summary.fees_paid || 0);
+    totalEl.title = `平仓毛盈亏 ${gross >= 0 ? '+' : ''}${fmt(gross, 2)} U − 已发生手续费 ${fmt(fees, 2)} U`
+      + ` = ${total >= 0 ? '+' : ''}${fmt(total, 2)} U；开仓费、平仓费在发生时即计入`;
+  }
 
   const winCount = useSummary ? Number(summary.wins || 0) : fills.filter((f) => (f.pnl || 0) > 0).length;
   const winRate = trades ? `${Math.round(winCount / trades * 100)}%` : '--';

@@ -1231,9 +1231,13 @@ class TestCloseBackfill(unittest.TestCase):
         self.assertEqual(len(fills), 1)
         self.assertAlmostEqual(fills[0]["qty"], 10.0)
         self.assertAlmostEqual(fills[0]["price"], 0.6)
-        self.assertAlmostEqual(fills[0]["pnl"], 0.97)        # 1.0 盈亏 - 0.03 手续费
+        # 新口径：pnl 只记价格变动毛额，手续费由流水单独计入累计已实现盈亏
+        self.assertAlmostEqual(fills[0]["pnl"], 1.0)
+        self.assertEqual(fills[0]["fee_mode"], "gross")
+        self.assertAlmostEqual(fills[0]["fee"], 0.03)
         self.assertTrue(fills[0]["backfilled"])
         self.assertEqual(e.state["position_history"][0]["reason"], "exchange")
+        self.assertAlmostEqual(e.state["position_history"][0]["pnl"], 1.0)
         self.assertAlmostEqual(e.state["equity"], 10000.97, places=4)
         self.assertTrue(e.notices)                           # 补记后发一条通知
 

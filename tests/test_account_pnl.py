@@ -265,3 +265,113 @@ def test_reset_other_scope_does_not_set_anchor(tmp_path):
     assert e.state["account_reset_equity"] == 0.0
     # 目标账户文件被清空
     assert e.accounts.summarize("binance:demo")["realized"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 费用即时入账：浮盈 / 平仓 pnl 只记价格变动毛额，手续费单独进已实现
+# ---------------------------------------------------------------------------
+def test_open_fee_enters_realized_immediately():
+    """开仓后没有任何平仓记录，累计已实现盈亏就应该是 −开仓费。"""
+    e = _engine()
+    e.state["fills"] = [{
+        "ts": "2026-11-08 11:00:00", "action": "OPEN", "symbol": "BNBUSDT",
+        "fee": 4.001473, "fee_mode": "gross", "account_scope": "binance:demo",
+    }]
+    s = e._pnl_summary()
+    assert s["trades"] == 0
+    assert s["gross_pnl"] == 0.0
+    assert s["fees_paid"] == pytest.approx(4.001473)
+    assert s["realized"] == pytest.approx(-4.001473)
+    daily = e._daily_pnl()
+    assert sum(d["pnl"] for d in daily) == pytest.approx(s["realized"])
+    assert daily[0]["pnl"] == pytest.approx(-4.001473)
+    assert daily[0]["trades"] == 0                     # 手续费不是一笔交易
+
+
+def test_close_pnl_is_gross_and_fees_are_counted_separately():
+    """平仓 pnl 保持毛额；开仓费 + 平仓费各自在发生时进已实现。"""
+    e = _engine()
+    e.state["fills"] = [
+        {"ts": "2026-11-08 11:00:00", "action": "OPEN", "fee": 2.5,
+         "fee_mode": "gross", "account_scope": "binance:demo"},
+        {"ts": "2026-11-08 11:30:00", "action": "CLOSE", "pnl": 5.95, "fee": 2.5,
+         "fee_mode": "gross", "account_scope": "binance:demo"},
+    ]
+    e.state["position_history"] = [_close(5.95, "binance:demo", "2026-11-08")]
+    s = e._pnl_summary()
+    assert s["gross_pnl"] == pytest.approx(5.95)
+    assert s["fees_paid"] == pytest.approx(5.0)
+    assert s["realized"] == pytest.approx(0.95)
+    assert sum(d["pnl"] for d in e._daily_pnl()) == pytest.approx(0.95)
+
+
+def test_legacy_close_fee_not_double_counted():
+    """旧口径 CLOSE 的 pnl 已扣过平仓费，不能再扣一次；开仓费仍要补上。"""
+    e = _engine()
+    e.state["fills"] = [
+        {"ts": "2026-11-06 11:00:00", "action": "OPEN", "fee": 2.5,
+         "account_scope": "binance:demo"},
+        {"ts": "2026-11-06 12:00:00", "action": "CLOSE", "pnl": 3.45, "fee": 2.5,
+         "account_scope": "binance:demo"},
+    ]
+    e.state["position_history"] = [_close(3.45, "binance:demo")]
+    s = e._pnl_summary()
+    assert s["fees_paid"] == pytest.approx(2.5)
+    assert s["realized"] == pytest.approx(0.95)
+
+
+def test_account_store_summary_uses_same_fee_rule(tmp_path):
+    """跨账户摘要与页面累计必须同口径，日历合计也要对得上。"""
+    from cryptoagent.accounts import AccountStore
+
+    store = AccountStore(tmp_path / "accounts")
+    store.save_state("binance:demo", {
+        "equity": 1000.0,
+        "fills": [
+            {"ts": "2026-11-08 11:00:00", "action": "OPEN", "fee": 2.5, "fee_mode": "gross"},
+            {"ts": "2026-11-08 11:30:00", "action": "CLOSE", "pnl": 5.95, "fee": 2.5,
+             "fee_mode": "gross"},
+        ],
+        "position_history": [_close(5.95, "binance:demo", "2026-11-08")],
+    })
+    s = store.summarize("binance:demo")
+    assert s["fees_paid"] == pytest.approx(5.0)
+    assert s["realized"] == pytest.approx(0.95)
+    assert sum(d["pnl"] for d in s["daily"]) == pytest.approx(0.95)
+
+
+def test_paper_round_trip_keeps_gross_pnl_and_fees_in_realized(tmp_path):
+    """端到端：浮盈是毛额、平仓 pnl 是同一个毛额、费用即时进已实现。"""
+    import time
+
+    from cryptoagent.config import AppConfig
+    from cryptoagent.engine import TradingEngine
+
+    cfg = AppConfig()
+    cfg.runs_dir = str(tmp_path)
+    cfg.backtest.costs.fee_bps = 5.0
+    cfg.backtest.costs.slippage_bps = 0.0
+    e = TradingEngine(cfg)
+    e.cfg.market.symbol = "BTCUSDT"
+    e.state.update({"equity": 10000.0, "fills": [], "position_history": [],
+                    "positions": {}, "position": None})
+
+    e._paper_open("LONG", 0.1, 75000.0, 5, 74000.0, 76000.0, "test")
+    open_fee = 75000.0 * 0.1 * 0.0005                    # 3.75
+    assert e.state["equity"] == pytest.approx(10000.0 - open_fee)
+    assert e._pnl_summary()["realized"] == pytest.approx(-open_fee)
+
+    e._last_prices["BTCUSDT"] = 76000.0
+    e._price_ts["BTCUSDT"] = time.time()
+    pos = e.status(price_override=76000.0)["positions"][0]
+    assert pos["unrealized"] == pytest.approx(100.0)     # 毛额，未扣任何手续费
+    assert pos["unrealized"] == pos["unrealized_gross"]
+
+    rec = e._paper_close(76000.0, "test")
+    close_fee = 76000.0 * 0.1 * 0.0005                   # 3.8
+    assert rec["pnl"] == pytest.approx(100.0)            # 与平仓前浮盈完全一致
+    assert rec["fee"] == pytest.approx(close_fee)
+    assert e._pnl_summary()["realized"] == pytest.approx(100.0 - open_fee - close_fee)
+    assert e.state["equity"] == pytest.approx(10000.0 - open_fee + 100.0 - close_fee)
+    assert sum(d["pnl"] for d in e._daily_pnl()) == pytest.approx(
+        e._pnl_summary()["realized"])
