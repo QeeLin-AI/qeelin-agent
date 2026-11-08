@@ -978,18 +978,22 @@ class WebApp:
         out = []
         for sym in order:
             real = cache_dir / f"{sym}_{stem}.real.csv"
+            okx = cache_dir / f"{sym}_{stem}.okx.real.csv"
             synth = cache_dir / f"{sym}_{stem}_s{self.cfg.market.seed}.synthetic.csv"
+            # load_market 的缓存文件名按交易所带后缀：OKX 是 `*.okx.real.csv`，
+            # 币安是 `*.real.csv`。只查无后缀名会在切到 OKX 后把已下载的品种误判成「未下载」。
+            cached_file = real if real.exists() else (okx if okx.exists() else None)
             entry = {
                 "symbol": sym,
                 "active": sym == self.cfg.market.symbol,
-                "cached": real.exists(),
-                "synthetic_only": (not real.exists()) and synth.exists(),
+                "cached": cached_file is not None,
+                "synthetic_only": cached_file is None and synth.exists(),
                 "last": None,
-                "size_kb": round(real.stat().st_size / 1024) if real.exists() else 0,
+                "size_kb": round(cached_file.stat().st_size / 1024) if cached_file is not None else 0,
             }
-            if real.exists():
+            if cached_file is not None:
                 try:
-                    with real.open("r", encoding="utf-8") as fh:
+                    with cached_file.open("r", encoding="utf-8") as fh:
                         last = fh.readlines()[-1]
                     entry["last"] = last.split(",")[0][:16]
                 except Exception:  # noqa: BLE001
