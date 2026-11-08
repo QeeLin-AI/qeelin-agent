@@ -2035,6 +2035,13 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 }
 @media (max-width: 860px) {
   .evo-verdicts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* 账本表 6 列在窄屏会挤到「目标」断三行、「已应用」竖排：
+     隐掉信息量最低的「类型」列（看目标前缀就能判断），
+     时间与状态不折行，把省下的宽度让给目标与改动。 */
+  #evoChangesTable th:nth-child(2),
+  #evoChangesTable td:nth-child(2) { display: none; }
+  #evoChangesTable td:nth-child(1),
+  #evoChangesTable td:nth-child(5) { white-space: nowrap; }
 }
 @media (max-width: 370px) {
   .evo-kpis, .evo-verdicts { grid-template-columns: 1fr; }
