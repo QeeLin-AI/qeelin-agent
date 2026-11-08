@@ -19,20 +19,32 @@ import os
 import socket
 import struct
 import threading
+import time
 import urllib.parse
 
 from .data import okx_inst
 from .netutil import ssl_context
 
-# 交易所公开行情端点
-BINANCE_FSTREAM = "wss://fstream.binance.com"        # 币安 U 本位永续行情流（公开）
+# 币安 U 本位永续行情流（公开）。注意：官方主域名 fstream.binance.com 在某些
+# 地区（含韩国机房）会「握手 101 成功但不推数据」——不是连不上，是数据层静默。
+# fstream.binancefuture.com 是币安期货行情的备用入口，实测能正常推主网价。
+# 因此做成候选列表，逐个尝试；配合首帧超时，静默的端点会被自动跳过。
+BINANCE_FSTREAM_HOSTS = ("fstream.binancefuture.com", "fstream.binance.com")
+BINANCE_FSTREAM = f"wss://{BINANCE_FSTREAM_HOSTS[0]}"
 OKX_PUBLIC = "wss://ws.okx.com:8443/ws/v5/public"    # OKX 公共行情流
 
 
 def parse_binance_trade(raw: str) -> tuple[str, float] | None:
-    """币安组合流 aggTrade 消息 → (symbol, price)，解析失败返回 None。"""
+    """币安 aggTrade 消息 → (symbol, price)，解析失败返回 None。
+
+    兼容两种形态：组合流（``{"stream":..., "data":{...}}``）与单流
+    （``{"e":"aggTrade", ...}``，无 data 包裹）。
+    """
     try:
-        d = json.loads(raw).get("data") or {}
+        msg = json.loads(raw)
+        d = msg.get("data")
+        if not isinstance(d, dict):
+            d = msg
         sym = str(d.get("s") or "").upper()
         px = float(d.get("p") or 0.0)
         if sym and px > 0:
@@ -77,6 +89,7 @@ class WsClient:
         heartbeat_sec: float = 20.0,
         heartbeat_text: str | None = None,
         timeout: float = 15.0,
+        first_data_timeout: float | None = None,
     ):
         parts = urllib.parse.urlsplit(url)
         if parts.scheme != "wss":
@@ -89,6 +102,7 @@ class WsClient:
         self._heartbeat_sec = max(5.0, float(heartbeat_sec))
         self._heartbeat_text = heartbeat_text
         self._timeout = timeout
+        self._first_data_timeout = first_data_timeout
         self._sock: socket.socket | None = None
         self._stopped = False
 
@@ -133,12 +147,21 @@ class WsClient:
             self._sock = None
 
     def run_forever(self) -> None:
-        """阻塞读帧直到连接关闭。心跳随读超时一并处理，无需额外线程。"""
+        """阻塞读帧直到连接关闭。心跳随读超时一并处理，无需额外线程。
+
+        若设置了 first_data_timeout 且期限内一条数据帧都没收到，抛 WsError：
+        用于识别「握手 101 但数据层静默」的端点，让上层换下一个候选。
+        """
         frag: list[bytes] = []
+        got_data = False
+        start = time.time()
+        ft = self._first_data_timeout
         while not self._stopped and self._sock is not None:
             try:
                 fin, opcode, payload = self._read_frame()
             except (socket.timeout, TimeoutError):
+                if ft and not got_data and (time.time() - start) > float(ft):
+                    raise WsError(f"{float(ft):.0f}s 内未收到行情数据")
                 self._heartbeat()
                 continue
             except (OSError, WsError):
@@ -154,11 +177,13 @@ class WsClient:
             elif opcode == 0xA:  # pong
                 continue
             elif opcode in (0x1, 0x2):  # text / binary
+                got_data = True
                 try:
                     self._on_message(payload.decode("utf-8"))
                 except Exception:
                     pass
             elif opcode == 0x0:  # continuation（行情不会分片，稳妥起见拼接）
+                got_data = True
                 frag.append(payload)
                 if fin:
                     try:
@@ -281,7 +306,7 @@ class PriceStream:
 
     def _run_once(self, exchange: str, syms: list[str]) -> None:
         symset = {s.upper() for s in syms}
-        client_box: list[WsClient] = []
+        holder: list[WsClient | None] = [None]
 
         def changed() -> bool:
             now = {str(s).upper() for s in (self._get_symbols() or [])}
@@ -290,8 +315,9 @@ class PriceStream:
         def on_price(sym: str, px: float) -> None:
             self._on_price(sym, px)
             # 持仓品种集合变了（开仓/平仓）→ 主动断开，下一轮按新集合重连。
-            if client_box and changed():
-                client_box[0].close()
+            c = holder[0]
+            if c is not None and changed():
+                c.close()
 
         if exchange == "okx":
             inst_to_sym = {okx_inst(s): s.upper() for s in syms}
@@ -304,22 +330,39 @@ class PriceStream:
             client = WsClient(
                 OKX_PUBLIC, on_message=handle, heartbeat_sec=25.0, heartbeat_text="ping"
             )
-        else:
-            def handle(raw: str) -> None:
-                hit = parse_binance_trade(raw)
-                if hit:
-                    on_price(*hit)
-
-            streams = "/".join(f"{s.lower()}@aggTrade" for s in syms)
-            url = f"{BINANCE_FSTREAM}/stream?streams={streams}"
-            client = WsClient(url, on_message=handle, heartbeat_sec=20.0)
-
-        client_box.append(client)
-        client.connect()
-        if exchange == "okx":
+            holder[0] = client
+            client.connect()
             client.send_text(json.dumps({
                 "op": "subscribe",
                 "args": [{"channel": "tickers", "instId": okx_inst(s)} for s in syms],
             }))
-        client.run_forever()
-        client.close()
+            client.run_forever()
+            client.close()
+            holder[0] = None
+            return
+
+        # 币安：主域名可能被地区静默（握手 101 但不推数据），逐个试候选端点，
+        # 首帧超时（first_data_timeout）会让静默端点抛 WsError 从而换下一个。
+        def handle(raw: str) -> None:
+            hit = parse_binance_trade(raw)
+            if hit:
+                on_price(*hit)
+
+        streams = "/".join(f"{s.lower()}@aggTrade" for s in syms)
+        for host in BINANCE_FSTREAM_HOSTS:
+            client = WsClient(
+                f"wss://{host}/stream?streams={streams}",
+                on_message=handle,
+                heartbeat_sec=20.0,
+                first_data_timeout=8.0,
+            )
+            holder[0] = client
+            try:
+                client.connect()
+                client.run_forever()
+                break
+            except (WsError, OSError):
+                client.close()
+                holder[0] = None
+                continue
+        holder[0] = None

@@ -82,6 +82,12 @@ def test_parse_binance_trade_ok():
     assert parse_binance_trade(raw) == ("BTCUSDT", 75000.10)
 
 
+def test_parse_binance_trade_single_stream():
+    # 单流 /ws/<stream> 的消息没有 stream/data 包裹，直接是 aggTrade 内容
+    raw = '{"e":"aggTrade","s":"BTCUSDT","p":"75887.0","q":"0.002","T":1700000000000,"m":false}'
+    assert parse_binance_trade(raw) == ("BTCUSDT", 75887.0)
+
+
 def test_parse_binance_trade_bad():
     assert parse_binance_trade("not json") is None
     assert parse_binance_trade('{"data":{"s":"BTCUSDT","p":"0"}}') is None  # 非正价
