@@ -209,10 +209,7 @@ python run.py web --host 127.0.0.1 --port 8000
 | `testnet` / `demo` | 交易所模拟盘（币安 Demo、OKX 模拟盘） | 否 |
 | `live` | 交易所主网真实下单 | **是** |
 
-进入 `live` 需要同时满足两个闸门，缺一不可：
-
-1. `.env` 中设置 `CRYPTOAGENT_I_UNDERSTAND_THE_RISK=yes`；
-2. 项目根目录存在空文件 `.cryptoagent_live_ack`。
+进入 `live` 只需在控制台手动输入确认文本「我确认使用真实资金」即可。
 
 模拟盘与主网是**两套独立 Key**，代码不会在两者之间回退：模拟盘缺 Key 时直接报错，而不是悄悄改用主网 Key 下单。
 

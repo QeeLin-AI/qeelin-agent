@@ -1294,7 +1294,7 @@ class TradingEngine:
         三种模式：
         - paper   ：本地模拟撮合，不碰交易所
         - testnet ：交易所**模拟盘**（假钱），只校验密钥，不需要确认文本
-        - live    ：主网真钱，需要确认文本 + 环境变量（主网还要 ack 文件）
+        - live    ：主网真钱，需要确认文本
 
         exchange 决定接币安还是 OKX（对应不同的 Key / 域名 / 签名方式）。
 
@@ -1361,15 +1361,6 @@ class TradingEngine:
             }
         if confirm.strip() != "我确认使用真实资金":
             raise PermissionError("确认文本不匹配，拒绝解锁")
-        if not testnet and os.getenv("CRYPTOAGENT_I_UNDERSTAND_THE_RISK") != "yes":
-            # 提示必须写全「在哪做、做什么」：变量名本身不能翻译（翻译了就没法照着设置），
-            # 但只丢一个变量名，用户会以为点一下按钮就能解锁，还要再撞第二道闸门。
-            raise PermissionError(
-                "主网解锁需要先完成两项准备：① 在服务器 .env 加一行 "
-                "CRYPTOAGENT_I_UNDERSTAND_THE_RISK=yes 并重启服务；"
-                "② 在项目根目录建一个空文件 .cryptoagent_live_ack。"
-                "两项都只能由你在服务器上完成，网页无法代开。"
-            )
         client = self.connect(testnet=testnet, exchange=exchange)
         client.armed = True
         client.ping()

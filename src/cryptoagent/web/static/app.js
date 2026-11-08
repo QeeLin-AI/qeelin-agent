@@ -2957,6 +2957,9 @@ async function runSelftest(el, exchange, mode) {
   }
 }
 
+// 主网确认文本必须逐字手动输入，禁止复制粘贴（含拖拽），防止「无脑粘贴」解锁真钱。
+['paste', 'drop'].forEach((ev) => $('confirmText').addEventListener(ev, (e) => e.preventDefault()));
+
 $('armBtn').addEventListener('click', async () => {
   if (blockIfAutoRunning('切换实盘')) return;
   const ex = currentExchange('live');

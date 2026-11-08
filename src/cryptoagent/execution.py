@@ -3,7 +3,7 @@
 安全模型：
 - `BinanceFuturesClient` 默认指向 **testnet**；`OKXClient` 默认用模拟盘（x-simulated-trading 头）。
 - 所有写操作（下单、改杠杆、撤单）都要经过 `_guard()`：
-  必须 `armed=True`；主网还必须额外存在确认文件。
+  必须 `armed=True`。
 - 任何异常都转成 `ExchangeError`，带上交易所返回的 code/msg，绝不吞掉。
 - 两个客户端的接口保持一致，引擎/服务端只认 `live_client`，不关心底层是哪家。
 """
@@ -19,7 +19,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .netutil import ssl_context
 
@@ -140,7 +139,7 @@ class BinanceFuturesClient:
         self.env = env or ("testnet" if testnet else "live")
         if self.env not in self.ENVS:
             raise ExchangeError(f"未知环境 {self.env}，只能是 testnet / demo / live")
-        self.testnet = self.env != "live"          # 非 live 都算「假钱」，不需要主网确认文件
+        self.testnet = self.env != "live"          # 非 live 都算「假钱」
         self.armed = armed
         self.timeout = timeout
         # CRYPTOAGENT_FAPI_BASE 可整体覆盖（自建反代 / 换网络环境时用）
@@ -170,16 +169,6 @@ class BinanceFuturesClient:
             raise ExchangeError("客户端未解锁（armed=False），拒绝任何写操作")
         if not self.api_key or not self.api_secret:
             raise ExchangeError("缺少 API Key / Secret")
-        if not self.testnet:
-            # 主网双闸门之一：磁盘上的确认文件（另一个是 CRYPTOAGENT_I_UNDERSTAND_THE_RISK=yes）
-            ack = Path("/.cryptoagent_live_ack")
-            if not ack.exists():
-                ack = Path(__file__).resolve().parents[2] / ".cryptoagent_live_ack"
-            if not ack.exists():
-                raise ExchangeError(
-                    f"主网写操作需要确认文件 {ack}：在项目根目录建一个空文件即可。"
-                    "这是防止误触真实资金的第二道闸门，无法从网页开启。"
-                )
 
     def _request(self, method: str, path: str, params: dict | None = None, signed: bool = False) -> dict:
         params = dict(params or {})
@@ -436,7 +425,7 @@ class OKXClient:
     """OKX 永续合约客户端，接口与 BinanceFuturesClient 对齐。
 
     - 模拟盘：在 live 域名上带 `x-simulated-trading: 1` 头（OKX 没有独立测试网域名）。
-    - 主网：去掉该头即可，但同样需要磁盘确认文件 + 环境变量双闸门（见 _guard）。
+    - 主网：去掉该头即可（写操作仅受 `armed` 门控；主网解锁见 engine.arm）。
     - 内部符号统一用 BTCUSDT，这里自动映射成 BTC-USDT-SWAP。
     """
 
@@ -485,15 +474,6 @@ class OKXClient:
             raise ExchangeError("客户端未解锁（armed=False），拒绝任何写操作")
         if not self.api_key or not self.api_secret or not self.passphrase:
             raise ExchangeError("缺少 API Key / Secret / Passphrase")
-        if not self.testnet:
-            ack = Path("/.cryptoagent_live_ack")
-            if not ack.exists():
-                ack = Path(__file__).resolve().parents[2] / ".cryptoagent_live_ack"
-            if not ack.exists():
-                raise ExchangeError(
-                    f"主网写操作需要确认文件 {ack}：在项目根目录建一个空文件即可。"
-                    "这是防止误触真实资金的第二道闸门，无法从网页开启。"
-                )
 
     @staticmethod
     def _iso_ts() -> str:

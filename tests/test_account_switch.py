@@ -91,7 +91,6 @@ def test_arm_switch_keeps_target_account_records(tmp_path):
 
 def test_same_exchange_env_change_resets_account_state(monkeypatch):
     """binance demo -> binance live 也必须重置，不能沿用 demo 的峰值/日基准。"""
-    monkeypatch.setenv("CRYPTOAGENT_I_UNDERSTAND_THE_RISK", "yes")
     e = _engine(scope="binance:demo")
     monkeypatch.setattr(e, "connect", lambda **k: _FakeClient())
 
@@ -119,7 +118,6 @@ def test_switch_blocks_live_position_without_force(monkeypatch):
 
 
 def test_switch_force_allows_live_position(monkeypatch):
-    monkeypatch.setenv("CRYPTOAGENT_I_UNDERSTAND_THE_RISK", "yes")
     e = _engine(
         scope="binance:demo",
         positions={"BTCUSDT": {"symbol": "BTCUSDT", "mode": "live", "qty": 1}},
