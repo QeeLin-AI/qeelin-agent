@@ -1622,7 +1622,14 @@ class TradingEngine:
                 continue
             if real:
                 continue
-            # 交易所已无持仓：先把这次平仓的成交补记下来，再清缓存。
+            # 交易所已无持仓：先把残留的止损/止盈触发单撤掉。
+            # OKX 的触发单不支持 reduceOnly（51205），仓位没了还留着触发单，
+            # 价格碰到就会反手开出一笔没人管的仓位——这是必须堵住的口子。
+            try:
+                client.cancel_all(symbol)
+            except Exception as exc:  # noqa: BLE001 - 撤单失败不阻断清缓存
+                self.last_error = f"清理残留条件单失败：{type(exc).__name__}: {exc}"[:200]
+            # 再把这次平仓的成交补记下来，最后清缓存。
             # 补记失败也只是少了流水，不能因此留下幽灵仓位。
             try:
                 self._backfill_closed_from_exchange(pos)

@@ -159,8 +159,9 @@ class TestOKXOrderUnits(unittest.TestCase):
         self.assertEqual(seen["side"], "sell")
         self.assertEqual(seen["sz"], "2")
         self.assertEqual(seen["triggerPx"], "70123.46")   # tickSz=0.01
-        self.assertEqual(seen["reduceOnly"], "true")
         self.assertEqual(seen["ordType"], "trigger")
+        # OKX 对 order-algo 带 reduceOnly 会返回 51205，不能发这个字段
+        self.assertNotIn("reduceOnly", seen)
 
     def test_trigger_price_has_no_float_noise(self):
         """实测踩过：75984.19×0.97 取整后是 73704.66000000001，OKX 判 triggerPx error。"""

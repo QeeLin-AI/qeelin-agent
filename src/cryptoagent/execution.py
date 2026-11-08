@@ -846,7 +846,9 @@ class OKXClient:
 
         - `side`/`sz` 都必须小写 + 张数，否则 51000 / 51121。
         - 触发价按合约自己的 tickSz 取整（BTC 是 0.01，不是 0.1）。
-        - 平仓单带 reduceOnly，避免触发时反手把仓位翻倍。
+        - **不能带 reduceOnly**：OKX 对 order-algo 返回 51205（实测），
+          所以「只减仓」靠调用方在平仓前后 cancel_all 清理残留触发单来保证
+          （engine._reconcile_position_with_exchange 与开/平仓路径都会撤）。
         """
         self._guard()
         self._require_net_mode()
@@ -868,8 +870,6 @@ class OKXClient:
             "sz": _fmt_by_step(contracts, info["lotSz"]),
             "orderPx": "-1",       # -1 = 触发后按市价
         }
-        if close_position:
-            body["reduceOnly"] = "true"
         raw = self._request("POST", "/api/v5/trade/order-algo", body=body, signed=True)
         d = self._data(raw)
         oid = str(d[0].get("algoId", "")) if d else ""
