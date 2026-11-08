@@ -1994,49 +1994,158 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
 }
 
 /* ============ 进化页 ============ */
-/* 两张卡按各自内容高度对齐：配置方案卡内容少，强行等高会在底部留一大块空白 */
-.evo-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; align-items: start; }
-.evo-top > .card { margin-bottom: 0; }
-.evo-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 10px 0 14px; font-size: 12px; color: var(--muted); }
-.evo-meta b { color: var(--text); font-weight: 600; }
-.evo-progress { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; }
-.evo-progress-bar { flex: 1 1 auto; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
-.evo-progress-bar i { display: block; width: 0; height: 100%; border-radius: 3px; background: var(--accent); transition: width .4s ease; }
-.evo-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.evo-kpi { padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface-2); }
-.evo-kpi label { display: block; font-size: 12px; color: var(--muted); }
-.evo-kpi b { display: block; margin-top: 3px; font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
-.evo-kpi small { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
+/* 布局原则：能并排的一律并排。
+   第 1 行 能力进度 | 当前配置方案；第 2 行 复盘归因 | 真人对照门槛；
+   进化账本是 6 列数据表，并排后每列只剩不到 100px，因此独占整行。
+   统一使用「标题 + 一句说明 + 右侧状态」的三段卡头，卡片内不再出现
+   分割线，靠间距建立层次。 */
+#tab-evolution { --evo-gap: 16px; }
+#tab-evolution .card {
+  margin-bottom: 0;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+#tab-evolution .card:hover {
+  border-color: var(--accent-line);
+  box-shadow: 0 14px 30px -24px rgba(0, 0, 0, .6);
+}
 
-.evo-verdicts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
-.evo-verdict { padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface-2); }
-.evo-verdict label { display: block; font-size: 12px; color: var(--muted); }
-.evo-verdict b { display: block; margin-top: 3px; font-size: 18px; font-weight: 600; }
-.evo-verdict b span { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.evo-hero, .evo-mid {
+  display: grid; gap: var(--evo-gap); margin-bottom: var(--evo-gap);
+  align-items: stretch;
+}
+.evo-hero { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
+/* 门槛表 5 列，最小 340px；复盘卡承载分布条 + 图例，给更多宽度 */
+.evo-mid { grid-template-columns: minmax(0, 1.35fr) minmax(340px, 1fr); }
 
-.evo-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-.evo-chip { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 12px; color: var(--text-2); }
+/* 卡头：三层信息（标题 / 说明 / 右侧状态）一眼分层 */
+.evo-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 14px; margin-bottom: 16px;
+}
+.evo-head-main { min-width: 0; }
+.evo-head h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.evo-desc { margin: 5px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.evo-meta-text {
+  flex: none; padding-top: 2px; font-size: 11.5px; color: var(--muted);
+  text-align: right; white-space: nowrap;
+}
+.evo-tag {
+  flex: none; padding: 4px 10px; border-radius: 99px;
+  border: 1px solid var(--border-soft); background: var(--surface-2);
+  font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap;
+}
+
+/* 能力进度：进度条 + 四列指标，指标等宽对齐 */
+.evo-progress { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+.evo-progress-bar {
+  flex: 1 1 auto; height: 8px; border-radius: 99px;
+  background: var(--surface-3); overflow: hidden;
+}
+.evo-progress-bar i {
+  display: block; width: 0; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--brand-2, var(--accent)));
+  transition: width .45s cubic-bezier(.22, .61, .36, 1);
+}
+.evo-progress-text {
+  flex: none; font-size: 12px; font-weight: 600; color: var(--text-2);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.evo-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.evo-kpi {
+  padding: 11px 12px; border: 1px solid var(--border-soft); border-radius: 10px;
+  background: var(--surface-2); transition: border-color .18s ease;
+}
+.evo-kpi:hover { border-color: var(--accent-line); }
+.evo-kpi label { display: block; font-size: 11px; letter-spacing: .02em; color: var(--muted); }
+.evo-kpi b {
+  display: block; margin-top: 4px; font-size: 19px; font-weight: 650;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.evo-kpi small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--faint); }
+
+/* 配置方案：说明 + 差异标签 + 底部操作，操作贴底对齐 */
+.evo-card-profile { display: flex; flex-direction: column; }
+.evo-profile-summary { margin: 0 0 14px; font-size: 13px; line-height: 1.65; color: var(--text-2); }
+.evo-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; font-size: 11.5px; color: var(--muted); }
+.evo-meta > span {
+  padding: 3px 9px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+}
+.evo-meta b { color: var(--text); font-weight: 650; }
+.evo-foot { margin-top: auto; }
+
+/* 复盘归因：一条堆叠分布条 + 五格图例，比五个孤立数字更快看出比例 */
+.evo-dist { margin: 0 0 16px; }
+.evo-dist-bar {
+  display: flex; height: 10px; border-radius: 99px; overflow: hidden;
+  background: var(--surface-3); margin-bottom: 12px;
+}
+.evo-dist-bar i { height: 100%; min-width: 3px; transition: width .4s ease; }
+.evo-dist-bar i + i { box-shadow: inset 1px 0 0 rgba(0, 0, 0, .35); }
+.evo-dist-legend { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.evo-legend {
+  padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: 9px;
+  background: var(--surface-2); transition: border-color .18s ease;
+}
+.evo-legend:hover { border-color: var(--accent-line); }
+.evo-legend label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--muted); white-space: nowrap;
+}
+.evo-legend .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.evo-legend b {
+  display: block; margin-top: 4px; font-size: 17px; font-weight: 650;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.evo-legend b span { margin-left: 5px; font-size: 10.5px; font-weight: 400; color: var(--muted); }
+
+.evo-labels {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 10px;
+  padding-top: 14px; border-top: 1px solid var(--border-soft);
+}
+.evo-labels-title {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--faint);
+}
+.evo-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.evo-chip {
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: 99px;
+  background: var(--surface-2); font-size: 11.5px; color: var(--text-2);
+}
 .evo-chip.bad { border-color: var(--up); color: var(--up); }
-.evo-lessons { display: flex; flex-direction: column; gap: 8px; }
-.evo-lesson { padding: 2px 0 2px 10px; border-left: 2px solid var(--border); font-size: 13px; line-height: 1.6; color: var(--text-2); }
+
+.evo-lessons { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }
+.evo-lesson {
+  padding: 7px 10px; border-left: 2px solid var(--border); border-radius: 0 7px 7px 0;
+  font-size: 12.5px; line-height: 1.6; color: var(--text-2);
+  transition: background .16s ease;
+}
+.evo-lesson:hover { background: var(--surface-2); }
 .evo-lesson.good { border-left-color: var(--ok); }
 .evo-lesson.warn { border-left-color: var(--amber); }
 .evo-lesson.bad { border-left-color: var(--up); }
-.evo-empty { padding: 16px 8px; text-align: center; font-size: 13px; color: var(--muted); }
+.evo-empty {
+  padding: 18px 10px; text-align: center; font-size: 12.5px; color: var(--muted);
+  border: 1px dashed var(--border-soft); border-radius: 10px;
+}
 
-.evo-state { font-size: 12px; font-weight: 600; }
+/* 表格：数字列右对齐，状态用文字色，行悬停沿用全局 */
+#tab-evolution .table th.num, #tab-evolution .table td.num { text-align: right; }
+#tab-evolution .table td { font-size: 12.5px; }
+.evo-state { font-size: 11.5px; font-weight: 650; white-space: nowrap; }
 .evo-state.ok { color: var(--ok); }
 .evo-state.bad { color: var(--up); }
 .evo-state.warn { color: var(--amber); }
 .evo-state.muted { color: var(--muted); }
 
-/* 1180 以下两栏会挤成窄条，改单列；verdict 从 5 列退到 3 列 */
-@media (max-width: 1180px) {
-  .evo-top { grid-template-columns: 1fr; }
-  .evo-verdicts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* 1120 以下：复盘 + 门槛并排会把门槛表压到 340px 以下，先拆这一行 */
+@media (max-width: 1120px) {
+  .evo-mid { grid-template-columns: 1fr; }
 }
 @media (max-width: 860px) {
-  .evo-verdicts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evo-hero { grid-template-columns: 1fr; }
+  .evo-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evo-dist-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   /* 账本表 6 列在窄屏会挤到「目标」断三行、「已应用」竖排：
      隐掉信息量最低的「类型」列（看目标前缀就能判断），
      时间与状态不折行，把省下的宽度让给目标与改动。 */
@@ -2045,8 +2154,15 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   #evoChangesTable td:nth-child(1),
   #evoChangesTable td:nth-child(5) { white-space: nowrap; }
 }
+@media (max-width: 520px) {
+  /* 卡头在窄屏改为上下排：说明独占整行，状态回到左对齐，避免右侧被压窄 */
+  .evo-head { flex-wrap: wrap; gap: 8px; }
+  .evo-meta-text { width: 100%; padding-top: 0; text-align: left; white-space: normal; }
+  .evo-dist-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evo-kpi b { font-size: 17px; }
+}
 @media (max-width: 370px) {
-  .evo-kpis, .evo-verdicts { grid-template-columns: 1fr; }
+  .evo-kpis, .evo-dist-legend { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

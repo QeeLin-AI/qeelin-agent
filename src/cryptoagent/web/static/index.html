@@ -299,47 +299,81 @@
       </div>
     </div>
 
-    <div class="evo-top">
-      <div class="card">
-        <div class="card-head"><h2>当前配置方案</h2><span id="evoProfileBadge" class="badge">读取中</span></div>
-        <p id="evoProfileSummary" class="muted">正在读取方案…</p>
-        <div class="evo-meta" id="evoProfileMeta"></div>
-        <div class="actions">
-          <a href="#settings" class="btn" id="evoToSettings">去设置调整</a>
+    <div class="evo-hero">
+      <div class="card evo-card">
+        <div class="evo-head">
+          <div class="evo-head-main">
+            <h2>能力进度</h2>
+            <p class="evo-desc">按平仓笔数推进，满 100 笔才具备与真人对照的统计意义</p>
+          </div>
+          <span id="evoSampleState" class="badge">观察期</span>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>能力进度</h2><span id="evoSampleState" class="badge">观察期</span></div>
         <div class="evo-progress">
           <div class="evo-progress-bar"><i id="evoProgressFill"></i></div>
-          <span id="evoProgressText" class="muted">0 / 100 笔</span>
+          <span id="evoProgressText" class="evo-progress-text">0 / 100 笔</span>
         </div>
         <div class="evo-kpis" id="evoKpis"></div>
       </div>
+
+      <div class="card evo-card evo-card-profile">
+        <div class="evo-head">
+          <div class="evo-head-main">
+            <h2>当前配置方案</h2>
+            <p class="evo-desc">交易参数的来源，切换方案会覆盖这些初始条件</p>
+          </div>
+          <span id="evoProfileBadge" class="badge">读取中</span>
+        </div>
+        <p id="evoProfileSummary" class="evo-profile-summary">正在读取方案…</p>
+        <div class="evo-meta" id="evoProfileMeta"></div>
+        <div class="evo-foot">
+          <a href="#settings" class="btn ghost sm" id="evoToSettings">去设置调整</a>
+        </div>
+      </div>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h2>复盘归因</h2><span id="evoReviewMeta" class="muted"></span></div>
-      <div class="evo-verdicts" id="evoVerdicts"></div>
-      <div class="evo-chips" id="evoMistakes"></div>
+    <div class="card evo-card">
+      <div class="evo-head">
+        <div class="evo-head-main">
+          <h2>复盘归因</h2>
+          <p class="evo-desc">每笔平仓的确定性判定，用来定位「赚在哪、亏在哪」</p>
+        </div>
+        <span id="evoReviewMeta" class="evo-meta-text"></span>
+      </div>
+      <div class="evo-dist" id="evoVerdicts"></div>
+      <div class="evo-labels">
+        <span class="evo-labels-title">主要错误</span>
+        <div class="evo-chips" id="evoMistakes"></div>
+      </div>
       <div class="evo-lessons" id="evoLessons"></div>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h2>进化账本</h2><span id="evoChangesMeta" class="muted"></span></div>
+    <div class="card evo-card">
+      <div class="evo-head">
+        <div class="evo-head-main">
+          <h2>进化账本</h2>
+          <p class="evo-desc">参数、规则、因子的每次自动改动都记一条，可按条回滚</p>
+        </div>
+        <span id="evoChangesMeta" class="evo-meta-text"></span>
+      </div>
       <div class="table-scroll">
-        <table class="table" id="evoChangesTable">
+        <table class="table evo-table" id="evoChangesTable">
           <thead><tr><th>时间</th><th>类型</th><th>目标</th><th>改动</th><th>状态</th><th>应用后归因</th></tr></thead>
           <tbody><tr><td colspan="6" class="muted center">读取中…</td></tr></tbody>
         </table>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h2>真人对照门槛</h2><span class="muted">≥ 100 笔平仓后才有统计意义</span></div>
+    <div class="card evo-card">
+      <div class="evo-head">
+        <div class="evo-head-main">
+          <h2>真人对照门槛</h2>
+          <p class="evo-desc">当前值与及格、接近真人、超越真人三档标准的差距</p>
+        </div>
+        <span class="evo-tag">≥ 100 笔后生效</span>
+      </div>
       <div class="table-scroll">
-        <table class="table" id="evoBenchTable">
-          <thead><tr><th>指标</th><th>当前</th><th>及格</th><th>接近真人</th><th>超越</th></tr></thead>
+        <table class="table evo-table" id="evoBenchTable">
+          <thead><tr><th>指标</th><th class="num">当前</th><th class="num">及格</th><th class="num">接近真人</th><th class="num">超越</th></tr></thead>
           <tbody><tr><td colspan="5" class="muted center">读取中…</td></tr></tbody>
         </table>
       </div>

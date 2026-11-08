@@ -301,6 +301,15 @@ const EVO_STATUS_CN = {
   degraded: '变差', rejected: '已拒绝', rolled_back: '已回滚',
 };
 const EVO_KIND_CN = { config: '参数', rule: '规则', factor: '因子' };
+// 复盘判定的固定顺序与配色：堆叠条和图例共用同一份，避免两处顺序/颜色不一致
+const EVO_VERDICT_KEYS = ['good', 'bad_entry', 'bad_exit', 'gave_back', 'neutral'];
+const EVO_VERDICT_COLOR = {
+  good: 'var(--ok)',
+  bad_entry: 'var(--up)',
+  bad_exit: 'var(--amber)',
+  gave_back: 'var(--purple)',
+  neutral: 'var(--faint)',
+};
 
 const evoSigned = (v) => {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return '--';
@@ -396,15 +405,23 @@ function renderEvoPerf(p) {
 
   const rs = p.review_summary || {};
   const total = Number(rs.n || 0);
-  const order = ['good', 'bad_entry', 'bad_exit', 'gave_back', 'neutral'];
+  const counts = EVO_VERDICT_KEYS.map((k) => Number((rs.by_verdict || {})[k] || 0));
+  const sum = counts.reduce((a, b) => a + b, 0);
   const vd = $('evoVerdicts');
   if (vd) {
-    vd.innerHTML = order.map((k) => {
-      const c = Number((rs.by_verdict || {})[k] || 0);
-      const share = total ? Math.round((c / total) * 100) : 0;
-      return `<div class="evo-verdict"><label>${EVO_VERDICT_CN[k]}</label>`
-        + `<b>${c}<span>${total ? share + '%' : '—'}</span></b></div>`;
-    }).join('');
+    // 一条堆叠分布条 + 五格图例：先看比例再读数字，比五个孤立方块更快看懂
+    const bar = sum
+      ? `<div class="evo-dist-bar">${EVO_VERDICT_KEYS.map((k, i) => (counts[i]
+        ? `<i style="width:${((counts[i] / sum) * 100).toFixed(2)}%;background:${EVO_VERDICT_COLOR[k]}"`
+          + ` title="${EVO_VERDICT_CN[k]} ${counts[i]} 笔"></i>`
+        : '')).join('')}</div>`
+      : '';
+    const legend = `<div class="evo-dist-legend">${EVO_VERDICT_KEYS.map((k, i) => {
+      const share = sum ? Math.round((counts[i] / sum) * 100) : 0;
+      return `<div class="evo-legend"><label><i class="dot" style="background:${EVO_VERDICT_COLOR[k]}"></i>${EVO_VERDICT_CN[k]}</label>`
+        + `<b>${counts[i]}<span>${sum ? `${share}%` : '—'}</span></b></div>`;
+    }).join('')}</div>`;
+    vd.innerHTML = bar + legend;
   }
   const mis = Object.entries(rs.by_mistake || {}).slice(0, 6);
   const mc = $('evoMistakes');
@@ -434,10 +451,10 @@ function renderEvoBench(p, o) {
   tb.innerHTML = rows.map(([label, key, d]) => {
     const cell = (v) => (v === null || v === undefined || Number.isNaN(Number(v)))
       ? '—' : Number(v).toFixed(d);
-    return `<tr><td>${label}</td><td><b>${cell(o[key])}</b></td>`
-      + `<td class="muted">${cell((b.pass || {})[key])}</td>`
-      + `<td class="muted">${cell((b.near_human || {})[key])}</td>`
-      + `<td class="muted">${cell((b.beyond || {})[key])}</td></tr>`;
+    return `<tr><td>${label}</td><td class="num"><b>${cell(o[key])}</b></td>`
+      + `<td class="num muted">${cell((b.pass || {})[key])}</td>`
+      + `<td class="num muted">${cell((b.near_human || {})[key])}</td>`
+      + `<td class="num muted">${cell((b.beyond || {})[key])}</td></tr>`;
   }).join('');
 }
 
