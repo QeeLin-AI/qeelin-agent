@@ -742,7 +742,7 @@ class TradingEngine:
         return max(1, n)
 
     def _quote_for(self, symbol: str, ttl: float = 10.0) -> float:
-        """取某个品种的最新价。活跃品种直接读 self.df，其余走毫秒级 ticker。
+        """取某个品种的最新价。优先 ws 实时价，其次活跃品种 K 线 / REST ticker。
 
         多品种止损检查不能都拿「当前品种的价格」：BTC 的价套到 SOL 仓位上，
         止损/止盈会瞬间误触发。取不到价就返回 0，调用方跳过该品种本轮检查。
@@ -753,6 +753,12 @@ class TradingEngine:
         K 线只作为 ticker 全源失败时的兜底。
         """
         sym = str(symbol).upper()
+        # 优先 ws 实时价：只认 15s 内新鲜值，让非活跃品种的持仓管理员 / check_stops
+        # 也吃到 <1s 价；ws 断线（>15s）自动回退到下面的 K 线 / REST，不会一直用旧价。
+        ws_px = float((getattr(self, "_last_prices", None) or {}).get(sym) or 0.0)
+        ws_ts = float((getattr(self, "_price_ts", None) or {}).get(sym) or 0.0)
+        if ws_px > 0 and (time.time() - ws_ts) <= 15.0:
+            return ws_px
         cur = str(self.cfg.market.symbol).upper()
         if sym == cur and self.df is not None:
             try:
