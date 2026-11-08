@@ -1678,9 +1678,13 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   }
   .price-meta > .badge { flex: none; }
   /* 2) 数据源 / LLM / 已运行时长 与「强制刷新」「紧急熔断」统一 32px 高，
-        原标签是 4px 内边距 + 17.6 行高 = 27.6px，比按钮矮 4.4px */
+        原标签是 4px 内边距 + 17.6 行高 = 27.6px，比按钮矮 4.4px。
+        注意只能作用于移动版胶囊（.m-only）：给 .uptime 无条件加 display 会把
+        PC 版（.pc-only，本来就 display:none）重新显示出来，出现两个运行时长。 */
   .top-right .tag,
-  .top-right .uptime { min-height: 32px; display: inline-flex; align-items: center; }
+  .top-right .uptime { min-height: 32px; align-items: center; }
+  .top-right .uptime.m-only { display: inline-flex; }
+  .top-right .uptime.pc-only { display: none; }
   /* 盈亏区：横向排列时统计卡只剩 98px（还被 minmax 撑破），改为上下两段、卡片占满整行 */
   .pnl-hero { flex-direction: column; flex-wrap: nowrap; gap: 10px; }
   .pnl-total { flex: 0 0 auto; }
@@ -1808,13 +1812,16 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .tf { min-height: 34px; padding: 7px 12px; }
   .seg { min-height: 36px; }
   .set-tab { min-height: 36px; }
-  /* 顶栏主题按钮：正方形（原来 30×34 非方），并在这一行里垂直居中。
-     .side-foot 拉满行高、按钮自身 align-self:center，行高变化时也保持居中。 */
+  /* 顶栏主题按钮：与「强制刷新」同一个描边样式（1px var(--border) + 8px 圆角），
+     32×32 正方形；.side-foot 拉满行高、按钮 align-self:center，行高变化时也保持居中。 */
   .side-foot { display: flex; align-items: center; align-self: stretch; }
   .side-foot .theme-btn {
-    width: 34px; height: 34px; min-height: 34px; padding: 0;
+    width: 32px; height: 32px; min-height: 32px; padding: 0;
     align-self: center; margin: 0; flex: none;
+    background: transparent; border: 1px solid var(--border); border-radius: 8px;
   }
+  .side-foot .theme-btn:hover { background: var(--surface-2); border-color: var(--accent-line); }
+  .side-foot .theme-btn:active { transform: none; }
 }
 
 /* 极窄屏兜底：320–370px 下三列每列不足 100px，回退两列；持仓卡仍独占整行。
