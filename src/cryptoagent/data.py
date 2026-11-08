@@ -383,11 +383,12 @@ def _okx_rows_to_df(rows: list[list]) -> pd.DataFrame:
 def _fetch_okx_funding(inst: str, since_ms: int) -> list[dict]:
     """拉 OKX 永续历史资金费率（从最新往回翻到 since_ms 之前）。"""
     rows: list[dict] = []
-    before = ""
+    after = ""
     for _page in range(200):  # 上限保护，避免翻页死循环
         params: dict = {"instId": inst, "limit": "100"}
-        if before:
-            params["before"] = before
+        if after:
+            # OKX 历史接口用 after 翻页（返回比 after 更早的记录），与 K 线翻页一致
+            params["after"] = after
         try:
             batch = _get(f"{OKX}/api/v5/public/funding-rate-history", params, timeout=10).get("data") or []
         except Exception:  # noqa: BLE001 - funding 是增强数据，拉不到就停下
@@ -398,7 +399,7 @@ def _fetch_okx_funding(inst: str, since_ms: int) -> list[dict]:
         oldest = int(batch[-1].get("fundingTime") or 0)
         if oldest <= since_ms or len(batch) < 100:
             break
-        before = str(oldest)
+        after = str(oldest)
     return rows
 
 
