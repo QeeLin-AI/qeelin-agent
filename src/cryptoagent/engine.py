@@ -3818,11 +3818,19 @@ class TradingEngine:
     # 自动循环
     # ------------------------------------------------------------------
     def start_auto(self, interval_sec: int = 300, execute: bool = False) -> dict:
-        if self._auto_thread and self._auto_thread.is_alive():
-            return {"running": True, "interval_sec": self.auto_interval}
         interval_sec = max(30, int(interval_sec))
+        # 参数永远先落定：线程已在跑时直接 return 会让「自动下单」勾选改了却不生效——
+        # 用户看到「已启动」的提示，实际只决策不下单，平仓样本永远是 0。
         self.auto_interval = interval_sec
         self.auto_execute = bool(execute)
+        if self._auto_thread and self._auto_thread.is_alive():
+            self.state["auto"].update({
+                "running": True,
+                "interval_sec": interval_sec,
+                "execute": self.auto_execute,
+            })
+            self._save()
+            return self.state["auto"]
         self._auto_stop.clear()
         self._auto_thread = threading.Thread(target=self._auto_loop, daemon=True)
         self._auto_thread.start()
