@@ -1367,9 +1367,13 @@ class TradingEngine:
         exchange = exchange or self.state.get("exchange", "binance")
         key, secret, passphrase = read_api_keys(exchange, testnet)
         if exchange == "okx":
-            if not key or not secret:
-                need = "OKX_DEMO_API_KEY / OKX_DEMO_API_SECRET" if testnet else "OKX_API_KEY / OKX_API_SECRET"
-                raise ExchangeError(f"未设置 {need}（模拟盘与主网是两套独立 Key）")
+            if not key or not secret or not passphrase:
+                need = (
+                    "OKX_DEMO_API_KEY / OKX_DEMO_API_SECRET / OKX_DEMO_PASSPHRASE"
+                    if testnet
+                    else "OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE"
+                )
+                raise ExchangeError(f"未设置 {need}（模拟盘与主网是两套独立 Key，OKX 必须三项齐全）")
             self.live_client = OKXClient(
                 key, secret, passphrase, testnet=testnet, armed=self.armed, env=env
             )

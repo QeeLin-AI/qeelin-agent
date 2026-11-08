@@ -60,6 +60,21 @@ def _quantize(value: float, step: float) -> float:
     return round(int(value / step + 1e-9) * step, 10)
 
 
+def _num_str(value: float, decimals: int = 10) -> str:
+    """数字转交易所要的十进制字符串：不用科学计数法（OKX 会判参数错误）。
+
+    优先用 repr 的最短往返表示：`f"{70123.46:.12f}"` 会写出
+    70123.460000000006 这种交易所不认的字符串，repr 则是干净的 70123.46。
+    只有遇到科学计数法（1e-05）才退回定点格式并去掉尾部零。
+    """
+    text = repr(float(value))
+    if "e" in text or "E" in text:
+        text = f"{float(value):.{decimals}f}".rstrip("0").rstrip(".")
+    elif text.endswith(".0"):
+        text = text[:-2]
+    return text or "0"
+
+
 def read_api_keys(exchange: str, testnet: bool = True) -> tuple[str, str, str]:
     """读取项目 .env 里的 API Key。
 
@@ -484,6 +499,10 @@ class OKXClient:
         self.base = (base_url or os.getenv("CRYPTOAGENT_OKX_BASE") or self.LIVE).rstrip("/")
         self._last_call = 0.0
         self._filters: dict[str, tuple[float, float, float]] = {}
+        # 合约元数据（tickSz / lotSz / minSz / ctVal / lever）与账户持仓模式，
+        # 首次用到时各拉一次。OKX 永续下单单位是「张」，必须靠 ctVal 换算。
+        self._inst_cache: dict[str, dict] = {}
+        self._pos_mode_cache = ""
 
     # -- 内部 ---------------------------------------------------------
     def _throttle(self) -> None:
@@ -555,6 +574,13 @@ class OKXClient:
             )
         elif body is not None:
             data = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        else:
+            # 公共接口（instruments / mark-price / funding 等）都用 query 传参：
+            # 以前这里只给签名请求拼 query，未签名 GET 的参数被整体丢弃，
+            # 结果是 filters() 静默退回 BTC 默认精度、max_leverage() 直接 400。
+            query = urllib.parse.urlencode(params)
+            if query:
+                url = f"{url}?{query}"
         req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
         try:
             with urllib.request.urlopen(req, timeout=self.timeout, context=ssl_context()) as resp:
@@ -571,12 +597,90 @@ class OKXClient:
         except Exception as exc:  # noqa: BLE001
             raise ExchangeError(f"OKX 返回非 JSON：{raw[:200]}") from exc
         if isinstance(payload, dict) and "code" in payload and str(payload.get("code")) != "0":
-            raise ExchangeError(f"OKX 错误 [{payload.get('code')}] {payload.get('msg')}")
+            # 下单类接口失败时顶层只有 "All operations failed"，真实原因在 data[0].sCode
+            # （例如 51000 side error / 51121 数量不是最小变动单位的整数倍）。
+            # 不把 sCode/sMsg 带出来，排查时等于没有信息。
+            detail = ""
+            rows = payload.get("data")
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict) and str(row.get("sCode") or "0") != "0":
+                        detail = f"（{row.get('sCode')}: {row.get('sMsg')}）"
+                        break
+            raise ExchangeError(f"OKX 错误 [{payload.get('code')}] {payload.get('msg')}{detail}")
         return payload
 
     @staticmethod
     def _data(payload: dict) -> list:
         return payload.get("data", []) if isinstance(payload, dict) else []
+
+    def _inst_info(self, symbol_or_inst: str) -> dict:
+        """合约元数据：tickSz / lotSz / minSz / ctVal / lever（按 instId 缓存）。
+
+        ⚠️ OKX 永续的 `sz` 与持仓 `pos` 都是**张数**，1 张 = ctVal 个币
+        （BTC-USDT-SWAP ctVal=0.01、DOGE-USDT-SWAP ctVal=1000）。
+        本程序内部一律用「币数」，跨边界时用这里的 ctVal 换算。
+        拉不到时返回保守默认值且**不缓存**，下次重新探测。
+        """
+        inst = (
+            symbol_or_inst
+            if str(symbol_or_inst).endswith("-SWAP")
+            else to_okx_inst(symbol_or_inst)
+        )
+        cached = self._inst_cache.get(inst)
+        if cached is not None:
+            return cached
+        info = {
+            "instId": inst,
+            "tickSz": 0.1,
+            "lotSz": 1.0,
+            "minSz": 1.0,
+            "ctVal": 1.0,
+            "lever": 100.0,
+        }
+        try:
+            rows = self._data(
+                self._request(
+                    "GET", "/api/v5/public/instruments",
+                    {"instType": "SWAP", "instId": inst},
+                )
+            )
+        except ExchangeError:
+            return info
+        if rows:
+            row = rows[0]
+            info["tickSz"] = self._f(row.get("tickSz"), 0.1) or 0.1
+            info["lotSz"] = self._f(row.get("lotSz"), 1.0) or 1.0
+            info["minSz"] = self._f(row.get("minSz"), 1.0) or 1.0
+            info["ctVal"] = self._f(row.get("ctVal"), 1.0) or 1.0
+            info["lever"] = self._f(row.get("lever"), 100.0) or 100.0
+            self._inst_cache[inst] = info
+        return info
+
+    def _pos_mode(self) -> str:
+        """账户持仓模式（net_mode / long_short_mode），首次写入操作时探测一次。
+
+        双向持仓模式下单纯下市价单必须带 posSide，否则 OKX 只回一句
+        "All operations failed"。本客户端的下单路径按单向持仓实现，
+        检测到双向就明确拒绝，而不是发一堆注定失败的单。
+        """
+        if self._pos_mode_cache:
+            return self._pos_mode_cache
+        try:
+            rows = self._data(self._request("GET", "/api/v5/account/config", {}, signed=True))
+        except ExchangeError:
+            return ""
+        mode = str((rows[0] if rows else {}).get("posMode") or "")
+        if mode:
+            self._pos_mode_cache = mode
+        return mode
+
+    def _require_net_mode(self) -> None:
+        if self._pos_mode() == "long_short_mode":
+            raise ExchangeError(
+                "OKX 账户当前是「双向持仓(long_short_mode)」，本程序只支持「单向持仓(net_mode)」；"
+                "请在 OKX 网页端「交易 → 交易设置 → 持仓模式」切换为单向持仓后重试"
+            )
 
     # -- 公共接口 -----------------------------------------------------
     def ping(self) -> bool:
@@ -629,14 +733,25 @@ class OKXClient:
         for p in data:
             if inst and p.get("instId") != inst:
                 continue
-            amt = self._f(p.get("pos"))
-            if abs(amt) < 1e-8:
+            contracts = self._f(p.get("pos"))
+            if abs(contracts) < 1e-12:
                 continue
+            ct_val = self._inst_info(p.get("instId") or symbol or "")["ctVal"]
+            # side 不能只看 posSide：单向持仓（net_mode）下 posSide 恒为 "net"，
+            # 老代码把它一律当 SHORT，多单会被标成空单。
+            pos_side = str(p.get("posSide") or "").lower()
+            if pos_side in ("long", "short"):
+                side = "LONG" if pos_side == "long" else "SHORT"
+            else:
+                side = "LONG" if contracts > 0 else "SHORT"
             out.append(
                 {
                     "symbol": from_okx_inst(p.get("instId", symbol or "")),
-                    "side": "LONG" if p.get("posSide") == "long" else "SHORT",
-                    "qty": abs(amt),
+                    "side": side,
+                    # 对外统一「币数」，与币安 positionAmt 口径一致；张数单独给出便于对账
+                    "qty": abs(contracts) * ct_val,
+                    "contracts": abs(contracts),
+                    "ct_val": ct_val,
                     "entry": self._f(p.get("avgPx")),
                     "mark": self._f(p.get("markPx")),
                     "unrealized": self._f(p.get("upl")),
@@ -648,6 +763,7 @@ class OKXClient:
 
     def set_leverage(self, symbol: str, leverage: int) -> dict:
         self._guard()
+        self._require_net_mode()
         return self._request(
             "POST",
             "/api/v5/account/set-leverage",
@@ -657,27 +773,33 @@ class OKXClient:
 
     def max_leverage(self, symbol: str) -> int:
         """该品种支持的最大杠杆（来自 public/instruments 的 lever 字段）。"""
-        d = self._data(self._request("GET", "/api/v5/public/instruments",
-                                     {"instType": "SWAP", "instId": to_okx_inst(symbol)}))
-        if not d:
-            return 100
         try:
-            return int(float(d[0].get("lever", 100)))
+            return int(float(self._inst_info(symbol).get("lever") or 100))
         except (TypeError, ValueError):
             return 100
 
     def place_market(self, symbol: str, side: str, quantity: float, reduce_only: bool = False) -> OrderResult:
+        """市价单。`quantity` 是**币数**（与币安一致），这里换算成 OKX 的张数。"""
         self._guard()
-        tick, step, _ = self.filters(symbol)
-        qty = _quantize(quantity, step)
-        if qty <= 0:
-            raise ExchangeError(f"下单数量四舍五入后为 0（原始 {quantity}，step {step}）")
+        self._require_net_mode()
+        info = self._inst_info(symbol)
+        ct_val = info["ctVal"]
+        lot = info["lotSz"]
+        if quantity <= 0:
+            raise ExchangeError(f"下单数量必须为正（收到 {quantity}）")
+        contracts = _quantize(quantity / ct_val, lot)
+        if contracts <= 0 or contracts + 1e-12 < info["minSz"]:
+            raise ExchangeError(
+                f"下单数量低于 OKX 最小下单量：{quantity:g} 币 ≈ {quantity / ct_val:.8g} 张，"
+                f"最小 {info['minSz']:g} 张（1 张 = {ct_val:g} 币）"
+            )
         body = {
             "instId": to_okx_inst(symbol),
             "tdMode": "cross",
-            "side": side.upper(),
+            # OKX 的 side 只接受小写 buy / sell，传 "BUY" 会得到 51000 side error
+            "side": str(side).strip().lower(),
             "ordType": "market",
-            "sz": str(qty),
+            "sz": _num_str(contracts),
         }
         if reduce_only:
             body["reduceOnly"] = "true"
@@ -696,7 +818,7 @@ class OKXClient:
                 price = float(fills[0].get("fillPx", 0.0) or 0.0)
         except ExchangeError:
             pass
-        return OrderResult(ok=True, order_id=oid, price=price, qty=qty, raw=raw)
+        return OrderResult(ok=True, order_id=oid, price=price, qty=contracts * ct_val, raw=raw)
 
     def place_stop_market(
         self,
@@ -706,36 +828,50 @@ class OKXClient:
         close_position: bool = True,
         order_type: str = "STOP_MARKET",
     ) -> OrderResult:
-        """触发市价单（OKX v5 的 trigger 单，orderPx=-1 表示市价触发后按市价成交）。"""
+        """触发市价单（OKX v5 的 trigger 单，orderPx=-1 表示市价触发后按市价成交）。
+
+        - `side`/`sz` 都必须小写 + 张数，否则 51000 / 51121。
+        - 触发价按合约自己的 tickSz 取整（BTC 是 0.01，不是 0.1）。
+        - 平仓单带 reduceOnly，避免触发时反手把仓位翻倍。
+        """
         self._guard()
-        tick, step, _ = self.filters(symbol)
+        self._require_net_mode()
+        info = self._inst_info(symbol)
         inst = to_okx_inst(symbol)
-        # OKX 的平仓触发单要带数量，取当前持仓量
         pos = self.positions(symbol)
         if not pos:
             raise ExchangeError("没有持仓，无法下平仓触发单")
-        qty = _quantize(pos[0]["qty"], step)
+        contracts = _quantize(pos[0]["qty"] / info["ctVal"], info["lotSz"])
+        if contracts <= 0:
+            raise ExchangeError(f"持仓不足一张（{pos[0]['qty']:g} 币），无法下触发单")
         body = {
             "instId": inst,
             "tdMode": "cross",
-            "side": side.upper(),
+            "side": str(side).strip().lower(),
             "ordType": "trigger",
-            "triggerPx": f"{_round_price(trigger_price, tick)}",
+            "triggerPx": _num_str(_round_price(trigger_price, info["tickSz"])),
             "triggerPxType": "mark",
-            "sz": str(qty),
+            "sz": _num_str(contracts),
             "orderPx": "-1",       # -1 = 触发后按市价
-            "tgtFillPx": "-1",
         }
+        if close_position:
+            body["reduceOnly"] = "true"
         raw = self._request("POST", "/api/v5/trade/order-algo", body=body, signed=True)
         d = self._data(raw)
         oid = str(d[0].get("algoId", "")) if d else ""
         return OrderResult(ok=True, order_id=oid, raw=raw)
 
     def cancel_all(self, symbol: str) -> dict:
-        """撤掉普通挂单 + 触发单（OKX 两类单要分别撤）。"""
+        """撤掉普通挂单 + 触发单（OKX 两类单要分别撤）。
+
+        触发单列表的 ordType 必须是 "trigger"（老代码写 "1" 会被 400 拒掉，
+        导致撤单整条链路失败、上一次的止损单残留到下一笔仓位）。
+        触发单撤单接口是批量的 `cancel-algos`，`cancel-algo-order` 已 404。
+        """
         self._guard()
         inst = to_okx_inst(symbol)
         cancelled = 0
+        errors: list[str] = []
         # 普通挂单
         for o in self._data(self._request(
             "GET", "/api/v5/trade/orders-pending",
@@ -745,24 +881,28 @@ class OKXClient:
                               body={"instId": inst, "ordId": o.get("ordId")}, signed=True)
                 cancelled += 1
             except ExchangeError as exc:
-                self.last_error = str(exc)   # noqa: F841 - 单个撤单失败不阻断
+                errors.append(str(exc))   # 单个撤单失败不阻断
         # 触发单（algo）
-        for o in self._data(self._request(
+        algos = self._data(self._request(
             "GET", "/api/v5/trade/orders-algo-pending",
-            {"ordType": "1", "instType": "SWAP", "instId": inst}, signed=True)):
+            {"ordType": "trigger", "instType": "SWAP", "instId": inst}, signed=True))
+        if algos:
             try:
-                self._request("POST", "/api/v5/trade/cancel-algo-order",
-                              body={"instId": inst, "algoId": o.get("algoId")}, signed=True)
-                cancelled += 1
+                self._request("POST", "/api/v5/trade/cancel-algos",
+                              body=[{"instId": inst, "algoId": o.get("algoId")} for o in algos],
+                              signed=True)
+                cancelled += len(algos)
             except ExchangeError as exc:
-                self.last_error = str(exc)   # noqa: F841
-        return {"cancelled": cancelled}
+                errors.append(str(exc))
+        if errors:
+            self.last_error = errors[0]
+        return {"cancelled": cancelled, "errors": errors}
 
     def open_algo_orders(self, symbol: str) -> list[dict]:
         inst = to_okx_inst(symbol)
         rows = self._data(self._request(
             "GET", "/api/v5/trade/orders-algo-pending",
-            {"ordType": "1", "instType": "SWAP", "instId": inst}, signed=True))
+            {"ordType": "trigger", "instType": "SWAP", "instId": inst}, signed=True))
         out = []
         for o in rows:
             try:
@@ -779,7 +919,13 @@ class OKXClient:
             {"instType": "SWAP", "instId": inst}, signed=True))
 
     def trades(self, symbol: str | None = None, limit: int = 30) -> list[dict]:
-        """账户在交易所的真实成交。symbol 为空时拉全部品种（切换品种后仍能看到上一笔）。"""
+        """账户在交易所的真实成交。symbol 为空时拉全部品种（切换品种后仍能看到上一笔）。
+
+        量纲/符号按币安口径归一：
+        - `qty` 用币数（OKX 的 fillSz 是张数，乘 ctVal）；
+        - `fee` 用「正数=支出」（OKX 的 fee 负数=扣费，这里取反）；
+        - `side` 是持仓方向（OKX 单向持仓下 posSide="net"，要退回按买卖方向推断）。
+        """
         self._read_guard()
         params: dict = {"instType": "SWAP", "limit": max(1, min(limit, 100))}
         if symbol:
@@ -787,7 +933,13 @@ class OKXClient:
         rows = self._data(self._request("GET", "/api/v5/trade/fills", params, signed=True))
         out = []
         for i, t in enumerate(rows or []):
-            side = "LONG" if str(t.get("posSide", "")).lower() == "long" else "SHORT"
+            inst = str(t.get("instId") or "")
+            ct_val = self._inst_info(inst or (symbol or ""))["ctVal"]
+            pos_side = str(t.get("posSide") or "").lower()
+            if pos_side in ("long", "short"):
+                side = "LONG" if pos_side == "long" else "SHORT"
+            else:
+                side = "LONG" if str(t.get("side", "")).lower() == "buy" else "SHORT"
             epoch = int(self._f(t.get("ts")))
             try:
                 ts = time.strftime("%m-%d %H:%M:%S", time.localtime(epoch / 1000))
@@ -798,15 +950,15 @@ class OKXClient:
                     epoch,
                     {
                         "id": f"{t.get('tradeId', i)}",
-                        "symbol": from_okx_inst(t.get("instId") or (symbol or "")),
+                        "symbol": from_okx_inst(inst or (symbol or "")),
                         "ts": ts,
                         "ts_ms": epoch,
-                        "action": "买入" if str(t.get("side", "")).upper() == "BUY" else "卖出",
+                        "action": "买入" if str(t.get("side", "")).lower() == "buy" else "卖出",
                         "side": side,
-                        "qty": self._f(t.get("fillSz")),
+                        "qty": self._f(t.get("fillSz")) * ct_val,
                         "price": self._f(t.get("fillPx")),
                         "pnl": self._f(t.get("pnl")),
-                        "fee": self._f(t.get("fee")),
+                        "fee": -self._f(t.get("fee")),
                         "order_id": str(t.get("ordId", "")),
                     },
                 )
@@ -817,8 +969,14 @@ class OKXClient:
     def income(self, start_ms: int, limit: int = 1000) -> list[dict]:
         """资金流水：用于算「当日盈亏」（已实现盈亏 + 手续费 + 资金费）。
 
-        OKX 的 bills 接口以 type 区分（2=交易 / 6=资金费），逐条折算成与币安
-        income 同构的 {income, incomeType} 列表，前端/server 的日盈亏算法可直接复用。
+        OKX 的 bills 接口以 type 区分，逐条折算成与币安 income 同构的
+        {income, incomeType} 列表，前端/server 的日盈亏算法可直接复用：
+
+        - type=2 交易：pnl 已是带符号的已实现盈亏；
+          fee 在 OKX 是「负数=扣费」，与币安 COMMISSION 的负数 income 同号，直接透传
+          （老代码取反，等于把手续费算成收入）。
+        - type=8 资金费：用 balChg（正=收到、负=支付）。
+          type=6 是保证金划转，不是资金费（老代码错把 6 当资金费，资金费永远为 0）。
         """
         self._guard()
         rows = self._data(self._request(
@@ -837,31 +995,31 @@ class OKXClient:
                 if pnl:
                     out.append({"income": pnl, "incomeType": "REALIZED_PNL", "time": ts})
                 if fee:
-                    out.append({"income": -fee, "incomeType": "COMMISSION", "time": ts})
-            elif typ == "6":  # 资金费
+                    out.append({"income": fee, "incomeType": "COMMISSION", "time": ts})
+            elif typ == "8":  # 资金费（Funding rate）
                 out.append({"income": float(r.get("balChg", 0.0) or 0.0), "incomeType": "FUNDING_FEE", "time": ts})
-            # 其它类型（划转等）忽略，server 端也不会计入盈亏
+            # 其它类型（划转 1 / 保证金划转 6 / 利息 7 / 强平 5 等）忽略，server 端也不会计入盈亏
         return out
 
     # -- 精度 ---------------------------------------------------------
     def filters(self, symbol: str) -> tuple[float, float, float]:
-        """(tickSize, stepSize, minNotional)，来自 public/instruments 并缓存。"""
+        """(tickSz, 币数步长, 最小名义 USDT)，来自 public/instruments 并缓存。
+
+        OKX 永续的 lotSz/minSz 都是**张数**：步长要乘 ctVal 换成币数，
+        否则引擎按币数下单时会被 51121（数量不是最小变动单位整数倍）拒绝。
+        """
         if symbol in self._filters:
             return self._filters[symbol]
-        tick, step, min_notional = 0.1, 0.001, 5.0
+        info = self._inst_info(symbol)
+        ct_val = info["ctVal"]
+        step = (info["lotSz"] or 1.0) * ct_val
+        min_qty = (info["minSz"] or 1.0) * ct_val
+        min_notional = 5.0
         try:
-            d = self._data(self._request("GET", "/api/v5/public/instruments",
-                                         {"instType": "SWAP", "instId": to_okx_inst(symbol)}))
-            if d:
-                i = d[0]
-                tick = self._f(i.get("tickSz"), tick)
-                step = self._f(i.get("lotSz"), step)
-                ctval = self._f(i.get("ctVal"), 1.0)
-                try:
-                    min_notional = float(i.get("minSz", 0.0) or 0.0) * ctval * 1.0
-                except (TypeError, ValueError):
-                    min_notional = 5.0
+            px = self.mark_price(symbol)
+            if px > 0 and min_qty > 0:
+                min_notional = min_qty * px
         except ExchangeError:
             pass
-        self._filters[symbol] = (tick, step, max(min_notional, 1.0))
+        self._filters[symbol] = (info["tickSz"], step, max(min_notional, 0.0))
         return self._filters[symbol]

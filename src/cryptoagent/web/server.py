@@ -922,8 +922,8 @@ class WebApp:
             for env in envs:
                 testnet = env != "live"
                 key, secret, passphrase = read_api_keys("okx", testnet=testnet)
-                if not key or not secret:
-                    probe[env] = "未设置 OKX " + ("模拟盘" if testnet else "主网") + " API Key"
+                if not key or not secret or not passphrase:
+                    probe[env] = "未设置 OKX " + ("模拟盘" if testnet else "主网") + " API Key / Passphrase"
                     continue
                 try:
                     t0 = time.time()
@@ -932,7 +932,7 @@ class WebApp:
                     latency = int((time.time() - t0) * 1000)
                     st = client.server_time()
                     acct = client.account()
-                    tick, step, _ = client.filters(self.cfg.market.symbol)
+                    tick, step, min_notional = client.filters(self.cfg.market.symbol)
                     self.exchange_env = f"okx:{env}"
                     return {
                         "ok": True,
@@ -944,7 +944,7 @@ class WebApp:
                         "server_time": st,
                         "balance": acct["balance"],
                         "available": acct["available"],
-                        "filters": {"tick": tick, "step": step, "min_notional": 5.0},
+                        "filters": {"tick": tick, "step": step, "min_notional": round(min_notional, 4)},
                         "probe": probe,
                     }
                 except Exception as exc:  # noqa: BLE001
@@ -2309,8 +2309,9 @@ class WebApp:
             "keys_binance": bool(os.getenv("BINANCE_API_KEY")),
             "keys_okx": bool(os.getenv("OKX_API_KEY")),
             "keys_present": keys_present,
-            "keys_binance_demo": bool(os.getenv("BINANCE_DEMO_API_KEY")) or bool(os.getenv("BINANCE_API_KEY")),
-            "keys_okx_demo": bool(os.getenv("OKX_DEMO_API_KEY")) or bool(os.getenv("OKX_API_KEY")),
+            # 模拟盘与主网是独立 Key：只按本环境判断，不拿主网 Key 冒充模拟盘已配置
+            "keys_binance_demo": bool(os.getenv("BINANCE_DEMO_API_KEY")),
+            "keys_okx_demo": bool(os.getenv("OKX_DEMO_API_KEY")),
             "keys_binance_live": bool(os.getenv("BINANCE_API_KEY")),
             "keys_okx_live": bool(os.getenv("OKX_API_KEY")),
             "armed": e.armed,

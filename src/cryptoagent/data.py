@@ -462,7 +462,6 @@ def _fetch_okx(cfg: MarketConfig, need: int) -> pd.DataFrame:
         raise DataError("okx 返回空数据")
     df = _okx_rows_to_df(rows)
     df = _attach_okx_funding(df, inst)
-    # OKX 的 volume 是「张数」，量纲和币安不同，用成交额近似还原成 base 量
     return df.tail(need)
 
 
