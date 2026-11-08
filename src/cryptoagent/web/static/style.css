@@ -1851,6 +1851,13 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .top-right .tag { max-width: 110px; }
 }
 
+/* 手机端长文案 toast：主网解锁报错含两道闸门说明，比普通提示长得多。
+   原规则只有 right:22px + max-width:400px，390px 屏上会撑到左缘 0 贴边。
+   收紧右边距并限制最大宽度：短提示仍靠右成小条，长提示左右各留 12px。 */
+@media (max-width: 520px) {
+  .toast { right: 12px; max-width: calc(100vw - 24px); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
