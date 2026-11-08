@@ -804,6 +804,8 @@ label.field > input, label.field > select { max-width: 420px; }
 .ex-label { font-size: 11.5px; color: var(--muted); }
 .live-box { border: 1px solid rgba(242, 99, 111, .30); background: rgba(242, 99, 111, .045); border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
 .live-box.demo { border-color: var(--accent-line); background: var(--accent-soft); }
+/* 主网面板去掉确认文本说明后，输入框与解锁按钮之间补回留白（原由那段提示承担）。 */
+#liveBox > .actions { margin-top: 12px; }
 .warn { color: var(--up); font-size: 11.5px; line-height: 1.7; margin-bottom: 10px; }
 .warn.bare { color: var(--text-2); }
 .hint-key { font-size: 11.5px; line-height: 1.7; color: var(--muted); border-left: 2px solid var(--accent-line); padding-left: 10px; }
