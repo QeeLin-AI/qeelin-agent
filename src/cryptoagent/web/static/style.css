@@ -912,6 +912,9 @@ label.field > input, label.field > select { max-width: 420px; }
 }
 .set-stat > span { color: var(--muted); }
 .set-stat > b { font-size: 14px; font-weight: 650; color: var(--text); word-break: break-all; }
+/* 账户状态「API Key」最多并列四个账户标签，14px 在 140–200px 的统计格里容易折行；
+   单独收一号，余额 / 持仓是数字，保持原字号。 */
+#keysPresent { font-size: 12px; line-height: 1.5; }
 .set-stats.three { grid-template-columns: repeat(3, minmax(140px, 200px)); justify-content: start; }
 .set-account .actions { margin-top: 14px; }
 /* 配置方案按钮组：上方是「方案」下拉 + 空白的差异提示，没有自带上边距，

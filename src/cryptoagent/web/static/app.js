@@ -2239,11 +2239,11 @@ function renderStatus(s) {
   if ($('keysPresent')) {
     const K = s.keys || {};
     const tags = [];
-    if (K.binance && K.binance.demo) tags.push('币安模拟盘');
-    if (K.binance && K.binance.live) tags.push('币安主网');
-    if (K.okx && K.okx.demo) tags.push('OKX模拟盘');
-    if (K.okx && K.okx.live) tags.push('OKX主网');
-    $('keysPresent').textContent = tags.length ? tags.join(' / ') : '未配置';
+    if (K.binance && K.binance.demo) tags.push('币安模拟');
+    if (K.binance && K.binance.live) tags.push('币安实盘');
+    if (K.okx && K.okx.live) tags.push('OKX实盘');
+    if (K.okx && K.okx.demo) tags.push('OKX模拟');
+    $('keysPresent').textContent = tags.length ? tags.join('/') : '未配置';
   }
   renderRisk(s.risk);
   renderResearchAuto(s.research_auto);
