@@ -2114,7 +2114,11 @@ function renderStatus(s) {
         const short = String(f.side || '').toUpperCase() === 'SHORT';
         const diffCost = short ? plan - fill : fill - plan;
         const sgn = diffCost > 0 ? '+' : (diffCost < 0 ? '-' : '');
-        return `计划 ${fmtPx(plan)} → 成交 ${fmtPx(fill)}，价差 ${sgn}${fmtPx(Math.abs(diffCost))}`
+        // 价差按自身量级取 2~6 位：fmtPx 是按绝对价格定精度的，
+        // 直接套会把 1.11 打成「1.1100」，读起来像精度噪声。
+        const diffAbs = Math.abs(diffCost);
+        const dDigits = diffAbs >= 1 ? 2 : diffAbs >= 0.1 ? 3 : diffAbs >= 0.01 ? 4 : 6;
+        return `计划 ${fmtPx(plan)} → 成交 ${fmtPx(fill)}，价差 ${sgn}${diffAbs.toFixed(dDigits)}`
           + `（${slipVal >= 0 ? '+' : ''}${slipVal.toFixed(2)}bps）。正数 = 吃亏，负数 = 占便宜`;
       })();
       const slip = slipVal === null
