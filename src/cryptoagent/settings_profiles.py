@@ -24,15 +24,18 @@ from typing import Any
 PROFILES: dict[str, dict[str, Any]] = {
     "conservative": {
         "label": "保守",
-        "summary": "门槛 0.60、单笔风险 0.5%、只持 1 仓、杠杆 1~3x。信号少但每笔高置信，"
-                   "回撤上限 12%；峰时照用 LLM、研究谷时半价。适合新手或求稳。",
+        "summary": "门槛 0.55、单笔 0.5%、1 仓、杠杆 1~3x、回撤 12%。"
+                   "部署完可以放着不管：只做高置信单，止损留足波动空间，"
+                   "宁可几周不开仓也不冒险。适合先观察再决定是否加码。",
         "risk": {
             "sizing_mode": "risk",
             "max_loss_per_trade_pct": 0.005,
             "max_position_pct": 0.10,
             "max_concurrent_positions": 1,
-            "max_margin_usage_pct": 0.50,
-            "min_confidence": 0.60,
+            # 只持 1 仓，40% 保证金已足够；留 60% 缓冲应对浮亏与资金费
+            "max_margin_usage_pct": 0.40,
+            # 0.60 叠 1.5 盈亏比会长期不开仓（稳健变成不运行）；0.55 仍属高门槛
+            "min_confidence": 0.55,
             "max_leverage": 3.0,
             "min_leverage": 1.0,
             "leverage_override": 0.0,
@@ -40,8 +43,8 @@ PROFILES: dict[str, dict[str, Any]] = {
             "max_drawdown_pct": 0.12,
             "max_portfolio_notional_pct": 1.0,
             "correlated_exposure_pct": 0.8,
-            # 保守档：只做高质量单。盈亏比要求更高、止损留够波动空间，
-            # 辩论权重压低（少让模型改变公式判断）。
+            # 只做高质量单：盈亏比要求更高、止损留够波动空间，
+            # 辩论权重压低（少让模型改变公式判断）
             "min_risk_reward": 1.5,
             "min_stop_atr_mult": 0.8,
             "debate_score_weight": 0.2,
@@ -55,6 +58,12 @@ PROFILES: dict[str, dict[str, Any]] = {
             "bars_from_index": True,
             "peak_drawdown_exit_enabled": False,
             "peak_drawdown_r": 1.0,
+            # 稳健档的退出规则：让趋势走完，少折腾
+            "max_hold_bars": 48,          # 最长 2 天，不急于换手
+            "trail_activate_r": 1.2,      # 浮盈 1.2R 才启动移动止损
+            "trail_atr_mult": 2.5,        # 跟踪距离更宽，避免正常波动扫掉
+            "min_progress_r": 0.3,
+            "reversal_composite": 0.75,   # 反转退出更难触发，减少误平
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 1800,
@@ -65,7 +74,7 @@ PROFILES: dict[str, dict[str, Any]] = {
         },
         "market": {
             "auto_rotate": True,
-            "min_score": 0.25,
+            "min_score": 0.25,            # 只选明显有机会的品种
             "every_cycles": 1,
             "auto_top_k": 1,
         },
@@ -76,14 +85,18 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "balanced": {
         "label": "稳健（默认）",
-        "summary": "单笔 1%、单仓、杠杆 1~5x、置信 0.50、开轮动并每轮评 2 品种。"
-                   "稳健与适度主动兼顾，多数人的起点；与 AppConfig 默认值逐项一致。",
+        "summary": "单笔 1%、最多 2 仓、杠杆 1~5x、置信 0.50、盈亏比 1.4、回撤 18%。"
+                   "胜率与盈亏比都不偏科：一半的单赚 1.4R、一半亏 1R 时期望值仍为正。"
+                   "多数人的起点；与 AppConfig 默认值逐项一致。",
         "risk": {
             "sizing_mode": "llm",
             "max_loss_per_trade_pct": 0.010,
             "max_position_pct": 0.30,
-            "max_concurrent_positions": 1,
-            "max_margin_usage_pct": 0.95,
+            # 1→2 仓：均衡档需要一定分散度（同向相关性由 correlated 上限兜住），
+            # 又不至于像高频档那样同时扛 4 份风险
+            "max_concurrent_positions": 2,
+            # 0.30×2=0.60 ≤ 0.70：留 30% 缓冲，不把保证金顶到 95% 那么紧
+            "max_margin_usage_pct": 0.70,
             "min_confidence": 0.50,
             "max_leverage": 5.0,
             "min_leverage": 1.0,
@@ -93,7 +106,8 @@ PROFILES: dict[str, dict[str, Any]] = {
             "max_portfolio_notional_pct": 2.0,
             "correlated_exposure_pct": 1.5,
             # 必须与 AppConfig() 的 RiskConfig 默认值逐项一致（「恢复默认」的唯一语义）
-            "min_risk_reward": 1.3,
+            # 1.3→1.4：胜率五成时期望值从 +0.15R 提到 +0.2R，这是「均衡」的算术基础
+            "min_risk_reward": 1.4,
             "min_stop_atr_mult": 0.6,
             "debate_score_weight": 0.3,
         },
@@ -127,27 +141,29 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "frequency": {
         "label": "高频",
-        "summary": "门槛 0.32、单笔 0.8%、最多 4 仓、杠杆 3~10x、每轮评 3 个品种。"
-                   "笔数约 2~3 倍；峰时降级规则兜底省成本，适合能盯盘、接受频繁小止损。",
+        "summary": "门槛 0.30、单笔 0.8%、最多 4 仓、每轮评 4 品种、盈亏比 2.0。"
+                   "典型趋势跟踪：多数单小止损出局（胜率会低于五成），"
+                   "靠少数跑出 2R 以上的单把总账拉正。适合能盯盘、接受连续小亏。",
         "risk": {
             "sizing_mode": "risk",
             "max_loss_per_trade_pct": 0.008,
             "max_position_pct": 0.12,
             "max_concurrent_positions": 4,
-            "max_margin_usage_pct": 0.80,
-            "min_confidence": 0.32,
+            "max_margin_usage_pct": 0.60,          # 0.12×4=0.48 ≤ 0.60
+            "min_confidence": 0.30,                # 门槛最低：笔数优先
             "max_leverage": 10.0,
-            "min_leverage": 3.0,
+            # 3.0→1.0：高盈亏比靠「让利润跑」，不靠杠杆；强制 3x 只会放大噪音
+            "min_leverage": 1.0,
             "leverage_override": 0.0,
             "daily_loss_limit_pct": 0.06,
             "max_drawdown_pct": 0.20,
-            "max_portfolio_notional_pct": 5.0,
-            "correlated_exposure_pct": 4.0,
-            # 高频档：用略低的盈亏比下限换笔数，止损允许更紧（0.5×ATR），
-            # 辩论权重略高——高频更容易被噪音带偏，需要裁判纠偏。
-            "min_risk_reward": 1.2,
-            "min_stop_atr_mult": 0.5,
-            "debate_score_weight": 0.35,
+            "max_portfolio_notional_pct": 2.0,     # 0.12×10=1.2 ≤ 2.0
+            "correlated_exposure_pct": 1.2,
+            # 1.2→2.0：这是本档的核心。低盈亏比 + 高频 = 被手续费与噪音磨死；
+            # 高盈亏比 + 低胜率才是可持续的高频形态（亏 1R 赢 2R，胜率 34% 即可打平）
+            "min_risk_reward": 2.0,
+            "min_stop_atr_mult": 0.5,              # 允许更紧止损，抬高 R:R
+            "debate_score_weight": 0.35,           # 高频更易被噪音带偏，裁判权重略高
         },
         "position": {
             "enabled": True,
@@ -160,6 +176,12 @@ PROFILES: dict[str, dict[str, Any]] = {
             "bars_from_index": True,
             "peak_drawdown_exit_enabled": False,
             "peak_drawdown_r": 1.0,
+            # 换手要快，但盈利单不能砍太早——这是「高盈亏比」的必要条件
+            "max_hold_bars": 12,           # 12 根 1h：半天不涨就走，席位让给下一个机会
+            "trail_activate_r": 1.5,       # 1.5R 才启动移动止损，别打断趋势
+            "trail_atr_mult": 2.5,         # 跟踪距离放宽，容忍回踩
+            "min_progress_r": 0.4,         # 时间止损更严：12 根后还不到 0.4R 就撤
+            "reversal_composite": 0.7,     # 不轻易用反转信号退出
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 1800,
@@ -170,41 +192,40 @@ PROFILES: dict[str, dict[str, Any]] = {
         },
         "market": {
             "auto_rotate": True,
-            # 0.10 → 0.12：新增「盈亏比 + 止损 ATR」两道质量闸后，低分品种更容易
-            # 在提案阶段被拒。选品门槛若几乎不筛选，就会出现「选进来 → 被闸拒绝 →
-            # 下轮再选」的空转，白耗 LLM 调用。提到 0.12 让选品质量与闸门严格度匹配，
-            # 仍远低于稳健档的 0.20。
-            "min_score": 0.12,
+            # 0.12→0.10：本档本来就要笔数，选品门槛再降一档；
+            # 质量由「盈亏比 2.0 + 止损 ATR」两道闸兜住，不靠选品过滤
+            "min_score": 0.10,
             "every_cycles": 1,
-            "auto_top_k": 3,
+            "auto_top_k": 4,               # 4 仓容量，每轮评 4 个品种
         },
         "llm": {
             "offpeak_research_only": True,
-            "peak_mode": "thrift",
+            "peak_mode": "thrift",         # 峰时降级规则兜底：高频档调用量最大，省钱优先
         },
     },
     "aggressive": {
         "label": "进取",
-        "summary": "单笔 2%、最多 3 仓、杠杆 3~10x、置信 0.45、回撤上限 30%。"
-                   "博高收益，研究也峰时跑（信号全但成本高）；需强心脏与充足本金。",
+        "summary": "单笔 2%、最多 3 仓、杠杆 1~10x、置信 0.42、盈亏比 1.8、回撤上限 30%。"
+                   "高风险高收益：承受 5 连亏即停的波动，换单笔 2% 的收益弹性；"
+                   "研究也峰时跑（信号全但成本高）。需强心脏与充足本金。",
         "risk": {
             "sizing_mode": "risk",
             "max_loss_per_trade_pct": 0.020,
-            "max_position_pct": 0.25,
+            # 0.25→0.30：单品种敢给更大保证金，是「高收益」的来源
+            "max_position_pct": 0.30,
             "max_concurrent_positions": 3,
-            "max_margin_usage_pct": 0.80,
-            "min_confidence": 0.45,
+            "max_margin_usage_pct": 0.95,      # 0.30×3=0.90 ≤ 0.95
+            "min_confidence": 0.42,            # 比稳健松，抓更多机会
             "max_leverage": 10.0,
-            "min_leverage": 3.0,
+            "min_leverage": 1.0,               # 杠杆交给决策，不强制 3x 起
             "leverage_override": 0.0,
-            "daily_loss_limit_pct": 0.08,
+            "daily_loss_limit_pct": 0.10,      # 10%：0.02×5 笔才停，容忍更大幅度波动
             "max_drawdown_pct": 0.30,
-            "max_portfolio_notional_pct": 5.0,
-            "correlated_exposure_pct": 4.0,
-            # 进取档：这三项取「服务器当前实际运行值」，避免把正在生效的
-            # 质量闸一起改掉（新增参数时若直接收紧，会让在线策略突然少成交，
-            # 且页面从「当前：进取」变成「自定义组合」）。要更严格请显式调整。
-            "min_risk_reward": 1.3,
+            "max_portfolio_notional_pct": 3.5, # 0.30×10=3.0 ≤ 3.5，留一点余量
+            "correlated_exposure_pct": 2.0,
+            # 1.3→1.8：高收益不靠「高胜率」（做不到），靠小止损 + 让利润跑。
+            # 胜率 40% × 1.8R 的期望值，比胜率 55% × 1.0R 更抗噪
+            "min_risk_reward": 1.8,
             "min_stop_atr_mult": 0.6,
             "debate_score_weight": 0.3,
         },
@@ -217,6 +238,12 @@ PROFILES: dict[str, dict[str, Any]] = {
             "bars_from_index": True,
             "peak_drawdown_exit_enabled": False,
             "peak_drawdown_r": 1.0,
+            # 激进档要「赚大钱」：持有更久、跟踪更宽，避免把 3R 的单砍在 1R
+            "max_hold_bars": 36,
+            "trail_activate_r": 1.2,
+            "trail_atr_mult": 2.2,
+            "min_progress_r": 0.3,
+            "reversal_composite": 0.75,
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 900,
@@ -232,7 +259,7 @@ PROFILES: dict[str, dict[str, Any]] = {
             "auto_top_k": 3,
         },
         "llm": {
-            "offpeak_research_only": False,
+            "offpeak_research_only": False,    # 进取档不省研究钱：全信号优先
             "peak_mode": "full",
         },
     },
@@ -299,55 +326,75 @@ PROFILES: dict[str, dict[str, Any]] = {
     },
     "evolution": {
         "label": "AI 进化（L3）",
-        "summary": "稳健底座 + 开启 L3：LLM 可提议退出参数与动作（默认仅保守方向）。"
-                   "注意：应用需 L2 反事实回放门控已通过，否则套用会被拒绝。",
+        "summary": "L3 完全主导：LLM 可提议退出参数、甚至改变动作方向，也允许放宽阈值。"
+                   "底座刻意压小（单笔 0.8%、2 仓、回撤 20%），把调整空间留给进化。"
+                   "⚠️ 应用需 L2 反事实回放已通过，否则会被安全门拒绝（这是设计，不是故障）。",
         "risk": {
-            "sizing_mode": "llm",
-            "max_loss_per_trade_pct": 0.010,
-            "max_position_pct": 0.30,
-            "max_concurrent_positions": 1,
-            "max_margin_usage_pct": 0.95,
-            "min_confidence": 0.50,
+            # 底座压小：L3 会改动参数，留足安全边际；单笔 0.8% 让一次误判只亏 0.8%
+            "sizing_mode": "risk",
+            "max_loss_per_trade_pct": 0.008,
+            "max_position_pct": 0.20,
+            "max_concurrent_positions": 2,
+            "max_margin_usage_pct": 0.50,          # 0.20×2=0.40 ≤ 0.50
+            "min_confidence": 0.45,
             "max_leverage": 5.0,
             "min_leverage": 1.0,
             "leverage_override": 0.0,
-            "daily_loss_limit_pct": 0.04,
-            "max_drawdown_pct": 0.18,
-            "max_portfolio_notional_pct": 2.0,
-            "correlated_exposure_pct": 1.5,
-            # 与 balanced 同底座；但这是「更信任模型」的档位，
-            # 辩论裁判权重提到 0.4（硬上限 0.5），质量闸保持默认。
-            "min_risk_reward": 1.3,
+            "daily_loss_limit_pct": 0.05,
+            "max_drawdown_pct": 0.20,
+            "max_portfolio_notional_pct": 1.5,     # 0.20×5=1.0 ≤ 1.5
+            "correlated_exposure_pct": 1.0,
+            "min_risk_reward": 1.4,
             "min_stop_atr_mult": 0.6,
+            # 最信任模型的档位：辩论裁判权重 0.4（硬上限 0.5）
             "debate_score_weight": 0.4,
         },
         "position": {
             "enabled": True,
             "auto_tune": True,
-            "llm_explain": True,
+            "llm_explain": True,                   # L3 要说明「为什么这么改」，给人审计
             "llm_shadow": False,
             "llm_offpeak_only": True,
             "bars_from_index": True,
             "peak_drawdown_exit_enabled": False,
             "peak_drawdown_r": 1.0,
+            # —— L3 权限全开 ——
+            "evolution_mode": "llm",
+            "evolution_llm_enabled": True,
+            "evolution_llm_allow_action": True,     # 允许 LLM 改变动作（不只调参数）
+            "evolution_llm_allow_loosen": True,     # 允许放宽阈值（否则只能越调越保守）
+            "evolution_llm_shadow_cases": 10,       # 先影子 10 笔再落地，比默认 20 更快接管
+            "evolution_llm_min_confidence": 0.60,
+            # 单次最多改 10%：即使 LLM 判断激进，也只会渐进移动，避免一次调坏
+            "evolution_llm_max_param_step": 0.10,
+            # —— L1/L2 的配套门槛 ——
+            "evolution_rule_min_samples": 10,       # 比默认 8 严：L3 档的样本质量优先
+            "evolution_confirm_rounds": 2,
+            "evolution_replay_min_cases": 20,
+            "evolution_replay_window": 100,
+            "evolution_replay_min_median_delta": 0.0,
+            "evolution_replay_max_worst_delta": 0.2,
+            "evolution_l2_stable_days": 3,          # 14→3 天：稳定 3 天即放行 L3
+            "evolution_rollback_after_losses": 3,   # 连亏 3 笔自动回退上一版
+            "evolution_rollback_drawdown_r": 2.0,   # 回撤 2R 自动回退
+            # —— 退出规则（L3 会在此基础上继续调）——
+            "max_hold_bars": 24,
+            "trail_activate_r": 1.0,
+            "trail_atr_mult": 2.0,
+            "min_progress_r": 0.3,
+            "reversal_composite": 0.65,
             "reversal_ema_bars": 48,
             "composite_max_age_sec": 300,
             "llm_min_interval_sec": 900,
-            "evolution_mode": "llm",
-            "evolution_llm_enabled": True,
-            "evolution_llm_allow_action": True,
-            "evolution_llm_allow_loosen": False,
-            "evolution_llm_shadow_cases": 20,
-            "evolution_llm_min_confidence": 0.65,
         },
         "market": {
             "auto_rotate": True,
-            "min_score": 0.20,
+            "min_score": 0.15,                     # 品种池质量优先，避免 L3 在噪音品种上学偏
             "every_cycles": 1,
-            "auto_top_k": 2,
+            "auto_top_k": 2,                       # 2 仓容量，每轮评 2 个品种
         },
         "llm": {
-            "offpeak_research_only": True,
+            "offpeak_research_only": True,         # 省下的预算留给 L3 的决策调用
             "peak_mode": "full",
         },
     },
