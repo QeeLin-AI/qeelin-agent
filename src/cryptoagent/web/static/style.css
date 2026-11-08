@@ -1661,6 +1661,26 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .tab .lbl-long { display: none; }
   .tab .lbl-short { display: inline; }
   .side-foot { padding-left: 2px; }
+  /* —— 顶栏（≤520）三处对齐修正 ——
+     1) 行情时间戳优先完整。≤860 段给 .price-meta-info 加的 contain: inline-size
+        让这行宽度不参与列宽计算，于是它只能分到「品种选择」那一列的宽度，
+        时间戳一长（行情延迟会追加「N 分钟前」）就被省略号截掉。
+        这里把「时间戳 + 连接状态」整行独立出来（grid-column: 1 / -1），
+        行内用 flex 排布：时间戳不收缩不省略，价格行与列宽关系保持不变。 */
+  .price-meta {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+    grid-row: 2; grid-column: 1 / -1;
+  }
+  .price-meta > .price-meta-info { flex: 1 1 auto; min-width: 0; contain: none; flex-wrap: nowrap; }
+  .price-meta-info #liveTs {
+    flex: 0 1 auto; min-width: 0;
+    overflow: visible; text-overflow: clip; white-space: nowrap;
+  }
+  .price-meta > .badge { flex: none; }
+  /* 2) 数据源 / LLM / 已运行时长 与「强制刷新」「紧急熔断」统一 32px 高，
+        原标签是 4px 内边距 + 17.6 行高 = 27.6px，比按钮矮 4.4px */
+  .top-right .tag,
+  .top-right .uptime { min-height: 32px; display: inline-flex; align-items: center; }
   /* 盈亏区：横向排列时统计卡只剩 98px（还被 minmax 撑破），改为上下两段、卡片占满整行 */
   .pnl-hero { flex-direction: column; flex-wrap: nowrap; gap: 10px; }
   .pnl-total { flex: 0 0 auto; }
@@ -1788,6 +1808,13 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   .tf { min-height: 34px; padding: 7px 12px; }
   .seg { min-height: 36px; }
   .set-tab { min-height: 36px; }
+  /* 顶栏主题按钮：正方形（原来 30×34 非方），并在这一行里垂直居中。
+     .side-foot 拉满行高、按钮自身 align-self:center，行高变化时也保持居中。 */
+  .side-foot { display: flex; align-items: center; align-self: stretch; }
+  .side-foot .theme-btn {
+    width: 34px; height: 34px; min-height: 34px; padding: 0;
+    align-self: center; margin: 0; flex: none;
+  }
 }
 
 /* 极窄屏兜底：320–370px 下三列每列不足 100px，回退两列；持仓卡仍独占整行。
