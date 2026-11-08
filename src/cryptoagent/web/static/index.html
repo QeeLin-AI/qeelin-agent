@@ -59,7 +59,7 @@
 
   <div class="side-foot">
     <div class="side-foot-note">QeeLin-Agent Console</div>
-    <button id="themeBtn" class="btn ghost sm theme-btn" title="切换亮色 / 暗色主题" aria-label="切换亮色 / 暗色主题"><span class="theme-ico" aria-hidden="true"><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span><span class="theme-text">亮色主题</span></button>
+    <button id="themeBtn" class="btn ghost sm theme-btn" title="切换亮色 / 暗色主题" aria-label="切换亮色 / 暗色主题"><span class="theme-ico" aria-hidden="true">☀</span><span class="theme-text">亮色主题</span></button>
   </div>
 </aside>
 
@@ -211,6 +211,9 @@
       <p class="muted">分析师（并发）→ 研究员辩论 → 交易员提案 → 风控官 → 风控引擎。</p>
     </div>
 
+    <!-- 决策被跳过（本品种有持仓 / 持仓已满）时的常驻说明，紧跟运行按钮，由 renderDecisionSkip() 填充 -->
+    <div id="decisionSkipNote" class="decision-skip hidden"></div>
+
     <div class="decision-duo">
     <div class="card">
       <div class="card-head">
@@ -239,8 +242,6 @@
     </div>
     </div>
 
-    <!-- 决策被跳过（本品种有持仓 / 持仓已满）时的常驻说明，由 renderDecisionSkip() 填充 -->
-    <div id="decisionSkipNote" class="decision-skip hidden"></div>
     <div id="decisionBody" class="decision-body empty">还没有运行决策。运行一次决策后，这里会显示完整推理过程与仓位归因。</div>
     <!-- 订单计划：决策页末尾，由 renderDecision() 填充，无决策数据时隐藏 -->
     <div id="orderDock" class="order-dock hidden"></div>

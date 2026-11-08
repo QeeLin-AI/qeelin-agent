@@ -132,7 +132,7 @@ const mergeFillsForDisplay = (fills) => {
     };
   });
 };
-// 数据源标签：把 `cache:BNBUSDT 1h 末根 …` 压成 `缓存 BNB 1h`，完整原串留在 title
+// 数据源标签：把 `binance-vision:BTCUSDT 1h（无资金费率）` 压成 `币安镜像 · 1h`
 const shortSource = (src) => {
   if (!src) return '--';
   const s = String(src);
@@ -142,7 +142,7 @@ const shortSource = (src) => {
   const sym = pair ? `${pair[1]} ${pair[2]}` : '';
   if (kind.startsWith('synthetic')) return '合成假数据';
   if (kind.startsWith('stale-cache')) return `旧缓存 ${sym}`.trim();
-  if (kind === 'cache') return `缓存 ${sym}`.trim();
+  if (kind === 'cache') return `本地缓存 ${sym}`.trim();
   if (kind === 'okx-cache') return `OKX缓存 ${sym}`.trim();
   const label = { 'binance-vision': '币安镜像', 'binance-spot': '币安现货', 'binance-fapi': '币安永续', 'binance-fapi-demo': '币安合约(模拟)', 'gate-futures': 'Gate 永续', 'okx-swap': 'OKX永续' }[kind] || kind;
   return `${label} ${sym}`.trim();
@@ -1912,7 +1912,7 @@ function renderStatus(s) {
     priceEl.className = 'price';
     priceEl.textContent = fmt(s.price);
   }
-  $('dataSource').textContent = loading ? '加载中…' : shortSource(s.data_source);
+  $('dataSource').textContent = `数据源 ${loading ? '加载中…' : shortSource(s.data_source)}`;
   $('dataSource').title = s.data_source || '';
   $('llmTag').textContent = `LLM ${s.llm.provider}`;
   if (s.server && s.server.version) $('verTag').innerHTML = `<span class="ver-v">V</span>${esc(s.server.version)}`;
@@ -3230,9 +3230,10 @@ function applyTheme(mode) {
   document.documentElement.dataset.theme = light ? 'light' : 'dark';
   const btn = $('themeBtn');
   if (btn) {
-    // 日 / 月 SVG 由 CSS 按 data-theme 切换，这里只更新文字与可访问名称，
-    // 不要用 textContent 覆盖 .theme-ico（会把两个 SVG 抹掉）。
+    // 图标与文字分开存：窄屏只留图标，改 textContent 会把图标一起抹掉
+    const ico = btn.querySelector('.theme-ico');
     const txt = btn.querySelector('.theme-text');
+    if (ico) ico.textContent = light ? '🌙' : '☀';
     if (txt) txt.textContent = light ? '暗色主题' : '亮色主题';
     btn.title = light ? '切换到暗色主题' : '切换到亮色主题';
     btn.setAttribute('aria-label', btn.title);

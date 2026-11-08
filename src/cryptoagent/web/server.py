@@ -627,11 +627,26 @@ class WebApp:
             ],
         }
 
+    @staticmethod
+    def _is_full_decision(d) -> bool:
+        """只有真正跑完 LLM 链的决策才有 analysts；skipped 载荷只有 reason/position/management。
+
+        兼容两种形态：run_decision 返回 dict，测试里可能直接塞 Decision 数据类。
+        """
+        if not d:
+            return False
+        if isinstance(d, dict):
+            return bool(d.get("analysts"))
+        return bool(getattr(d, "analysts", None))
+
     def decision(self, rounds: int = 2) -> dict:
         if self.engine.state.get("halt"):
             raise ApiError("熔断开关已打开，禁止运行决策", 409)
         data = self.engine.run_decision(rounds=rounds)
-        self.last_decision = data
+        # 只缓存真正跑完的决策：skipped（本品种有持仓 / 持仓已满）没有 analysts，
+        # 缓存它会把上一次完整决策顶掉，页面刷新后决策页就变空白。
+        if self._is_full_decision(data):
+            self.last_decision = data
         return data
 
     @staticmethod
@@ -822,7 +837,8 @@ class WebApp:
 
     def latest_decision(self) -> dict | None:
         """最近一次决策的完整结构化结果（含 markdown），供页面打开时回填。"""
-        if self.last_decision:
+        # 内存里只留完整决策；历史版本可能把 skipped 载荷存进来，这里挡一层
+        if self._is_full_decision(self.last_decision):
             return self.last_decision
         d = Path(self.cfg.runs_dir) / "decisions"
         files = sorted(d.glob("*.json"))

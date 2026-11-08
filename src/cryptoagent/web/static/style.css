@@ -249,16 +249,7 @@ html[data-theme="light"] .brand-mark { animation-name: brandBreatheL; }
 .side-foot-note { font-size: 11px; color: var(--faint); margin-bottom: 10px; letter-spacing: .02em; }
 .side-foot .btn { width: 100%; }
 .theme-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-/* 日 / 月用内联线性 SVG，不再用 ☀ / 🌙 字符：字符 emoji 依赖系统字体回退，
-   在 30px 小按钮里会被渲染成细线米字形，看起来像「变形」。两套图标按主题切换，
-   线条粗细与顶栏刷新图标一致（stroke=currentColor, 2px）。 */
-.theme-btn .theme-ico { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; flex: none; }
-.theme-ico svg { width: 15px; height: 15px; display: block; flex: none; }
-.theme-ico .ico-moon { display: none; }
-html[data-theme="light"] .theme-ico .ico-sun { display: none; }
-html[data-theme="light"] .theme-ico .ico-moon { display: block; }
-/* 熔断是状态行里唯一的方角按钮，改成胶囊与数据源 / LLM / 已运行统一 */
-#haltBtn { border-radius: 99px; }
+.theme-btn .theme-ico { font-size: 13px; line-height: 1; }
 
 /* ---------------------------------------------------------------- 顶栏 */
 .topbar {
@@ -1270,7 +1261,7 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   /* 手机端顶部横向导航寸土寸金：主题按钮只留日月图标，把宽度还给主菜单 */
   .side-foot .theme-btn { width: 30px; padding: 0; gap: 0; flex: none; }
   .side-foot .theme-btn .theme-text { display: none; }
-  .side-foot .theme-btn .theme-ico { width: 15px; height: 15px; }
+  .side-foot .theme-btn .theme-ico { font-size: 14px; }
   main { padding: 22px 18px 70px; }
   .topbar { padding: 10px 18px; }
   .data-warn, .loading-bar { margin-left: 18px; margin-right: 18px; }

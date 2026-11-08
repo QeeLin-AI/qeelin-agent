@@ -388,6 +388,25 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(len(data["analysts"]), 3)
         self.assertIn("markdown", data)
 
+    def test_skipped_decision_does_not_overwrite_latest(self):
+        """本品种有持仓 → run_decision 直接 skipped（不跑 LLM），不能顶掉上次完整决策。"""
+        full = {"ts": "2026-01-01 00:00:00", "symbol": "BTCUSDT",
+                "analysts": [{"role": "技术面分析师"}], "order": None}
+        skipped = {"skipped": True, "reason": "BNBUSDT 已有持仓，等平仓完成后再做开仓决策",
+                   "symbol": "BNBUSDT", "position": {"symbol": "BNBUSDT"}, "management": {"action": "hold"}}
+        self.app.last_decision = full
+        orig = self.app.engine.run_decision
+        self.app.engine.run_decision = lambda rounds=2: skipped
+        try:
+            out = self.app.decision(rounds=1)
+        finally:
+            self.app.engine.run_decision = orig
+        self.assertIs(out, skipped)
+        self.assertIs(self.app.last_decision, full)          # 跳过不写缓存
+        status, body = self._get("/api/decisions/latest")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["data"]["symbol"], "BTCUSDT")
+
     def test_latest_research_rebuilds_rows(self):
         """排行榜从 leaderboard.json 的 history 重建，不能是空表。"""
         self._post("/api/research", {"iterations": 2})
