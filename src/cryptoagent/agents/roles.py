@@ -60,7 +60,13 @@ class MarketSnapshot:
     short_frames: dict = field(default_factory=dict)
 
     @classmethod
-    def from_df(cls, df: pd.DataFrame, symbol: str, interval: str) -> "MarketSnapshot":
+    def from_df(
+        cls,
+        df: pd.DataFrame,
+        symbol: str,
+        interval: str,
+        price_override: float | None = None,
+    ) -> "MarketSnapshot":
         close = df["close"].astype(float)
         ret = close.pct_change()
         n = len(close)
@@ -101,7 +107,8 @@ class MarketSnapshot:
 
         hi = float(close.iloc[-720:].max())
         lo = float(close.iloc[-720:].min())
-        price = float(close.iloc[-1])
+        # 最新价：决策时用 ws 实时价（price_override）覆盖 K 线末根收盘，消除滞后
+        price = float(price_override) if price_override and price_override > 0 else float(close.iloc[-1])
 
         return cls(
             symbol=symbol,

@@ -190,11 +190,14 @@ class TradingPipeline:
         analyst_weights: list[float] | None = None,
         analyst_calibrated: bool = False,
         exchange: str = "binance",
+        live_price: float | None = None,
     ) -> Decision:
         state = state or AccountState(equity=self.cfg.backtest.initial_equity,
                                       peak_equity=self.cfg.backtest.initial_equity,
                                       day_start_equity=self.cfg.backtest.initial_equity)
-        snap = MarketSnapshot.from_df(df, self.cfg.market.symbol, self.cfg.market.interval)
+        snap = MarketSnapshot.from_df(
+            df, self.cfg.market.symbol, self.cfg.market.interval, price_override=live_price
+        )
         # 短周期多空帧：让分析师/研究员/交易员在同一份数据里看到 15m/5m 的
         # 动能 / RSI / 趋势 / 突破 / 支撑阻力，做多周期共振判断。
         snap.short_frames = self._short_frames(snap.symbol, exchange)

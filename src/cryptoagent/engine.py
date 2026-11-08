@@ -964,7 +964,7 @@ class TradingEngine:
         避免旧价把「新鲜」状态污染掉。
         """
         sym = str(symbol).upper()
-        cached = float(self._last_prices.get(sym) or 0.0)
+        cached = float((getattr(self, "_last_prices", None) or {}).get(sym) or 0.0)
         ts = float((getattr(self, "_price_ts", None) or {}).get(sym) or 0.0)
         if cached > 0 and (time.time() - ts) <= 15.0:
             return cached
@@ -2984,9 +2984,13 @@ class TradingEngine:
                 "management": {},
             }
         df = self.df if self.df is not None else self.refresh_data()[0]
-        # 开仓链仍以 K 线收盘价为基准（与改造前一致）；传入的 price 只供持仓管理员
-        # 用实时价判断，避免顺带改变 account_state / 组合敞口的计算口径。
-        ref_price = float(df["close"].iloc[-1])
+        # 开仓基准价优先用 ws 实时价（<1s 新鲜），拿不到再退回 REST 实时价 / K 线末根。
+        # 决策的「最新价」也随 live_price 注入 LLM，消除 K 线末根收盘的滞后。
+        sym = str(self.cfg.market.symbol).upper()
+        live_px = float(self._mark_price(sym) or 0.0)
+        if live_px <= 0 and price and price > 0:
+            live_px = float(price)
+        ref_price = live_px if live_px > 0 else float(df["close"].iloc[-1])
         pipe = TradingPipeline(self.cfg)
         # 杠杆上限以交易所支持的最大杠杆为准；未连交易所用配置兜底（默认 3x 保守）
         ex_max = None
@@ -3001,6 +3005,7 @@ class TradingEngine:
             exchange_max_leverage=ex_max, positions=self._positions_for_risk(ref_price),
             analyst_weights=aw, analyst_calibrated=calibrated,
             exchange=self.state.get("exchange", "binance"),
+            live_price=live_px if live_px > 0 else None,
         )
         self.last_decision = decision
 
