@@ -1195,9 +1195,11 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
   body { padding-left: 0; }
   /* 手机端顶栏：强制刷新收成刷新图标，移到「品种选择」所在行的最右端；
      数据源 / LLM 两个状态标签恢复显示（DOM 顺序本就在熔断按钮左侧）；
-     熔断按钮完全不动——位置、文案、selected 状态与点击逻辑均保持原样。 */
+     熔断按钮完全不动——位置、文案、selected 状态与点击逻辑均保持原样。
+     right 取 12px 与上方主题按钮右缘对齐（侧栏横向内边距为 12px），
+     ≤520px 再随侧栏收到 8px。 */
   #clearCacheBtn {
-    position: absolute; top: 9px; right: 18px; z-index: 3;
+    position: absolute; top: 9px; right: 12px; z-index: 3;
     width: 32px; height: 32px; min-height: 32px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
   }
@@ -1664,6 +1666,8 @@ body.desktop .topbar .uptime { -webkit-app-region: no-drag; }
      同时把侧栏右内边距 12→8 补回来，导航可用宽度基本不变。 */
   .side-foot { padding-left: 8px; }
   .sidebar { padding-right: 8px; }
+  /* 侧栏右内边距收到 8px 后，刷新图标同步到 8px，保持与主题按钮右缘一条竖线 */
+  #clearCacheBtn { right: 8px; }
   /* —— 顶栏（≤520）三处对齐修正 ——
      1) 行情时间戳优先完整。≤860 段给 .price-meta-info 加的 contain: inline-size
         让这行宽度不参与列宽计算，于是它只能分到「品种选择」那一列的宽度，
