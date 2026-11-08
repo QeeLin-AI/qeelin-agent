@@ -436,9 +436,9 @@ html[data-theme="light"] .btn.primary { box-shadow: 0 4px 14px rgba(11, 143, 139
 #testnetBox .btn-switch:disabled:not(.is-connected) {
   border-color: var(--border); color: var(--muted); background: var(--surface);
 }
-/* 已连接态：景泰蓝描边 + 绿点，作为「当前所在账户」的明确反馈（区别于可连接的实心态） */
+/* 已连接态：青色描边 + 浅蓝底 + 青色字 + 绿点，作为「当前所在账户」的明确反馈（区别于可连接的实心态） */
 #testnetBox .btn-switch.is-connected {
-  background: rgba(39, 117, 182, .10); border-color: #2775b6; color: #2775b6;
+  background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
   opacity: 1; box-shadow: none;
 }
 #testnetBox .btn-switch.is-connected::before { content: '● '; color: var(--ok); }
