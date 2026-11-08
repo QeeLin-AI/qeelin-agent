@@ -1,7 +1,7 @@
 """行情 WebSocket 实时推送（零第三方依赖，标准库 RFC 6455 最小实现）。
 
 用途：持仓品种的「最新价」不再只靠 4 秒一轮的 REST 轮询，而是由交易所行情流
-主动推送（币安 fstream 的 aggTrade、OKX 的 tickers），<1s 内刷新内存价格，
+主动推送（币安 fstream 的 aggTrade、OKX 的 trades 逐笔成交），<1s 内刷新内存价格，
 页面 /api/status 每次读到的都是最新快照。
 
 为什么手写而不是引入 websocket-client：
@@ -54,15 +54,21 @@ def parse_binance_trade(raw: str) -> tuple[str, float] | None:
     return None
 
 
-def parse_okx_ticker(raw: str, inst_to_sym: dict[str, str]) -> tuple[str, float] | None:
-    """OKX tickers 消息 → (symbol, price)，按 instId 反查品种。"""
+def parse_okx_trade(raw: str, inst_to_sym: dict[str, str]) -> tuple[str, float] | None:
+    """OKX trades（逐笔成交）消息 → (symbol, price)，按 instId 反查品种。
+
+    与币安 aggTrade 对齐：只取真实成交，价格最「尖」。成交稀疏的品种可能数秒
+    不推，此时上层 _live_loop 会在 3s 鲜度窗口外回退 REST，顶栏价格不会卡死。
+    """
     try:
         msg = json.loads(raw)
+        if "data" not in msg:
+            return None  # 订阅确认 / 错误等控制消息，无行情
         inst = str((msg.get("arg") or {}).get("instId") or "")
         sym = inst_to_sym.get(inst)
         rows = msg.get("data") or []
         if sym and rows:
-            px = float(rows[0].get("last") or 0.0)
+            px = float(rows[-1].get("px") or 0.0)  # 最近一笔成交价
             if px > 0:
                 return sym, px
     except Exception:
@@ -323,7 +329,7 @@ class PriceStream:
             inst_to_sym = {okx_inst(s): s.upper() for s in syms}
 
             def handle(raw: str) -> None:
-                hit = parse_okx_ticker(raw, inst_to_sym)
+                hit = parse_okx_trade(raw, inst_to_sym)
                 if hit:
                     on_price(*hit)
 
@@ -334,7 +340,7 @@ class PriceStream:
             client.connect()
             client.send_text(json.dumps({
                 "op": "subscribe",
-                "args": [{"channel": "tickers", "instId": okx_inst(s)} for s in syms],
+                "args": [{"channel": "trades", "instId": okx_inst(s)} for s in syms],
             }))
             client.run_forever()
             client.close()
