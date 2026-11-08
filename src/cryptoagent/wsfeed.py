@@ -31,7 +31,7 @@ from .netutil import ssl_context
 # 因此做成候选列表，逐个尝试；配合首帧超时，静默的端点会被自动跳过。
 BINANCE_FSTREAM_HOSTS = ("fstream.binancefuture.com", "fstream.binance.com")
 BINANCE_FSTREAM = f"wss://{BINANCE_FSTREAM_HOSTS[0]}"
-OKX_PUBLIC = "wss://ws.okx.com:8443/ws/v5/public"    # OKX 公共行情流
+OKX_PUBLIC = "wss://ws.okx.com/ws/v5/public"          # OKX 公共行情流（8443 已退役，走 443）
 
 
 def parse_binance_trade(raw: str) -> tuple[str, float] | None:
