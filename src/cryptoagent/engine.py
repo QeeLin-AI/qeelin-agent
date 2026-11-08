@@ -3193,18 +3193,24 @@ class TradingEngine:
             tp = float(order["take_profit_price"])
 
             # 方向兜底：空单止损必须高于现价、多单必须低于现价，否则交易所直接 -2021
-            # （历史计划里存着的老价格也可能已经穿越现价，执行前统一校正一次）
+            # （历史计划里存着的老价格也可能已经穿越现价，执行前统一校正一次）。
+            # ⚠️ 必须用订单自带的决策参考价 entry_ref_price，不能用 self.price()：
+            # self.price() 取的是 self.df 末根收盘，而 self.df 会被扫描/切换品种覆盖成
+            # 别的主力品种（如 BTC）；一旦它返回 BTC 量级价格，SOL 的止损就会被错算到
+            # 76000+ 而永远触发不了，把仓位「焊死」在线上。entry_ref_price 是订单生成时
+            # 该品种的正确参考价，天然不会被串台。仅在它缺失时才回退到当前价。
             gap = 0.003
+            ref = float(order.get("entry_ref_price") or 0.0) or float(price)
             if side == "SHORT":
-                if stop <= price * (1 + 0.0005):
-                    stop = round_price(price * (1 + gap))
-                if tp >= price * (1 - 0.0005):
-                    tp = round_price(price * (1 - gap))
+                if stop <= ref * (1 + 0.0005):
+                    stop = round_price(ref * (1 + gap))
+                if tp >= ref * (1 - 0.0005):
+                    tp = round_price(ref * (1 - gap))
             else:
-                if stop >= price * (1 - 0.0005):
-                    stop = round_price(price * (1 - gap))
-                if tp <= price * (1 + 0.0005):
-                    tp = round_price(price * (1 + gap))
+                if stop >= ref * (1 - 0.0005):
+                    stop = round_price(ref * (1 - gap))
+                if tp <= ref * (1 + 0.0005):
+                    tp = round_price(ref * (1 + gap))
 
             if self.state["mode"] == "live":
                 if not self.armed or self.live_client is None:
