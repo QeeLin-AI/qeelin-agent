@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import smtplib
 import tempfile
 import time
@@ -41,6 +42,39 @@ from .config import NotifyConfig
 from .netutil import open_url
 
 _log = logging.getLogger("notify")
+
+
+# --------------------------------------------------------------------------
+# 通知文案里的持仓方向本地化
+# --------------------------------------------------------------------------
+# 引擎内部方向统一用 LONG / SHORT（与交易所字段保持一致），但通知是给人看的，
+# console / inapp / webhook / telegram / email 五个通道都应当输出中文。
+#   1) side_cn()           给调用方在源头把方向字段转成中文标签，语义最准；
+#   2) localize_direction() 对整段文案做兜底替换，覆盖风控理由、LLM 生成的理由，
+#      以及历史 JSONL 里已经写死的英文方向（load_notifications 读回时转换）。
+# 只匹配独立单词：LONG_USDT 这类标识符、meta 里的结构化枚举都不受影响。
+_DIRECTION_RE = re.compile(r"\b(long|short)\b", re.IGNORECASE)
+
+
+def side_cn(side: object) -> str:
+    """把持仓方向转成中文标签：LONG→多单，SHORT→空单。
+
+    未知值原样返回，避免把异常数据伪装成一个正常方向。
+    """
+    raw = str(side or "").strip().upper()
+    if raw.startswith("S"):
+        return "空单"
+    if raw.startswith("L"):
+        return "多单"
+    return str(side or "")
+
+
+def localize_direction(text: object) -> str:
+    """把文案中独立出现的 LONG/SHORT 替换为中文，其余内容保持不变。"""
+    s = "" if text is None else str(text)
+    if not s:
+        return s
+    return _DIRECTION_RE.sub(lambda m: side_cn(m.group(1)), s)
 
 
 # 配置类型单点定义：AppConfig 用的是 config.NotifyConfig，这里不再重复一份，
@@ -94,8 +128,8 @@ class Notifier:
             return None
         n = Notification(
             level=level,
-            title=title,
-            message=message,
+            title=localize_direction(title),
+            message=localize_direction(message),
             ts=datetime.now(timezone.utc).isoformat(),
             meta=meta or {},
         )
@@ -236,9 +270,17 @@ def load_notifications(path: str = "runs/notifications.jsonl", limit: int = 50) 
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    entry = json.loads(line)
                 except json.JSONDecodeError:
                     _log.warning("通知文件存在畸形行，已跳过: %s", path)
+                    continue
+                # 旧版本写入的英文方向在读取时就地中文化；只改返回值，不回写历史文件。
+                if isinstance(entry, dict):
+                    if "title" in entry:
+                        entry["title"] = localize_direction(entry["title"])
+                    if "message" in entry:
+                        entry["message"] = localize_direction(entry["message"])
+                out.append(entry)
     except OSError as exc:
         _log.error("读取通知文件失败: %s: %s", path, exc)
         return []

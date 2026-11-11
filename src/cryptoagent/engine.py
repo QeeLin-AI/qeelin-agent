@@ -44,7 +44,7 @@ from .data import (
 )
 from .derivatives import enrich_derivatives
 from .execution import BinanceFuturesClient, OKXClient, ExchangeError, account_equity, read_api_keys
-from .notify import get_notifier
+from .notify import get_notifier, side_cn
 from .risk import AccountState
 
 
@@ -1673,7 +1673,7 @@ class TradingEngine:
         self._log_live("CLOSE", str(pos.get("side")), qty, exit_px, order_id)
         self._notify(
             "info" if net_for_risk >= 0 else "critical",
-            f"{pos.get('side')} 已由交易所平仓（补记）",
+            f"{symbol} {side_cn(pos.get('side'))}已由交易所平仓（补记）",
             f"成交价 {round_price(exit_px)}，价格盈亏 {pnl:+,.2f} U，"
             f"平仓手续费 {fee:,.2f} U（费用直接计入累计已实现盈亏）",
             {"symbol": symbol, "pnl": round(pnl, 2), "reason": "exchange"},
@@ -2255,6 +2255,8 @@ class TradingEngine:
             changes = self._confirm_tuning(changes)
             now = time.time()
             if mode in ("replay", "llm"):
+                # L2 回放降级为「观测 + 留痕」：结果仍写 gate / replay 供设置页与
+                # 进化账本审计，但不再作为门控丢弃 L1 候选改动（2026-11-11）。
                 gate = dict(self.position_tuning.get("gate") or {})
                 if changes:
                     passed, replay = self._replay_gate(prev, eff)
@@ -2268,10 +2270,6 @@ class TradingEngine:
                     if passed:
                         gate["l2_passed_at"] = gate.get("l2_passed_at") or now
                         gate["l2_stable_since"] = gate.get("l2_stable_since") or now
-                    else:
-                        # 门控未过：丢弃本轮改动，保持当前生效值
-                        eff = dict(prev)
-                        changes = []
                 else:
                     # 没有候选：回放没有可比对象，不能凭「空跑」通过门控。
                     # 否则只要样本够、哪怕参数完全没动，也会把 L2 置为通过，
@@ -2285,7 +2283,8 @@ class TradingEngine:
                     gate.setdefault("l2_passed", False)
                 self.position_tuning["gate"] = gate
             # 进化账本：L1 校准的改动同样要留痕，否则「进化采纳率」永远算不出来。
-            # 走到这里的 changes 已过「连续确认 + L2 回放闸门」，是真正生效的一批。
+            # 走到这里的 changes 已过「L1 连续确认」，是真正生效的一批；
+            # L2 回放结果只作为证据附在账本里，不再决定它们能否落地。
             # 去重：同一参数 1 小时内且目标值相同就不再记，避免参数震荡把账本刷爆。
             try:
                 from .evolution import get_governor
@@ -2424,24 +2423,17 @@ class TradingEngine:
             pass
 
     def _llm_evolution_allowed(self) -> bool:
-        """L3 门控：L2 通过 + 用户显式开启，二者缺一不可。
+        """L3 只由用户开关决定：层级为 llm 且 evolution_llm_enabled 已打开。
 
-        稳定等待期（evolution_l2_stable_days）默认 0：L2 门控通过后立即允许进入 L3；
-        仅在显式配置 > 0 时才要求 L2 通过后继续稳定运行 N 天（保留可逆的观察期）。
+        2026-11-11 取消 L2 前置门控：反事实回放仍会运行并写入 gate 供审计，
+        但「l2_passed」与稳定等待期都不再影响 L1 参数落地或 L3 启用。
+        保留的保护：影子期、最低置信度、单轮步长、BOUNDS、动作方向限制、
+        连亏 / 累计回撤自动回退。用户随时可以关掉总开关再打开。
         """
         cfg = getattr(self.cfg, "position", None)
         if cfg is None or self._evolution_mode() != "llm":
             return False
-        if not bool(getattr(cfg, "evolution_llm_enabled", False)):
-            return False
-        gate = self.position_tuning.get("gate") or {}
-        if not bool(gate.get("l2_passed")):
-            return False
-        days = int(getattr(cfg, "evolution_l2_stable_days", 0) or 0)
-        since = float(gate.get("l2_stable_since") or 0.0)
-        if days > 0 and since and (time.time() - since) < days * 86400:
-            return False
-        return True
+        return bool(getattr(cfg, "evolution_llm_enabled", False))
 
     def _apply_llm_evolution(self, dec, ev: dict, pos: dict) -> dict:
         """把 LLM 提案交给代码裁决：方向只许更保守、参数受规则与步长限制。"""
@@ -2552,9 +2544,13 @@ class TradingEngine:
             pass
 
     def _rollback_llm_evolution(self, reason: str) -> None:
-        """回退：关掉 L3、清掉学习覆盖、保留统计与审计记录。"""
+        """回退：关掉 L3、清掉学习覆盖、保留统计与审计记录。
+
+        同步关掉总开关，让设置页的 L3 开关与实际状态一致；用户可自行重新打开。
+        """
         try:
             self.cfg.position.evolution_mode = "stats"
+            self.cfg.position.evolution_llm_enabled = False
             base = self._tuning_base()
             self.position_tuning["effective"] = dict(base)
             self.position_tuning["anchor"] = dict(base)
@@ -3760,7 +3756,7 @@ class TradingEngine:
                     # 不能据此标「实盘」——否则币安模拟盘的平仓通知会误标成主网实盘。
                     env_label = "模拟盘" if self.state.get("testnet", True) else "主网实盘"
                     self._notify("info" if pnl >= 0 else "critical",
-                                 f"{pos['side']} 平仓（{env_label}）",
+                                 f"{sym} {side_cn(pos['side'])}平仓（{env_label}）",
                                  f"价格盈亏 {pnl:+,.2f} U，平仓手续费 {fee:,.2f} U"
                                  f"（费用直接计入累计已实现盈亏；{reason}）",
                                  {"symbol": sym, "pnl": round(pnl, 2), "reason": reason})
@@ -3773,7 +3769,7 @@ class TradingEngine:
             self._save()
             # A2：平仓后报告已实现盈亏（paper = 本地模拟撮合，不进交易所）
             self._notify("info" if rec["pnl"] >= 0 else "critical",
-                         f"{pos['side']} 平仓（本地模拟）",
+                         f"{sym} {side_cn(pos['side'])}平仓（本地模拟）",
                          f"价格盈亏 {rec['pnl']:+,.2f} U，平仓手续费 {rec['fee']:,.2f} U"
                          f"（费用直接计入累计已实现盈亏；{reason}）",
                          {"symbol": sym, "pnl": rec["pnl"], "reason": reason})

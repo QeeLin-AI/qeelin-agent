@@ -1242,6 +1242,8 @@ class TestCloseBackfill(unittest.TestCase):
         self.assertAlmostEqual(e.state["position_history"][0]["pnl"], 1.0)
         self.assertAlmostEqual(e.state["equity"], 10000.97, places=4)
         self.assertTrue(e.notices)                           # 补记后发一条通知
+        self.assertIn("多单", e.notices[0][1])                # 通知标题方向用中文
+        self.assertNotIn("LONG", e.notices[0][1])
 
     def test_ignores_closes_before_open(self):
         trades = [

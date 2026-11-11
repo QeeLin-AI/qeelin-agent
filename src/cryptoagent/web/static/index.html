@@ -912,19 +912,19 @@
         </div>
 
         <div class="set-group">
-          <div class="set-group-title">参数自迭代（L1 → L2 → L3）</div>
+          <div class="set-group-title">参数自迭代（L1 统计 → L3 自主 · L2 仅观测）</div>
           <div class="set-switch-list">
             <label class="switch-row">
               <span class="switch-label">
                 <span class="t">退出参数自校准</span>
-                <span class="d" id="posTuneDesc">总开关：关闭后 L1/L2/L3 的参数修改全部停用（但 L3 的动作覆盖仍会生效）。用哪种方式微调见下方「演进层级」</span>
+                <span class="d" id="posTuneDesc">总开关：关闭后退出参数不再自迭代（但 L3 的动作覆盖仍会生效）。用哪种方式微调见下方「演进层级」</span>
               </span>
               <label class="switch"><input type="checkbox" id="posAutoTune" /><span class="track"><span class="thumb"></span></span></label>
             </label>
             <label class="switch-row">
               <span class="switch-label">
                 <span class="t">演进层级</span>
-                <span class="d">L1 统计校准 → L2 反事实回放（门控通过才落地）→ L3 LLM 提案（需 L2 门控通过）</span>
+                <span class="d">L1 统计校准直接落地；L2 反事实回放只留审计记录、不再门控；L3 由下方总开关自主开启</span>
               </span>
               <select id="posEvolutionMode" class="set-select">
                 <option value="off">关闭</option>
@@ -936,7 +936,7 @@
             <label class="switch-row">
               <span class="switch-label">
                 <span class="t">L3：总开关</span>
-                <span class="d">打开后先进入影子期（只记录提案、不改动作），攒够样本才允许应用；L2 未过时保存会被拒绝</span>
+                <span class="d">打开即启用 L3（无需先通过 L2 回放），先进入影子期只记录提案，攒够样本才允许应用；关闭即回落到 L1，随时可再打开</span>
               </span>
               <label class="switch"><input type="checkbox" id="posEvolutionLlmEnabled" /><span class="track"><span class="thumb"></span></span></label>
             </label>
@@ -969,7 +969,7 @@
 
         <p class="set-hint">保存立即生效，无需重启。</p>
         <div class="actions">
-          <button id="posReplayBtn" class="btn">运行 L2 回放验收</button>
+          <button id="posReplayBtn" class="btn">运行 L2 回放评估</button>
           <button id="posLlmSaveBtn" class="btn primary">保存</button>
           <span id="posReplayState" class="muted"></span>
         </div>

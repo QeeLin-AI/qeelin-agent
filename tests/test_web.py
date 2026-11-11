@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -780,3 +781,51 @@ class TestLiveOrderCleanup(unittest.TestCase):
         self.assertIn("market:SELL:reduce=True", calls)
         self.assertIn("STOP_MARKET", calls)
         self.assertNotIn("TAKE_PROFIT_MARKET", calls)
+
+
+class TestL3Toggle(unittest.TestCase):
+    """L3 由用户开关自主控制：无需 L2 门控，开 / 关都能立即生效。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = load_config(ROOT / "config" / "default.json")
+        cfg.market.source = "synthetic"
+        cfg.market.cache_dir = str(Path(self.tmp.name) / "cache")
+        cfg.runs_dir = str(Path(self.tmp.name) / "runs")
+        cfg.research.out_dir = str(Path(self.tmp.name) / "research")
+        cfg.research.factor_library = str(Path(self.tmp.name) / "lib")
+        cfg.risk.kill_switch_file = str(Path(self.tmp.name) / "HALT")
+        # 配置写入隔离到临时目录，绝不能污染仓库里的 config/default.json
+        self._env = patch.dict(os.environ, {
+            "CRYPTOAGENT_CONFIG": str(Path(self.tmp.name) / "default.json"),
+            "CRYPTOAGENT_ENV_FILE": str(Path(self.tmp.name) / ".env"),
+        })
+        self._env.start()
+        self.app = WebApp(cfg)
+
+    def tearDown(self):
+        self._env.stop()
+        self.tmp.cleanup()
+
+    def test_enable_l3_without_l2_gate(self):
+        self.app.engine.position_tuning["gate"] = {}     # 明确没有 L2 通过记录
+        out = self.app.set_position_settings({"evolution_llm_enabled": True})
+        self.assertEqual(out["evolution_mode"], "llm")
+        self.assertTrue(out["evolution_llm_enabled"])
+        self.assertTrue(self.app.engine._llm_evolution_allowed())
+
+    def test_disable_l3_anytime(self):
+        self.app.set_position_settings({"evolution_llm_enabled": True})
+        out = self.app.set_position_settings({"evolution_llm_enabled": False})
+        self.assertEqual(out["evolution_mode"], "stats")
+        self.assertFalse(out["evolution_llm_enabled"])
+        self.assertFalse(self.app.engine._llm_evolution_allowed())
+
+    def test_explicit_mode_wins(self):
+        """配置方案会同时给出 mode 与开关，显式层级不能被联动覆盖。"""
+        out = self.app.set_position_settings({
+            "evolution_mode": "replay", "evolution_llm_enabled": True,
+        })
+        self.assertEqual(out["evolution_mode"], "replay")
+        self.assertTrue(out["evolution_llm_enabled"])
+        self.assertFalse(self.app.engine._llm_evolution_allowed())

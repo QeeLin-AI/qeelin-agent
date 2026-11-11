@@ -368,7 +368,8 @@ PROFILES: dict[str, dict[str, Any]] = {
         "label": "AI 进化（L3）",
         "summary": "均衡底座 + AI 接管：风险参数与「均衡」逐项相同，差别只在 L3 权限全开。"
                    "LLM 可提议退出参数、甚至改变动作方向，也允许放宽阈值。"
-                   "⚠️ 应用需 L2 反事实回放已通过，否则会被安全门拒绝（这是设计，不是故障）。",
+                   "L2 反事实回放已降级为审计观测、不再是前置门控，本档可随时直接应用；"
+                   "不想让 AI 接管时在设置页关掉「L3：总开关」即可。",
         "risk": {
             # 与 balanced 逐项相同：本档的差异只在「谁来调参」，不在「承担多少风险」。
             # 之前把底座整体乘 0.8，会让用户切档时困惑「我要的是 AI 接管，
@@ -409,14 +410,14 @@ PROFILES: dict[str, dict[str, Any]] = {
             "evolution_llm_min_confidence": 0.60,
             # 单次最多改 10%：即使 LLM 判断激进，也只会渐进移动，避免一次调坏
             "evolution_llm_max_param_step": 0.10,
-            # —— L1/L2 的配套门槛 ——
+            # —— L1 学习门槛 / L2 观测参数（L2 结果只留痕，不再阻断）——
             "evolution_rule_min_samples": 10,       # 比默认 8 严：L3 档的样本质量优先
             "evolution_confirm_rounds": 2,
             "evolution_replay_min_cases": 20,
             "evolution_replay_window": 100,
             "evolution_replay_min_median_delta": 0.0,
             "evolution_replay_max_worst_delta": 0.2,
-            "evolution_l2_stable_days": 3,          # 14→3 天：稳定 3 天即放行 L3
+            "evolution_l2_stable_days": 0,          # L2 已不作门控，等待期归零避免误导
             "evolution_rollback_after_losses": 3,   # 连亏 3 笔自动回退上一版
             "evolution_rollback_drawdown_r": 2.0,   # 回撤 2R 自动回退
             # —— 退出规则（L3 会在此基础上继续调）——

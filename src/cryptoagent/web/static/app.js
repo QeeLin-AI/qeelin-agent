@@ -825,8 +825,13 @@ async function loadPositionLlmSettings() {
     $('posBarsFromIndex').checked = !!d.bars_from_index;
     $('posPeakDrawdownEnabled').checked = !!d.peak_drawdown_exit_enabled;
     if ($('posAutoTune')) $('posAutoTune').checked = d.auto_tune !== false;
-    if ($('posEvolutionMode')) $('posEvolutionMode').value = d.evolution_mode || 'stats';
-    if ($('posEvolutionLlmEnabled')) $('posEvolutionLlmEnabled').checked = !!d.evolution_llm_enabled;
+    const l3on = !!d.evolution_llm_enabled;
+    // L3 总开关是唯一入口：后端若残留 mode=llm 但开关已关（如自动回退），
+    // 显示上统一回落到 L1，避免出现「层级是 L3、实际却没启用」的误导。
+    const shownMode = l3on ? 'llm'
+      : ((d.evolution_mode === 'llm') ? 'stats' : (d.evolution_mode || 'stats'));
+    if ($('posEvolutionMode')) $('posEvolutionMode').value = shownMode;
+    if ($('posEvolutionLlmEnabled')) $('posEvolutionLlmEnabled').checked = l3on;
     if ($('posEvolutionAllowAction')) $('posEvolutionAllowAction').checked = !!d.evolution_llm_allow_action;
     if ($('posEvolutionAllowLoosen')) $('posEvolutionAllowLoosen').checked = !!d.evolution_llm_allow_loosen;
     if ($('posEnabled')) $('posEnabled').checked = d.enabled !== false;
@@ -859,9 +864,11 @@ async function loadPositionLlmSettings() {
     const rj = d.replay_job || {};
     if ($('posReplayState')) {
       $('posReplayState').textContent = rj.running
-        ? 'L2 验收运行中…'
-        : (rj.error ? `L2 验收出错：${rj.error}`
-          : (rj.finished_at ? (rj.passed ? 'L2 已通过' : 'L2 未通过') : 'L2 未运行'));
+        ? 'L2 回放运行中…'
+        : (rj.error ? `L2 回放出错：${rj.error}`
+          : (rj.finished_at
+            ? (rj.passed ? 'L2 回放有改善（仅观测）' : 'L2 回放无改善（仅观测）')
+            : 'L2 回放未运行'));
     }
     const u = d.usage || {};
     $('posLlmUsage').textContent =
@@ -871,6 +878,11 @@ async function loadPositionLlmSettings() {
 }
 
 async function savePositionLlmSettings() {
+  // 勾选 L3 总开关 = 直接进 llm 层级；取消 = 回落到 L1 统计。
+  // 两者一次提交，避免出现「开关开了但层级没切」的半启用状态。
+  const l3on = $('posEvolutionLlmEnabled') ? $('posEvolutionLlmEnabled').checked : false;
+  const selMode = $('posEvolutionMode') ? $('posEvolutionMode').value : 'stats';
+  const mode = l3on ? 'llm' : (selMode === 'llm' ? 'stats' : selMode);
   const payload = {
     enabled: $('posEnabled') ? $('posEnabled').checked : true,
     llm_explain: $('posLlmExplain').checked,
@@ -879,8 +891,8 @@ async function savePositionLlmSettings() {
     bars_from_index: $('posBarsFromIndex').checked,
     peak_drawdown_exit_enabled: $('posPeakDrawdownEnabled').checked,
     auto_tune: $('posAutoTune') ? $('posAutoTune').checked : true,
-    evolution_mode: $('posEvolutionMode') ? $('posEvolutionMode').value : 'stats',
-    evolution_llm_enabled: $('posEvolutionLlmEnabled') ? $('posEvolutionLlmEnabled').checked : false,
+    evolution_mode: mode,
+    evolution_llm_enabled: l3on,
     evolution_llm_allow_action: $('posEvolutionAllowAction') ? $('posEvolutionAllowAction').checked : false,
     evolution_llm_allow_loosen: $('posEvolutionAllowLoosen') ? $('posEvolutionAllowLoosen').checked : false,
     llm_min_interval_sec: Number($('posLlmMinInterval').value),
@@ -1683,7 +1695,7 @@ function renderPositionManagement(d) {
   const modeCn = { off: '关闭', stats: 'L1 统计', replay: 'L2 回放', llm: 'L3 LLM' }[tune.mode] || tune.mode || '--';
   html += `<div class="pm-block">
     <div class="pm-block-title">演进状态 <span class="muted">${esc(modeCn)}</span></div>
-    <p class="muted">${gate.l2_passed ? 'L2 回放已通过' : (gate.l2_cases ? `L2 未通过（${gate.l2_cases} 笔样本）` : 'L2 未评估')}
+    <p class="muted">${gate.l2_passed ? 'L2 回放（观测）有改善' : (gate.l2_cases ? `L2 回放（观测）无改善（${gate.l2_cases} 笔样本）` : 'L2 回放（观测）未评估')}
       ${gate.l2_median_delta != null ? ` · 中位差 ${Number(gate.l2_median_delta) >= 0 ? '+' : ''}${Number(gate.l2_median_delta).toFixed(2)}R` : ''}
       ${llm.enabled ? ' · L3 已启用' : ''}</p>
     ${Object.keys(byRule).length ? `<div class="pm-rows">${Object.entries(byRule).slice(0, 5).map(([k, v]) =>
@@ -3579,13 +3591,20 @@ $('llmTestBtn').addEventListener('click', testLlmSettings);
 $('sentimentSaveBtn').addEventListener('click', () => saveSentimentSettings());
 $('notifySaveBtn').addEventListener('click', () => saveNotifySettings());
 $('posLlmSaveBtn').addEventListener('click', () => savePositionLlmSettings());
+// 开关与层级联动的即时反馈：勾上就把层级显示为 L3，取消就回落到 L1（保存时才写库）。
+$('posEvolutionLlmEnabled')?.addEventListener('change', (e) => {
+  const sel = $('posEvolutionMode');
+  if (!sel) return;
+  if (e.target.checked) sel.value = 'llm';
+  else if (sel.value === 'llm') sel.value = 'stats';
+});
 $('posReplayBtn')?.addEventListener('click', async () => {
   try {
     await api('/api/settings/position/replay', 'POST', {});
-    toast('L2 验收已在后台运行，完成后状态会更新', 'ok');
+    toast('L2 回放已在后台运行，结果仅供参考、不影响开仓', 'ok');
     setTimeout(loadPositionLlmSettings, 6000);
   } catch (e) {
-    toast('L2 验收启动失败：' + e.message, 'err');
+    toast('L2 回放启动失败：' + e.message, 'err');
   }
 });
 

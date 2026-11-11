@@ -3,8 +3,8 @@
 守住四条底线：
 1. L1 按规则归因，单规则样本不足时不许跨规则调参；
 2. L1 连续确认，单轮噪声不落地；
-3. L2 门控未过时，候选参数一律丢弃；
-4. L3 必须过 L2 门控 + 影子期，且动作只能更保守；连续亏损自动回退。
+3. L2 回放只作观测：未通过也不再丢弃 L1 候选参数；
+4. L3 只由用户开关决定（无需 L2 门控）+ 影子期，动作默认只能更保守；连续亏损自动回退。
 """
 from __future__ import annotations
 
@@ -136,15 +136,18 @@ def test_l2_gate_not_enough_cases_fails():
     assert out["checks"]["enough_cases"] is False
 
 
-def test_l2_gate_discards_candidate_when_no_replay_cases():
+def test_l2_replay_no_longer_blocks_l1_candidate():
+    """L2 回放样本不足（门控未过）时，L1 的候选改动照常落地。"""
     e, base = _bare_engine("replay")
     e.cfg.position.evolution_confirm_rounds = 1
     e.cfg.position.evolution_replay_min_cases = 20
     e.position_tuning["stats"] = _fill(empty_stats(), "trail", 0.4, 3.0, 20)
     e._recompute_position_tuning()
-    assert e.position_tuning["gate"]["l2_passed"] is False
-    assert e.position_tuning["effective"] == pytest.approx(base)
-    assert e.position_tuning["changes"] == []
+    assert e.position_tuning["gate"]["l2_passed"] is False   # 结果仍留痕
+    assert float(e.position_tuning["effective"]["trail_atr_mult"]) != pytest.approx(
+        float(base["trail_atr_mult"])
+    )                                                       # 但不再阻断
+    assert e.position_tuning["changes"]
 
 
 def test_l2_gate_not_passed_by_empty_candidate():
@@ -160,21 +163,24 @@ def test_l2_gate_not_passed_by_empty_candidate():
 
 
 # ---------------------------------------------------------------- L3
-def test_l3_blocked_without_l2_gate():
+def test_l3_toggle_is_user_controlled_without_l2_gate():
+    """L3 只认用户开关：gate 为空也能开，关掉后立即停用。"""
     e, _base = _bare_engine("llm")
-    e.cfg.position.evolution_llm_enabled = True
+    e.position_tuning["gate"] = {}                 # L2 完全没跑过
+    e.cfg.position.evolution_llm_enabled = False
     assert e._llm_evolution_allowed() is False
-    # L2 门控通过后立即放行：不再要求稳定运行 ≥14 天（默认等待期已取消）
-    e.position_tuning["gate"] = {"l2_passed": True, "l2_stable_since": time.time()}
+    e.cfg.position.evolution_llm_enabled = True
     assert e._llm_evolution_allowed() is True
+    e.cfg.position.evolution_llm_enabled = False
+    assert e._llm_evolution_allowed() is False
 
 
-def test_l3_stable_days_zero_means_no_wait():
-    """默认稳定等待期 0：L2 通过后即使 l2_stable_since 缺失也不等待。"""
+def test_l3_stable_days_no_longer_blocks():
+    """稳定等待期与 gate 状态都不再影响 L3 放行。"""
     e, _base = _bare_engine("llm")
     e.cfg.position.evolution_llm_enabled = True
-    assert e.cfg.position.evolution_l2_stable_days == 0
-    e.position_tuning["gate"] = {"l2_passed": True, "l2_stable_since": 0.0}
+    e.cfg.position.evolution_l2_stable_days = 365
+    e.position_tuning["gate"] = {"l2_passed": False, "l2_stable_since": 0.0}
     assert e._llm_evolution_allowed() is True
 
 
@@ -239,11 +245,13 @@ def test_l3_params_limited_to_rule_and_step():
 def test_l3_rollback_after_consecutive_losses():
     e, base = _bare_engine("llm")
     e.cfg.position.evolution_rollback_after_losses = 3
+    e.cfg.position.evolution_llm_enabled = True
     e.position_tuning["effective"] = {**base, "trail_atr_mult": 1.5}
     pos = {"llm_evolution": {"action": "close"}}
     for _ in range(3):
         e._update_llm_streak(pos, -0.5)
     assert e.cfg.position.evolution_mode == "stats"
+    assert e.cfg.position.evolution_llm_enabled is False   # 开关与实际状态一致
     assert e.position_tuning["effective"] == pytest.approx(base)
     assert e.position_tuning["llm"]["rollbacks"]
 

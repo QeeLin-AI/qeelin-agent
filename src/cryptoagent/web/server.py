@@ -2299,30 +2299,12 @@ class WebApp:
             if mode not in ("off", "stats", "replay", "llm"):
                 raise ApiError("evolution_mode 只能是 off / stats / replay / llm", 400)
             staged["evolution_mode"] = mode
-        # 门控：L3 必须先过 L2 回放；稳定等待期默认 0（L2 通过即放行），不满足直接 400
-        target_mode = staged.get("evolution_mode", str(getattr(p, "evolution_mode", "stats")))
-        if target_mode == "llm":
-            gate = self.engine.position_tuning.get("gate") or {}
-            if not gate.get("l2_passed"):
-                raise ApiError(
-                    "L3 需要先通过 L2 反事实回放门控：请先切到 replay、积累平仓样本并让门控通过",
-                    400,
-                )
-            enabled = bool(payload.get(
-                "evolution_llm_enabled",
-                staged.get("evolution_llm_enabled", getattr(p, "evolution_llm_enabled", False)),
-            ))
-            if not enabled:
-                raise ApiError("L3 需要显式开启 evolution_llm_enabled", 400)
-            days = int(payload.get(
-                "evolution_l2_stable_days",
-                staged.get("evolution_l2_stable_days", getattr(p, "evolution_l2_stable_days", 0)),
-            ))
-            since = float(gate.get("l2_stable_since") or 0.0)
-            if days > 0 and since and (time.time() - since) < days * 86400:
-                raise ApiError(f"L2 需稳定运行 {days} 天后再评估 L3", 400)
-        if target_mode == "replay" and not (self.engine.position_tuning.get("replay_cases") or []):
-            raise ApiError("L2 需要至少一笔已平仓样本；先运行一段时间再切换", 400)
+        # L3 完全由用户开关决定（2026-11-11 取消 L2 前置门控）。
+        # 只提交 evolution_llm_enabled 时联动层级：开→llm、关→stats；
+        # 显式给了 evolution_mode 时以显式值为准（配置方案会同时给出两者）。
+        # L2 回放仍可手动运行、结果仍写 gate，但不再拒绝任何层级切换。
+        if "evolution_llm_enabled" in payload and "evolution_mode" not in payload:
+            staged["evolution_mode"] = "llm" if bool(payload["evolution_llm_enabled"]) else "stats"
         for k in bool_keys:
             if k in payload:
                 staged[k] = bool(payload[k])
